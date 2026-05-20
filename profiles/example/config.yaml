@@ -1,0 +1,38 @@
+profile:
+  slug: example
+  name: Nombre Apellido
+  title: Rol principal
+  primary_language: es
+
+channels:
+  active:
+    - linkedin
+  primary: linkedin
+
+content:
+  pillars:
+    - pilar-1
+    - pilar-2
+  default_cta_style: question
+  default_hashtags:
+    - AI
+    - Tech
+  valid_states:
+    - Idea
+    - Borrador
+    - Listo
+    - Publicado
+    - Archivado
+
+tone:
+  style:
+    - directo
+    - claro
+  avoid:
+    - frases-vacias
+    - humo
+
+notion:
+  enabled: false
+  database_id: ""
+  parent_page_id: ""

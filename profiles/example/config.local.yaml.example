@@ -1,0 +1,7 @@
+# Copy this file to `config.local.yaml` and fill your private values.
+# This file should stay out of version control.
+
+notion:
+  enabled: true
+  database_id: "YOUR_NOTION_DATABASE_ID"
+  parent_page_id: "YOUR_NOTION_PARENT_PAGE_ID"
