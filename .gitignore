@@ -1,2 +1,5 @@
 .claude/settings.local.json
-profiles/*/config.local.yaml
+
+# Profiles are private — only the example template is tracked
+profiles/*
+!profiles/example/
