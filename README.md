@@ -25,6 +25,20 @@ Separa dos capas:
 └─ docs/
 ```
 
+## Onboarding del perfil (vía Notion)
+
+El **perfil** (identidad, posicionamiento, audiencia, pilares, tono, stack, canales)
+es la fuente de verdad del sistema y vive en **Notion**, no en archivos del repo.
+
+La primera vez, el agente:
+1. Busca en Notion lo que ya existe (página del sistema, DB de contenido, bios previas).
+2. Entrevista al usuario (posicionamiento, objetivo, audiencia, pilares, tono, canales).
+3. Complementa con datos reales encontrados y los marca como inferidos.
+4. Muestra el borrador y, con el OK, lo escribe en la página del sistema en Notion.
+
+Requiere **MCP de Notion** conectado. Si falta algo que el flujo necesita, el agente
+**pregunta antes de crear**. Guía completa: `system/guides/profile-onboarding.md`.
+
 ## Quick start
 
 ### En una máquina nueva
@@ -74,9 +88,11 @@ Separa dos capas:
 
 - `CLAUDE.md` → guía operativa del repo
 - `system/guides/workflow.md` → flujo editorial
+- `system/guides/profile-onboarding.md` → cómo se construye el perfil en Notion
 - `system/config/brand.schema.md` → esquema de config
 - `system/templates/` → templates compartidos
 - `notion-sync/README.md` → integración opcional con Notion
+- `docs/scouting.md` → resumen persistente del estado arquitectónico del repo
 - `docs/windows-setup-checklist.md` → checklist para montar otro entorno sin fricción
 
 ## Estado actual
