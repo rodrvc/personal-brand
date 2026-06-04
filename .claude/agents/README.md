@@ -9,6 +9,7 @@ Agentes disponibles en `.claude/agents/`:
 - `channel-adapter.md`
 - `content-publisher.md`
 - `analytics-reviewer.md`
+- `commit-guardian.md`
 
 ## Regla base
 
