@@ -1,4 +1,5 @@
 .claude/settings.local.json
+.DS_Store
 
 # Profiles are private — only the example template is tracked
 profiles/*
