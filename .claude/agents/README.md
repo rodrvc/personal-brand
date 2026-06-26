@@ -10,6 +10,7 @@ Agentes disponibles en `.claude/agents/`:
 - `content-publisher.md`
 - `analytics-reviewer.md`
 - `commit-guardian.md`
+- `memory-engineer.md`
 
 ## Regla base
 
