@@ -11,6 +11,7 @@ Agentes disponibles en `.claude/agents/`:
 - `analytics-reviewer.md`
 - `commit-guardian.md`
 - `memory-engineer.md`
+- `notion-sync.md` (sync explícito a Notion, solo cuando el usuario lo pide)
 
 ## Regla base
 

@@ -1,3 +1,5 @@
+> Archivado — descartado el 2026-07-06. El repo quedó repo-first con sync explícito a Notion (no Notion como fuente de verdad). Ver `notion-sync/README.md` para el diseño vigente y `docs/project-state/DECISIONS.md` para el registro de la decisión.
+
 # Spec — Sistema de agentes sobre Notion
 
 > Estado: en progreso · Última actualización: 2026-06-02
@@ -35,9 +37,9 @@ hablan con Notion vía la **CLI oficial `ntn`** por eficiencia de tokens.
 
 | Recurso | ID | Notas |
 |---|---|---|
-| Página "🌆 Sistema marca personal" | `3565a3ab-e3e8-80c2-bc35-c291cd6fae2a` | Contiene el perfil (arriba) + DB embebida + (pendiente) dashboard |
-| DB "Contenido Marca Personal" | `a02b72e1-f317-4df2-81f8-73dcd76d8694` | Database |
-| Data source de la DB | `688e3182-30a2-4685-9d7e-9fe2690e023c` | Para `datasources query` |
+| Página "🌆 Sistema marca personal" | `<page_id>` | Contiene el perfil (arriba) + DB embebida + (pendiente) dashboard |
+| DB "Contenido Marca Personal" | `<database_id>` | Database |
+| Data source de la DB | `<data_source_id>` | Para `datasources query` |
 
 ### Esquema de la DB
 
@@ -202,7 +204,7 @@ Secciones por rol en el cuerpo de la tarjeta (D8):
 
 ## 7. Pendientes / decisiones abiertas
 
-- Validar con el usuario los datos inferidos del perfil (Falabella/6 años, stack, ubicación).
+- Validar con el usuario los datos inferidos del perfil (empleador, años de experiencia, stack, ubicación).
 - Definir cómo se registran métricas para `analytics-reviewer` (campo Notas vs. campos nuevos).
 
 ### Deuda técnica
