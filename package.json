@@ -1,0 +1,16 @@
+{
+  "name": "personal-brand",
+  "version": "1.0.0",
+  "private": true,
+  "description": "First application code in this repo: an Instagram carousel PNG generator (system/ig-carousel).",
+  "type": "module",
+  "scripts": {
+    "render:all": "tsx system/ig-carousel/render.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright": "^1.61.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
