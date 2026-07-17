@@ -1,0 +1,74 @@
+{
+  "slides": [
+    {
+      "image": "https://picsum.photos/id/1015/1080/1350",
+      "title": "Feria de Lollapalooza Chile",
+      "subtitle": "Vie 21 Mar, 20:00",
+      "meta": "Parque O'Higgins",
+      "category": "Música"
+    },
+    {
+      "image": "https://picsum.photos/id/1035/1080/1350",
+      "title": "Noche de Jazz en el GAM",
+      "subtitle": "Jue 17 Jul, 21:00",
+      "meta": "Centro Cultural GAM",
+      "category": "Cultura"
+    },
+    {
+      "image": "https://picsum.photos/id/1025/1080/1350",
+      "title": "Feria Artesanal de Providencia",
+      "subtitle": "Sab 12 Jul, 10:00",
+      "meta": "Providencia",
+      "category": "Familiar"
+    },
+    {
+      "image": "https://picsum.photos/id/1045/1080/1350",
+      "title": "Mercado Gastronomico Ñuñoa",
+      "subtitle": "Dom 20 Jul, 12:00",
+      "meta": "Ñuñoa",
+      "category": "Familiar"
+    },
+    {
+      "image": "https://picsum.photos/id/1055/1080/1350",
+      "title": "Cine al Aire Libre: Clasicos",
+      "subtitle": "Vie 25 Jul, 19:30",
+      "meta": "Parque Bustamante",
+      "category": "Destacados"
+    },
+    {
+      "image": "https://picsum.photos/id/1074/1080/1350",
+      "title": "Maraton de Santiago 2026",
+      "subtitle": "Dom 5 Abr, 08:00",
+      "meta": "Plaza Baquedano",
+      "category": "Deporte"
+    },
+    {
+      "image": "https://picsum.photos/id/1084/1080/1350",
+      "title": "Clasico Universitario de Rugby",
+      "subtitle": "Sab 11 Abr, 15:00",
+      "meta": "Estadio Nacional",
+      "category": "Deporte"
+    },
+    {
+      "image": "https://picsum.photos/id/1080/1080/1350",
+      "title": "Ciclotour Nocturno por Santiago",
+      "subtitle": "Vie 17 Abr, 21:00",
+      "meta": "Parque Forestal",
+      "category": "Deporte"
+    },
+    {
+      "image": "https://picsum.photos/id/1062/1080/1350",
+      "title": "Fiesta de la Vendimia Barrio Italia",
+      "subtitle": "Sab 25 Abr, 18:00",
+      "meta": "Barrio Italia",
+      "category": "Fiesta"
+    },
+    {
+      "image": "https://picsum.photos/id/1070/1080/1350",
+      "title": "Carnaval de Verano Bellavista",
+      "subtitle": "Vie 1 May, 20:00",
+      "meta": "Barrio Bellavista",
+      "category": "Fiesta"
+    }
+  ]
+}
