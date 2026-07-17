@@ -1,6 +1,18 @@
 .claude/settings.local.json
 .DS_Store
 
-# Profiles are private — only the example template is tracked
+# Profiles are private by default — only allow-listed profiles are tracked.
+# Git won't apply file-level exceptions inside an ignored directory, so any
+# real profile that wants to track its content needs its directory
+# un-ignored too, with config.local.yaml itself re-ignored underneath (the
+# .example counterpart stays tracked as the onboarding template, same
+# convention as profiles/example/config.local.yaml.example).
 profiles/*
 !profiles/example/
+!profiles/adondepo/
+profiles/adondepo/config.local.yaml
+
+# Node / IG carousel generator (system/ig-carousel)
+node_modules/
+dist/
+system/ig-carousel/output/
