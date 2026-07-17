@@ -1,0 +1,12 @@
+# Copy this file to `config.local.yaml` and fill your own machine-specific
+# values. This file (the .example) is the only one tracked in version
+# control — config.local.yaml itself stays private per machine/user.
+
+outputs:
+  # Base directory where generated carousel batches are written, one
+  # subfolder per week: <base_dir>/<year>/<mon-DD>/ (DD = the Monday the
+  # week starts on). Can be relative (resolved against this profile's own
+  # folder) or absolute/"~"-prefixed to keep generated images entirely
+  # outside the git repo. Every machine/user sets this to whatever makes
+  # sense for them — render-week.ts assumes nothing about the path.
+  base_dir: ~/Pictures/adondepo/carruseles

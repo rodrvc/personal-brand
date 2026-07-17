@@ -1,0 +1,37 @@
+profile:
+  slug: adondepo
+  name: Adondepo
+  title: Descubrimiento de eventos urbanos en Chile
+  primary_language: es
+
+channels:
+  active:
+    - instagram
+  primary: instagram
+
+content:
+  pillars:
+    - panoramas-semanales
+    - eventos-destacados
+  default_cta_style: guarda-y-comparte
+  default_hashtags:
+    - PanoramasAntofagasta
+    - QueHacerEnAntofagasta
+    - Adondepo
+  valid_states:
+    - Generado
+    - Publicado
+
+tone:
+  style:
+    - calido
+    - directo
+    - informativo
+  avoid:
+    - corporativo
+    - frases-vacias
+
+notion:
+  enabled: false
+  database_id: ""
+  parent_page_id: ""
