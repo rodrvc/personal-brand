@@ -16,3 +16,4 @@ profiles/adondepo/config.local.yaml
 node_modules/
 dist/
 system/ig-carousel/output/
+system/ig-carousel/week-input.json
