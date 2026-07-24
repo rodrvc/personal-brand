@@ -17,3 +17,19 @@ node_modules/
 dist/
 system/ig-carousel/output/
 system/ig-carousel/week-input.json
+
+# Secrets — never commit real API keys
+.env
+.env.local
+
+# AI-generated carousel background images (reproducible via
+# generate-backgrounds.ts, but cost real money per image to regenerate —
+# excluded from git purely for repo size, not because they're disposable)
+system/ig-carousel/backgrounds/
+
+# Rendered carousel output (reproducible via render-week.ts/render-brand.ts)
+profiles/adondepo/outputs/
+
+# Comparison/experiment artifacts — not part of the shipped system
+compare-canvas-design/
+preview-brand-carousel*.html

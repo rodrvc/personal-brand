@@ -88,6 +88,16 @@ any code.
   system (documented decisions), not ad-hoc inline styles the next person
   can't reconstruct.
 
+## Adondepo's presentation carousel: an already-built named style
+
+`system/ig-carousel/templates/brand-message.ts` (the presentation/onboarding
+carousel, distinct from the weekly events digest) already has a named style
+worked out — **"Atlas Ilustrado"** in
+[references/style-library.md](references/style-library.md) — with AI-generated
+illustrated backgrounds (via `generate-backgrounds.ts`) instead of flat CSS.
+It's proven but not yet the profile's adopted default; if asked to touch this
+template again, read that entry first instead of redesigning from zero.
+
 ## Known open item in this repo
 
 `system/ig-carousel/templates/list-format.ts` currently uses a left-edge

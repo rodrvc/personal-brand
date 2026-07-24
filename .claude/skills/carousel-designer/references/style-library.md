@@ -161,6 +161,55 @@ a vague style name is as useless as no style name.
   "AI render" — this is the style most likely to accidentally slide into
   slop if not deliberately restrained. Pick 1-2 Y2K signifiers, not five.
 
+### Atlas Ilustrado
+- **Feeling:** Warm, hand-crafted, story-told — like flipping through a
+  travel journal a friend actually drew, not a template with a photo dropped
+  in. Playful and motivating without being loud.
+- **Type:** `BRAND.fonts.handwritten` (Kalam) at poster scale for titles —
+  large, white, set over the image with a soft drop shadow for legibility.
+  `BRAND.fonts.body` (Inter) for subtitle/footer. `BRAND.fonts.logo`
+  (Pacifico) stays reserved for the "Adondepo" wordmark only, never the rest.
+- **Palette:** Not a flat CSS palette — an AI-illustrated background image
+  per slide (gouache/ink texture, visible brushwork), art-directed to stay
+  inside Adondepo's real hex values (petrol `#1a5f7a`, terracotta `#e05a47`,
+  gold `#f5b742`, coral `#ff7a6b`, cream `#f8f6f3`) rather than the model's
+  own default palette. A dark bottom-third scrim (transparent → petrol-black
+  gradient) sits over the image so white text stays legible without hiding
+  the art.
+- **Layout:** Full-bleed illustrated background, wordmark + slide-counter
+  pinned top corners, title/subtitle/footer stacked bottom-left over the
+  scrim. One idea per slide (poster, not a card).
+- **Signature move:** The illustration itself, scene-matched to that
+  specific slide's content (e.g. "someone finding out about a plan too
+  late," not an abstract shape) — never a generic "colorful background."
+  Every prompt reserves a calm/uncluttered zone (usually the bottom third)
+  for the text overlay.
+- **Avoid:** Baking any text into the generated image (misspells, wrong
+  font, not editable) — text is always real HTML on top. Avoid letting the
+  image model default to its own palette instead of Adondepo's brand hexes;
+  the art-direction line in the prompt has to be explicit every time.
+- **How to reproduce (already built, don't rebuild from scratch):**
+  1. Template: `system/ig-carousel/templates/brand-message.ts` (reads a PNG
+     from `system/ig-carousel/backgrounds/slide-N.png` per slide, falls back
+     to a flat petrol background if missing).
+  2. Backgrounds: `system/ig-carousel/generate-backgrounds.ts` — calls
+     OpenAI's `gpt-image-1` per slide, one hand-written prompt each (edit the
+     `SLIDE_PROMPTS` array for new content; keep the shared `STYLE_DIRECTION`
+     string to stay on-brand). Requires `OPENAI_API_KEY` in `.env`
+     (git-ignored — see `.env.example` once one exists, or copy the key from
+     the sibling `city-activities-api` repo's `.env`).
+  3. Content: `system/ig-carousel/brand-input.json` (the `{ slides }` input —
+     `title`/`subtitle`/`meta`/`category` per slide).
+  4. Run: `npx tsx system/ig-carousel/generate-backgrounds.ts` (regenerates
+     backgrounds — costs real money per image, only re-run when content
+     actually changes) then `npx tsx system/ig-carousel/render-brand.ts
+     --profile adondepo` (composites text over the existing backgrounds,
+     free/instant — safe to re-run any time copy changes without touching
+     images).
+- **Status:** proven once (Adondepo's presentation/onboarding carousel,
+  2026-07), not yet adopted as the profile's default style — evaluate again
+  before treating it as standard.
+
 ### Field.io Motion
 - **Feeling:** Precise, technical, quietly kinetic — even as a static image
   it should feel like it's mid-motion.

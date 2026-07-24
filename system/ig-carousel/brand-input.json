@@ -1,0 +1,34 @@
+{
+  "slides": [
+    {
+      "title": "¿Te enteras tarde de los planes buenos?",
+      "subtitle": "A nosotros también nos pasaba.",
+      "meta": "Parada 1: el problema",
+      "category": "hook"
+    },
+    {
+      "title": "Trazamos el mapa completo",
+      "subtitle": "Música, fiestas, cultura, planes familiares — todo el panorama en una sola ruta.",
+      "meta": "Parada 2: así funciona",
+      "category": "info"
+    },
+    {
+      "title": "Se arma entre todos",
+      "subtitle": "Mientras más seamos, mejor curamos: más panoramas buenos, menos ruido.",
+      "meta": "Parada 3: comunidad",
+      "category": "info"
+    },
+    {
+      "title": "Etiqueta a tu partner de panoramas",
+      "subtitle": "El próximo plan se arma más fácil si todos están mirando el mismo mapa.",
+      "meta": "Parada 4: ayúdanos a crecer",
+      "category": "cta"
+    },
+    {
+      "title": "Súmate a la ruta",
+      "subtitle": "Síguenos y entra a adondepo.cl para no perderte nada.",
+      "meta": "Parada 5: te esperamos",
+      "category": "cta"
+    }
+  ]
+}

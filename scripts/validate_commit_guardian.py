@@ -5,11 +5,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APPROVAL = ROOT / '.git' / 'commit-guardian-approval.json'
 
 
 def git(*args: str) -> str:
     return subprocess.check_output(['git', *args], cwd=ROOT, text=True).strip()
+
+
+# `ROOT / '.git'` is only a directory in a plain checkout. In a git worktree,
+# `.git` is a *file* pointing at the real git-dir under the main repo's
+# `.git/worktrees/<name>/` — writing/reading `ROOT/.git/commit-guardian-approval.json`
+# there would fail (or silently target the wrong repo) since that path can't
+# exist as a subdirectory of a file. Resolve the real git-dir via git itself
+# so the approval file lives in the same place `git worktree` already uses
+# for worktree-local state, in both plain checkouts and worktrees.
+GIT_DIR = Path(git('rev-parse', '--absolute-git-dir'))
+APPROVAL = GIT_DIR / 'commit-guardian-approval.json'
 
 
 def fail(message: str) -> int:
