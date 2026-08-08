@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor de afiche</title>
+<style>
+/* ── Chrome de la app: tokens --ui-*. NUNCA se mezclan con --brand-*. ── */
+:root{
+  --ui-bg:#F6F1E9; --ui-surface:#FFFDF9; --ui-surface-2:#F1EADF;
+  --ui-ink:#2A241E; --ui-muted:#8A7F72; --ui-line:#E2D8C9;
+  --ui-accent:#B4552F; --ui-accent-soft:#F6E5DC; --ui-accent-ink:#FFFFFF;
+  --ui-r:12px; --ui-r-sm:8px;
+  font-size:13px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  background:var(--ui-bg); color:var(--ui-ink);
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:none}
+
+/* ── Estructura ── */
+.app{display:grid;grid-template-columns:1fr 372px;height:100vh}
+.stage{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--ui-line)}
+.panel{background:var(--ui-surface);display:flex;flex-direction:column;min-height:0}
+
+/* ── Barra superior del lienzo ── */
+.topbar{
+  display:flex;align-items:center;gap:14px;
+  padding:12px 20px;border-bottom:1px solid var(--ui-line);background:var(--ui-surface);
+  overflow-x:auto;scrollbar-width:thin;
+}
+.topbar>*{flex:none}
+.brandmark{font-weight:650;letter-spacing:-.01em;margin-right:4px}
+.brandmark span{color:var(--ui-accent)}
+.group{display:flex;align-items:center;gap:8px}
+.group>label{color:var(--ui-muted);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+.seg{display:flex;background:var(--ui-surface-2);border-radius:var(--ui-r-sm);padding:2px;gap:2px}
+.seg button{
+  padding:5px 10px;border-radius:6px;font-size:12px;color:var(--ui-muted);
+  white-space:nowrap;transition:background .12s,color .12s;
+}
+.seg button:hover{color:var(--ui-ink)}
+.seg button[aria-pressed=true]{background:var(--ui-surface);color:var(--ui-ink);font-weight:600;box-shadow:0 1px 2px rgba(70,50,30,.10)}
+.spacer{margin-left:auto}
+.btn{
+  padding:7px 14px;border-radius:var(--ui-r-sm);border:1px solid var(--ui-line);
+  background:var(--ui-surface);font-weight:550;transition:background .12s,border-color .12s;
+}
+.btn:hover{background:var(--ui-surface-2)}
+.btn-primary{background:var(--ui-accent);color:var(--ui-accent-ink);border-color:var(--ui-accent)}
+.btn-primary:hover{background:#9E4726}
+.btn-sm{padding:4px 9px;font-size:12px;font-weight:500}
+
+/* ── Zona del lienzo ── */
+.canvaswrap{
+  flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+  padding:28px;overflow:auto;position:relative;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(138,127,114,.16) 1px, transparent 0) 0 0/16px 16px,
+    var(--ui-bg);
+}
+.canvaswrap.drop{outline:2px dashed var(--ui-accent);outline-offset:-14px}
+
+/* Confirmación breve al pegar una imagen */
+.avisoLienzo{
+  position:absolute;z-index:4;left:50%;top:18px;transform:translateX(-50%) translateY(-6px);
+  padding:7px 14px;border-radius:999px;
+  background:var(--ui-surface);border:1px solid var(--ui-line);
+  box-shadow:0 6px 20px rgba(90,62,44,.16);
+  font-size:12px;color:var(--ui-text);white-space:nowrap;
+  opacity:0;pointer-events:none;transition:opacity .2s ease, transform .2s ease;
+}
+.avisoLienzo.on{ opacity:1;transform:translateX(-50%) translateY(0) }
+
+/* ── Estado "generando" ──────────────────────────────────────────────
+   Generar una imagen tarda ~17 s. Con el lienzo quieto la app parece
+   colgada, así que el fondo respira mientras tanto: nebulosa cálida que
+   fluctúa, el afiche atenuado, y una barra indeterminada.
+   Nada de esto bloquea la interfaz: es solo señal de que algo pasa. */
+/* La nebulosa va DETRÁS del afiche (z-index 0 contra el poster, que se
+   eleva a 2). Delante lo taparía: era el bug de "el fondo se queda en
+   blanco". Y solo existe mientras `.gen` está puesta. */
+.canvaswrap.gen::before{
+  content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(38% 46% at 22% 30%, rgba(180,85,47,.42), transparent 70%),
+    radial-gradient(34% 40% at 78% 68%, rgba(138,86,116,.38), transparent 70%),
+    radial-gradient(46% 52% at 55% 20%, rgba(214,140,74,.34), transparent 72%);
+  filter:blur(28px);
+  animation:nebulosa 5.5s ease-in-out infinite;
+}
+@keyframes nebulosa{
+  0%   { transform:translate3d(-3%,-2%,0) scale(1.04); opacity:.55 }
+  33%  { transform:translate3d(3%,2%,0)   scale(1.12); opacity:.85 }
+  66%  { transform:translate3d(-2%,3%,0)  scale(1.07); opacity:.68 }
+  100% { transform:translate3d(-3%,-2%,0) scale(1.04); opacity:.55 }
+}
+/* El afiche se atenúa y late: se ve que está "en obra" pero sigue ahí. */
+.canvaswrap.gen #poster{
+  animation:latido 2.4s ease-in-out infinite;
+  transition:filter .4s ease;
+  filter:saturate(.55) contrast(.94);
+}
+@keyframes latido{ 0%,100%{opacity:.72} 50%{opacity:.94} }
+
+/* Barra indeterminada arriba del lienzo */
+.genbar{
+  position:absolute;top:0;left:0;right:0;height:3px;z-index:3;
+  overflow:hidden;background:rgba(180,85,47,.14);display:none;
+}
+.canvaswrap.gen .genbar{ display:block }
+.genbar::after{
+  content:'';position:absolute;top:0;bottom:0;width:38%;
+  background:linear-gradient(90deg,transparent,var(--ui-accent),transparent);
+  animation:barrido 1.4s ease-in-out infinite;
+}
+@keyframes barrido{ 0%{left:-40%} 100%{left:100%} }
+
+/* Etiqueta con el paso actual */
+.genlabel{
+  position:absolute;z-index:3;left:50%;bottom:22px;transform:translateX(-50%);
+  display:none;align-items:center;gap:8px;
+  padding:7px 14px;border-radius:999px;
+  background:var(--ui-surface);border:1px solid var(--ui-line);
+  box-shadow:0 6px 20px rgba(90,62,44,.16);
+  font-size:12px;color:var(--ui-text);white-space:nowrap;
+}
+.canvaswrap.gen .genlabel{ display:flex }
+.genlabel .sp{
+  width:11px;height:11px;flex:none;border-radius:50%;
+  border:2px solid var(--ui-accent);border-right-color:transparent;
+  animation:girar .8s linear infinite;
+}
+@keyframes girar{ to{ transform:rotate(360deg) } }
+
+/* Quien pide menos movimiento recibe la señal sin animación. */
+@media (prefers-reduced-motion: reduce){
+  .canvaswrap.gen::before,.canvaswrap.gen #poster,
+  .genbar::after,.genlabel .sp{ animation:none }
+  .canvaswrap.gen::before{ opacity:.7 }
+}
+#poster{
+  /* z-index 2: por encima de la nebulosa de carga, que va en 0 */
+  position:relative;z-index:2;overflow:hidden;flex:none;
+  box-shadow:0 2px 6px rgba(60,40,20,.10), 0 24px 60px rgba(60,40,20,.16);
+}
+.hint{padding:8px 20px;border-top:1px solid var(--ui-line);color:var(--ui-muted);font-size:11.5px;background:var(--ui-surface)}
+
+/* ── Panel derecho ── */
+.panelhead{padding:14px 18px 12px;border-bottom:1px solid var(--ui-line)}
+.panelhead h2{font-size:13.5px;font-weight:650;letter-spacing:-.01em}
+.panelhead p{color:var(--ui-muted);font-size:11.5px;margin-top:2px}
+.panelbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+
+details.sec{border-bottom:1px solid var(--ui-line)}
+details.sec>summary{
+  list-style:none;cursor:pointer;padding:11px 18px;display:flex;align-items:center;gap:9px;
+  font-weight:600;font-size:12.5px;user-select:none;
+}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary:hover{background:var(--ui-surface-2)}
+.caret{width:9px;height:9px;border-right:1.6px solid var(--ui-muted);border-bottom:1.6px solid var(--ui-muted);
+  transform:rotate(-45deg);transition:transform .16s;flex:none;margin-left:1px}
+details[open]>summary .caret{transform:rotate(45deg)}
+.count{margin-left:auto;color:var(--ui-muted);font-size:11px;font-weight:500;
+  background:var(--ui-surface-2);padding:1px 7px;border-radius:20px}
+.secbody{padding:4px 18px 16px;display:flex;flex-direction:column;gap:11px}
+
+.row{display:flex;align-items:center;gap:10px}
+.row>label{flex:none;width:88px;color:var(--ui-muted);font-size:11.5px}
+.row>.grow{flex:1;min-width:0}
+input[type=text],textarea,select{
+  width:100%;padding:6px 9px;border:1px solid var(--ui-line);border-radius:var(--ui-r-sm);
+  background:var(--ui-surface);
+}
+input[type=text]:focus,textarea:focus,select:focus{outline:2px solid var(--ui-accent-soft);border-color:var(--ui-accent)}
+textarea{resize:vertical;min-height:52px;line-height:1.4}
+input[type=range]{width:100%;accent-color:var(--ui-accent)}
+input[type=color]{width:34px;height:26px;flex:none;padding:0;border:1px solid var(--ui-line);border-radius:6px;background:none;cursor:pointer}
+/* En la cabecera del bloque el espacio es escaso: chip más pequeño */
+input[type=color].chipcolor{width:24px;height:22px;border-radius:5px}
+.val{flex:none;width:44px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ui-muted);font-size:11.5px}
+
+.card{border:1px solid var(--ui-line);border-radius:var(--ui-r);padding:10px;background:var(--ui-surface-2);
+  display:flex;flex-direction:column;gap:8px}
+.cardhead{display:flex;align-items:center;gap:4px}
+.cardhead strong{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--ui-muted)}
+.iconbtn{color:var(--ui-muted);padding:2px 6px;border-radius:6px;font-size:14px;line-height:1}
+.iconbtn:hover{background:var(--ui-accent-soft);color:var(--ui-accent)}
+.mini{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.mini select,.mini input[type=text]{width:auto;flex:1;min-width:64px;font-size:12px;padding:4px 7px}
+.add{
+  padding:8px;border:1px dashed var(--ui-line);border-radius:var(--ui-r);color:var(--ui-muted);
+  width:100%;font-weight:550;transition:all .12s;
+}
+.add:hover{border-color:var(--ui-accent);color:var(--ui-accent);background:var(--ui-accent-soft)}
+.empty{color:var(--ui-muted);font-size:11.5px;font-style:italic;padding:2px 0}
+
+/* Rejilla de 9 anclajes */
+.anchors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;width:112px}
+.anchors button{aspect-ratio:1.5;border:1px solid var(--ui-line);border-radius:5px;background:var(--ui-surface)}
+.anchors button:hover{border-color:var(--ui-accent)}
+.anchors button[aria-pressed=true]{background:var(--ui-accent);border-color:var(--ui-accent)}
+.note{font-size:11px;color:var(--ui-muted);line-height:1.4}
+.warn{font-size:11px;color:#8C3A1C;background:var(--ui-accent-soft);padding:6px 8px;border-radius:6px;line-height:1.4}
+.thumb{width:100%;height:56px;object-fit:cover;border-radius:7px;border:1px solid var(--ui-line);display:block}
+.chk{display:flex;gap:4px;align-items:center;cursor:pointer;font-size:11px;color:var(--ui-muted)}
+.hidden{display:none}
+
+/* ── Bloque de IA ── */
+.ia{padding:12px 18px 14px;border-bottom:1px solid var(--ui-line);background:var(--ui-accent-soft);
+  display:flex;flex-direction:column;gap:9px}
+.ia h3{font-size:12.5px;font-weight:650;display:flex;align-items:center;gap:6px}
+.ia h3 .dot{width:6px;height:6px;border-radius:50%;background:var(--ui-accent);flex:none}
+.ia textarea{min-height:58px;background:var(--ui-surface)}
+.ia input[type=text],.ia textarea.ref{background:var(--ui-surface)}
+.iabtns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.iasec{display:flex;align-items:center;gap:8px}
+.iasec .btn{flex:none;padding:4px 9px;font-size:11.5px;font-weight:500}
+.iafoot{display:flex;align-items:center;gap:8px;min-height:16px}
+.iacosto{color:var(--ui-muted);font-size:11px;font-variant-numeric:tabular-nums}
+.iahint{color:var(--ui-muted);font-size:10.5px;white-space:nowrap}
+.iaopt{display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;flex:1;min-width:0}
+.iaopt input{accent-color:var(--ui-accent);flex:none}
+.iamsg{font-size:11px;line-height:1.4}
+/* Referencia visual: imagen de la que se extraen colores + CSS pegado */
+details.iaref{border-top:1px solid var(--ui-line);padding-top:8px}
+details.iaref>summary{list-style:none;cursor:pointer;font-size:11.5px;color:var(--ui-muted);
+  font-weight:600;user-select:none;display:flex;align-items:center;gap:6px}
+details.iaref>summary::-webkit-details-marker{display:none}
+details.iaref>summary:hover{color:var(--ui-ink)}
+.iarefbody{display:flex;flex-direction:column;gap:8px;padding-top:8px}
+.iadrop{border:1px dashed var(--ui-line);border-radius:var(--ui-r);padding:10px;text-align:center;
+  color:var(--ui-muted);font-size:11.5px;background:var(--ui-surface);transition:all .12s}
+.iadrop:hover,.iadrop.over{border-color:var(--ui-accent);color:var(--ui-accent);background:var(--ui-accent-soft)}
+.iapal{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.iasw{width:24px;height:24px;border-radius:6px;border:1px solid var(--ui-line);flex:none}
+.ia textarea.ref{min-height:40px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px}
+.iamsg.err{color:#8C3A1C}
+.ia[aria-disabled=true]{background:var(--ui-surface-2);opacity:.7}
+.ia[aria-disabled=true] textarea,.ia[aria-disabled=true] .btn{pointer-events:none;opacity:.55}
+</style>
+</head>
+<body>
+<div class="app">
+  <section class="stage">
+    <div class="topbar">
+      <div class="brandmark">Editor de <span>afiche</span></div>
+      <div class="group"><label>Formato</label><div class="seg" id="segFormato"></div></div>
+      <div class="group"><label>Template</label><div class="seg" id="segTemplate"></div></div>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="btnPng">Descargar PNG</button>
+    </div>
+    <div class="canvaswrap" id="canvaswrap">
+      <div class="genbar"></div>
+      <div id="poster"></div>
+      <div class="genlabel"><span class="sp"></span><span id="genPaso">Generando…</span></div>
+    </div>
+    <div class="hint" data-build="00:00:29" id="hint"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="panelhead">
+      <h2>Todo el afiche, aquí</h2>
+      <p>Fondo, textos, imágenes, logo y marca. Un solo sitio.</p>
+    </div>
+    <div class="ia" id="ia">
+      <h3><span class="dot"></span>Generar con IA</h3>
+      <textarea id="iaTema" rows="3" placeholder="Describe el afiche completo. Ej: un afiche estilo luces de neón sobre los 3 errores al cotizar un arriendo"></textarea>
+      <div class="iabtns">
+        <label class="iaopt" for="iaConFondo">
+          <input type="checkbox" id="iaConFondo" checked>
+          <span>Incluir imagen de fondo</span>
+        </label>
+        <span class="iahint" id="iaEstim"></span>
+      </div>
+      <button class="btn btn-primary" id="iaGenerar">Generar afiche</button>
+      <div class="iasec">
+        <button class="btn" id="iaOtra" disabled>Otra versión</button>
+        <button class="btn" id="iaEstilo">Cambiar estilo</button>
+        <span class="iahint">solo texto</span>
+      </div>
+      <details class="iaref" id="iaRef">
+        <summary><span class="caret"></span>Referencia visual (opcional)</summary>
+        <div class="iarefbody">
+          <button class="iadrop" id="iaDrop">Suelta o elige una imagen de referencia<br>para tomar sus colores</button>
+          <input type="file" accept="image/*" class="hidden" id="iaRefFile">
+          <div class="iapal hidden" id="iaPal"></div>
+          <textarea class="ref" id="iaCss" rows="2" placeholder="Pega CSS o tokens: --color-fondo: #0B1120; color: #F4B740;"></textarea>
+          <div class="iapal hidden" id="iaPalCss"></div>
+        </div>
+      </details>
+      <div class="iafoot">
+        <button class="btn btn-sm hidden" id="iaDeshacer">Deshacer</button>
+        <span class="iamsg" id="iaMsg"></span>
+        <span style="flex:1"></span>
+        <span class="iacosto" id="iaCosto"></span>
+      </div>
+    </div>
+    <div class="panelbody" id="panelbody"></div>
+  </aside>
+</div>
+
+<script type="module">
+import { cellToPercent, cellToPixels, logoBox, safeArea, FORMATOS, ANCLAJES } from './core/layout.js'
+import { contrast, pickLogoVariant, checkFixedLogo, readableInk } from './core/color.js'
+
+/* ═══ Modelo ═══════════════════════════════════════════════════════ */
+
+const FUENTES = {
+  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  mono: '"SF Mono", Menlo, Consolas, monospace',
+}
+
+// El tamaño va en % del alto de la pieza, así el afiche escala igual en
+// los 5 formatos sin tocar nada.
+const ROLES = {
+  eyebrow: { nombre:'Antetítulo', size:2.4, weight:600, track:.08, upper:true,  tinta:'accent' },
+  titulo:  { nombre:'Título',     size:7.0, weight:700, track:-.02, upper:false, tinta:'ink' },
+  dato:    { nombre:'Dato',       size:20,  weight:700, track:-.04, upper:false, tinta:'accent' },
+  bajada:  { nombre:'Bajada',     size:3.4, weight:400, track:0,    upper:false, tinta:'muted' },
+  cuerpo:  { nombre:'Cuerpo',     size:2.9, weight:400, track:0,    upper:false, tinta:'ink' },
+  cita:    { nombre:'Cita',       size:5.2, weight:400, track:-.01, upper:false, tinta:'ink' },
+  pie:     { nombre:'Pie',        size:2.2, weight:500, track:.02,  upper:false, tinta:'muted' },
+}
+const esDisplay = (rol) => ROLES[rol].size >= 5
+
+// Los templates declaran celdas de la grilla 12×12 de core/layout.js.
+const TEMPLATES = {
+  portada: {
+    nombre:'Portada',
+    bloques:[
+      { rol:'eyebrow', texto:'GUÍA PRÁCTICA', col:2, row:7, cs:10, rs:1, align:'left', valign:'end' },
+      { rol:'titulo', texto:'Cómo dejar de improvisar tu contenido', col:2, row:8, cs:9, rs:3, align:'left', valign:'start' },
+      // Placeholder genérico: el repo es agnóstico, ninguna marca ni
+      // ciudad concreta puede vivir en el código. Ver docs/ARQUITECTURA.md
+      { rol:'pie', texto:'@tu.marca', col:2, row:11, cs:7, rs:1, align:'left', valign:'end' },
+    ],
+  },
+  titular: {
+    nombre:'Título + bajada',
+    bloques:[
+      { rol:'titulo', texto:'Tres errores que matan tu alcance', col:2, row:3, cs:9, rs:3, align:'left', valign:'start' },
+      { rol:'bajada', texto:'Los cometemos todos al empezar. El tercero es el más caro y casi nadie lo revisa a tiempo.', col:2, row:6, cs:8, rs:3, align:'left', valign:'start' },
+      { rol:'pie', texto:'Guarda esto para después', col:2, row:11, cs:8, rs:1, align:'left', valign:'end' },
+    ],
+  },
+  dato: {
+    nombre:'Dato gigante',
+    bloques:[
+      { rol:'eyebrow', texto:'ESTUDIO 2026', col:2, row:3, cs:10, rs:1, align:'center', valign:'end' },
+      { rol:'dato', texto:'68%', col:2, row:4, cs:10, rs:4, align:'center', valign:'center' },
+      { rol:'bajada', texto:'de las pymes publica sin un plan de contenido definido', col:3, row:8, cs:8, rs:2, align:'center', valign:'start' },
+    ],
+  },
+  cita: {
+    nombre:'Cita',
+    bloques:[
+      { rol:'cita', texto:'«Publicar todos los días no es una estrategia. Es una rutina sin dirección.»', col:2, row:4, cs:9, rs:4, align:'left', valign:'center' },
+      { rol:'pie', texto:'— Nombre Apellido, cargo', col:2, row:9, cs:8, rs:1, align:'left', valign:'start' },
+    ],
+  },
+  lista: {
+    nombre:'Lista',
+    bloques:[
+      { rol:'titulo', texto:'Checklist antes de publicar', col:2, row:2, cs:9, rs:2, align:'left', valign:'start' },
+      { rol:'cuerpo', texto:'01 · El gancho cabe en dos líneas\n02 · Hay una sola idea por pieza\n03 · El cierre pide algo concreto\n04 · Se lee bien en el móvil', col:2, row:5, cs:9, rs:5, align:'left', valign:'start' },
+      { rol:'pie', texto:'Guárdalo. Lo vas a necesitar el lunes.', col:2, row:11, cs:8, rs:1, align:'left', valign:'end' },
+    ],
+  },
+}
+
+let uid = 0
+const nid = (p) => `${p}${++uid}`
+
+// Valores por defecto tomados de profiles/example/brand.yaml.
+const S = {
+  formato:'4:5',
+  template:'portada',
+  fondo:{ imagen:null, oscurecer:35, ajuste:'cover' },
+  bloques:[],
+  imagenes:[],
+  logo:{ texto:'TU MARCA', anchor:'bottom-right', height:6, visible:true, fijo:false, color:'#2D6BB8' },
+  marca:{
+    canvas:'#FFFFFF', ink:'#1A1A1A', accent:'#2D6BB8', muted:'#6B6B6B',
+    display:'sans', body:'sans', radius:8, padding:8, uppercase:false,
+  },
+}
+
+function cargarTemplate(id, conservar) {
+  const sobrantes = conservar ? S.bloques.slice() : []
+  S.template = id
+  S.bloques = TEMPLATES[id].bloques.map((b) => {
+    // Conserva lo ya escrito: se busca un bloque previo del mismo rol.
+    const i = sobrantes.findIndex((v) => v.rol === b.rol && v.texto.trim())
+    let texto = b.texto
+    if (i >= 0) { texto = sobrantes[i].texto; sobrantes.splice(i, 1) }
+    return { ...b, id:nid('b'), texto }
+  })
+  // Los bloques que el usuario añadió a mano no encajan en ningún template:
+  // se conservan igual, borrarlos sería tirar su trabajo.
+  for (const v of sobrantes) if (v.extra) S.bloques.push({ ...v, id:nid('b') })
+}
+
+/* ═══ Render del lienzo (posición absoluta, nunca CSS Grid) ════════ */
+
+const poster = document.getElementById('poster')
+const wrap = document.getElementById('canvaswrap')
+const tinta = (k) => S.marca[k] || S.marca.ink
+
+function escala() {
+  const f = FORMATOS[S.formato]
+  return Math.min((wrap.clientWidth - 60) / f.w, (wrap.clientHeight - 60) / f.h, 1)
+}
+
+/**
+ * Color de fondo con el que se calculan los contrastes. Con foto + velo,
+ * el fondo percibido es un gris que depende del oscurecimiento.
+ */
+function fondoEfectivo() {
+  if (!S.fondo.imagen) return S.marca.canvas
+  const v = Math.round(255 * (1 - S.fondo.oscurecer / 100) * 0.58)
+  return '#' + [v, v, v].map((n) => n.toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+
+function colorBloque(b) {
+  // Color elegido a mano: manda sobre todo lo demás.
+  if (b.color) return b.color
+  const bg = fondoEfectivo()
+  if (b.invertir) return readableInk(bg, ['#FFFFFF', S.marca.ink]).ink
+  return tinta(ROLES[b.rol].tinta)
+}
+
+function mayusculas(rol) {
+  return ROLES[rol].upper || (esDisplay(rol) && S.marca.uppercase)
+}
+
+function render() {
+  const f = FORMATOS[S.formato]
+  const e = escala()
+  poster.style.width = f.w * e + 'px'
+  poster.style.height = f.h * e + 'px'
+  poster.style.borderRadius = S.marca.radius * e + 'px'
+  poster.style.background = S.marca.canvas
+  poster.innerHTML = ''
+
+  if (S.fondo.imagen) {
+    poster.appendChild(el('div', {
+      position:'absolute', inset:'0',
+      backgroundImage:`url("${S.fondo.imagen}")`, backgroundSize:S.fondo.ajuste,
+      backgroundPosition:'center', backgroundRepeat:'no-repeat',
+    }))
+    poster.appendChild(el('div', { position:'absolute', inset:'0',
+      background:`rgba(0,0,0,${S.fondo.oscurecer / 100})` }))
+  }
+
+  for (const im of S.imagenes) {
+    poster.appendChild(el('div', {
+      ...cellToPercent(im.col, im.row, im.cs, im.rs),
+      backgroundImage:`url("${im.src}")`, backgroundSize:im.ajuste,
+      backgroundPosition:'center', backgroundRepeat:'no-repeat',
+      borderRadius:S.marca.radius * e + 'px',
+    }))
+  }
+
+  for (const b of S.bloques) {
+    const r = ROLES[b.rol]
+    const d = el('div', {
+      ...cellToPercent(b.col, b.row, b.cs, b.rs),
+      display:'flex', flexDirection:'column', whiteSpace:'pre-wrap', overflow:'hidden',
+      justifyContent: b.valign === 'center' ? 'center' : b.valign === 'end' ? 'flex-end' : 'flex-start',
+      textAlign:b.align, color:colorBloque(b),
+      fontFamily:FUENTES[esDisplay(b.rol) ? S.marca.display : S.marca.body],
+      fontWeight:r.weight, letterSpacing:r.track + 'em',
+      fontSize:(r.size / 100) * f.h * e + 'px',
+      lineHeight:r.size >= 12 ? 1 : 1.18,
+      textTransform:mayusculas(b.rol) ? 'uppercase' : 'none',
+    })
+    d.textContent = b.texto
+    poster.appendChild(d)
+  }
+
+  if (S.logo.visible) {
+    const lb = cajaLogo()
+    const d = el('div', {
+      position:'absolute', left:lb.x*e+'px', top:lb.y*e+'px', width:lb.w*e+'px', height:lb.h*e+'px',
+      display:'flex', alignItems:'center', justifyContent:justificarLogo(),
+      color:colorLogo(), fontFamily:FUENTES[S.marca.display], fontWeight:700,
+      fontSize:lb.fs * e + 'px', letterSpacing:'.04em', whiteSpace:'nowrap',
+    })
+    d.textContent = S.logo.texto
+    poster.appendChild(d)
+  }
+
+  pintarHint()
+}
+
+function el(tag, estilos) {
+  const d = document.createElement(tag)
+  Object.assign(d.style, estilos)
+  return d
+}
+function justificarLogo() {
+  return S.logo.anchor.endsWith('right') ? 'flex-end'
+    : S.logo.anchor.endsWith('center') ? 'center' : 'flex-start'
+}
+
+/**
+ * Caja del logo, en píxeles del formato.
+ *
+ * `logoBox` fija el alto y el punto de anclaje, que es lo que importa. Su
+ * ancho asume un logo de proporción fija; como aquí el logo es texto de
+ * largo libre, ese ancho recorta las marcas largas. Se conserva el anclaje
+ * y se estira la caja hasta el borde opuesto de la caja segura: el texto
+ * crece hacia dentro de la pieza en vez de salirse.
+ */
+function cajaLogo() {
+  const lb = logoBox(S.logo.anchor, S.formato, { heightPct:S.logo.height, aspect:2.4, paddingPct:S.marca.padding })
+  const sa = safeArea(S.formato, S.marca.padding)
+  const caja = { ...lb, fs:lb.h * 0.5 }
+  if (S.logo.anchor.endsWith('right')) { caja.x = sa.x; caja.w = lb.x + lb.w - sa.x }
+  else if (S.logo.anchor.endsWith('left')) { caja.w = sa.x + sa.w - lb.x }
+  else { caja.x = sa.x; caja.w = sa.w }
+  return caja
+}
+function colorLogo() {
+  if (S.logo.fijo) return S.logo.color
+  return pickLogoVariant(fondoEfectivo()).variant === 'dark' ? S.marca.ink : '#FFFFFF'
+}
+
+function pintarHint() {
+  const f = FORMATOS[S.formato]
+  const sa = safeArea(S.formato, S.marca.padding)
+  const c = contrast(S.marca.ink, fondoEfectivo())
+  const h = document.getElementById('hint')
+  // El sello de build delata si la app quedó con una copia vieja en caché.
+  h.textContent =
+    `${f.w}×${f.h} px · ${f.nombre} · caja segura ${sa.w}×${sa.h} desde ${sa.x},${sa.y} · ` +
+    `contraste tinta/fondo ${c.toFixed(1)}:1${c >= 4.5 ? ' ✓' : ' · bajo'}` +
+    ` · v${h.dataset.build || '?'}`
+}
+
+/* ═══ Panel: el único sitio donde se edita el afiche ═══════════════ */
+
+const panel = document.getElementById('panelbody')
+const abiertas = new Set(['fondo', 'textos'])
+
+function n(tag, props = {}, hijos = []) {
+  const x = document.createElement(tag)
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') x.className = v
+    else if (k === 'text') x.textContent = v
+    else if (k === 'style') x.style.cssText = v
+    else if (k.startsWith('on')) x.addEventListener(k.slice(2), v)
+    else if (v !== null && v !== undefined && v !== false) x.setAttribute(k, v)
+  }
+  for (const c of [].concat(hijos)) if (c) x.appendChild(c)
+  return x
+}
+
+function seccion(id, titulo, cuenta, contenido) {
+  const sum = n('summary', {}, [n('span', { class:'caret' }), n('span', { text:titulo })])
+  if (cuenta !== null) sum.appendChild(n('span', { class:'count', text:String(cuenta) }))
+  const d = n('details', { class:'sec' }, [sum, n('div', { class:'secbody' }, contenido)])
+  d.open = abiertas.has(id)
+  d.addEventListener('toggle', () => d.open ? abiertas.add(id) : abiertas.delete(id))
+  return d
+}
+
+const fila = (label, ...ctrl) => n('div', { class:'row' }, [n('label', { text:label }), ...ctrl])
+
+function slider(min, max, step, valor, onInput, suf = '') {
+  const out = n('span', { class:'val', text:valor + suf })
+  const inp = n('input', { type:'range', min, max, step, value:valor, class:'grow',
+    oninput:(e) => { const v = +e.target.value; out.textContent = v + suf; onInput(v) } })
+  return [inp, out]
+}
+
+function selector(opciones, valor, onChange, clase) {
+  const s = n('select', { class:clase || '', onchange:(e) => onChange(e.target.value) })
+  for (const [v, t] of opciones) {
+    const o = n('option', { value:v, text:t })
+    if (String(v) === String(valor)) o.selected = true
+    s.appendChild(o)
+  }
+  return s
+}
+
+function check(valor, onChange, label) {
+  const c = n('input', { type:'checkbox', onchange:(e) => onChange(e.target.checked) })
+  c.checked = !!valor
+  return label ? n('label', { class:'chk' }, [c, n('span', { text:label })]) : c
+}
+
+function texto(valor, onInput, clase) {
+  const i = n('input', { type:'text', class:clase || '', oninput:(e) => onInput(e.target.value) })
+  i.value = valor
+  return i
+}
+
+function colorFila(label, key) {
+  const picker = n('input', { type:'color', value:S.marca[key],
+    oninput:(e) => { S.marca[key] = e.target.value.toUpperCase(); hex.value = S.marca[key]; render() } })
+  const hex = texto(S.marca[key], () => {}, 'grow')
+  hex.addEventListener('change', (e) => {
+    const v = e.target.value.trim().toUpperCase()
+    if (/^#[0-9A-F]{6}$/.test(v)) { S.marca[key] = v; picker.value = v; render() }
+    else e.target.value = S.marca[key]
+  })
+  return n('div', { class:'row' }, [n('label', { text:label }), picker, hex])
+}
+
+function leerArchivo(file, cb) {
+  if (!file || !file.type.startsWith('image/')) return
+  const fr = new FileReader()
+  fr.onload = () => cb(fr.result)
+  fr.readAsDataURL(file)
+}
+
+function botonArchivo(label, cb) {
+  const inp = n('input', { type:'file', accept:'image/*', class:'hidden',
+    onchange:(e) => { leerArchivo(e.target.files[0], cb); e.target.value = '' } })
+  return n('div', {}, [n('button', { class:'add', text:label, onclick:() => inp.click() }), inp])
+}
+
+/* — Fondo — */
+function secFondo() {
+  const items = [colorFila('Color', 'canvas')]
+  if (S.fondo.imagen) {
+    items.push(n('img', { class:'thumb', src:S.fondo.imagen, alt:'' }))
+    items.push(n('div', { class:'mini' }, [
+      selector([['cover','Rellenar'],['contain','Contener'],['100% 100%','Estirar']],
+        S.fondo.ajuste, (v) => { S.fondo.ajuste = v; render() }),
+      n('button', { class:'btn btn-sm', text:'Quitar imagen',
+        onclick:() => { S.fondo.imagen = null; repintar() } }),
+    ]))
+    items.push(fila('Oscurecer', ...slider(0, 90, 5, S.fondo.oscurecer,
+      (v) => { S.fondo.oscurecer = v; render() }, '%')))
+    const c = contrast(S.marca.ink, fondoEfectivo())
+    if (c < 4.5) items.push(n('div', { class:'warn',
+      text:`La tinta queda a ${c.toFixed(1)}:1 sobre la foto. Sube el oscurecimiento, o marca "tinta legible" en los bloques.` }))
+  } else {
+    items.push(botonArchivo('+  Imagen de fondo', (src) => { S.fondo.imagen = src; repintar() }))
+    items.push(n('div', { class:'note', text:'También puedes arrastrar una imagen sobre el lienzo.' }))
+  }
+  return seccion('fondo', 'Fondo', null, items)
+}
+
+/* — Textos — */
+function tarjetaBloque(b, i) {
+  const head = n('div', { class:'cardhead' }, [
+    n('strong', { text:ROLES[b.rol].nombre }),
+    n('span', { style:'flex:1' }),
+    ...controlesColor(b),
+    n('button', { class:'iconbtn', title:'Subir', text:'↑', onclick:() => mover(S.bloques, i, -1) }),
+    n('button', { class:'iconbtn', title:'Bajar', text:'↓', onclick:() => mover(S.bloques, i, 1) }),
+    n('button', { class:'iconbtn', title:'Quitar', text:'✕',
+      onclick:() => { S.bloques.splice(i, 1); repintar() } }),
+  ])
+  const ta = n('textarea', { rows:b.rol === 'cuerpo' ? 4 : 2,
+    oninput:(e) => { b.texto = e.target.value; render() } })
+  ta.value = b.texto
+  const filas = Array.from({ length:12 }, (_, k) => [k + 1, String(k + 1)])
+  return n('div', { class:'card' }, [
+    head, ta,
+    n('div', { class:'mini' }, [
+      selector(Object.entries(ROLES).map(([k, v]) => [k, v.nombre]), b.rol,
+        (v) => { b.rol = v; repintar() }),
+      selector([['left','Izq.'],['center','Centro'],['right','Der.']], b.align,
+        (v) => { b.align = v; render() }),
+      selector([['start','Arriba'],['center','Medio'],['end','Abajo']], b.valign,
+        (v) => { b.valign = v; render() }),
+    ]),
+    n('div', { class:'mini' }, [
+      n('span', { class:'note', text:'Fila' }),
+      selector(filas, b.row, (v) => { b.row = +v; render() }),
+      n('span', { class:'note', text:'Alto' }),
+      selector(filas, b.rs, (v) => { b.rs = +v; render() }),
+      check(b.invertir, (v) => { b.invertir = v; render() }, 'tinta legible'),
+    ]),
+  ])
+}
+
+/* Color del bloque, en la cabecera para tenerlo a mano.
+   Manda sobre el color del rol y sobre "tinta legible": si la persona
+   elige un color, es el que va. */
+function controlesColor(b) {
+  const chip = n('input', {
+    type:'color', class:'chipcolor', title:'Color del texto',
+    value:colorBloque(b),
+    // `render` mientras se arrastra: repintar el panel entero cerraría
+    // el diálogo de color del sistema.
+    oninput:(e) => { b.color = e.target.value.toUpperCase(); render() },
+    onchange:() => repintar(),
+  })
+
+  const out = [chip]
+
+  // Cuentagotas: toma un color de cualquier punto de la pantalla.
+  // Solo existe en navegadores con EyeDropper; si no está, no se muestra
+  // en vez de ofrecer un botón muerto.
+  if (typeof window.EyeDropper === 'function') {
+    out.push(n('button', {
+      class:'iconbtn', title:'Tomar un color de la pantalla', text:'⌖',
+      onclick:async () => {
+        try {
+          const r = await new window.EyeDropper().open()
+          if (r && r.sRGBHex) { b.color = r.sRGBHex.toUpperCase(); repintar() }
+        } catch { /* cancelado con Escape: no es un error */ }
+      },
+    }))
+  }
+
+  if (b.color) {
+    out.push(n('button', {
+      class:'iconbtn', title:'Volver al color automático', text:'↺',
+      onclick:() => { b.color = null; repintar() },
+    }))
+  }
+  return out
+}
+
+function mover(arr, i, d) {
+  const j = i + d
+  if (j < 0 || j >= arr.length) return
+  ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  repintar()
+}
+
+function secTextos() {
+  const items = S.bloques.map(tarjetaBloque)
+  if (!items.length) items.push(n('div', { class:'empty', text:'Sin bloques de texto.' }))
+  items.push(n('button', { class:'add', text:'+  Bloque de texto', onclick:() => {
+    const u = S.bloques[S.bloques.length - 1]
+    S.bloques.push({ id:nid('b'), rol:'cuerpo', texto:'Texto nuevo', extra:true, col:2,
+      row:Math.min(11, u ? Math.min(11, u.row + u.rs) : 5), cs:9, rs:2, align:'left', valign:'start' })
+    repintar()
+  } }))
+  return seccion('textos', 'Textos', S.bloques.length, items)
+}
+
+/* — Imágenes dentro de la pieza — */
+const ZONAS = [
+  ['2,2,9,4', 'Arriba, ancha'], ['2,5,5,4', 'Izquierda'], ['7,5,5,4', 'Derecha'],
+  ['2,7,9,4', 'Abajo, ancha'], ['4,4,6,5', 'Centro'],
+  ['1,1,12,6', 'Mitad superior'], ['1,7,12,6', 'Mitad inferior'],
+  ['1,1,12,12', 'Pieza completa'],
+]
+
+function secImagenes() {
+  const items = S.imagenes.map((im, i) => n('div', { class:'card' }, [
+    n('div', { class:'cardhead' }, [
+      n('strong', { text:`Imagen ${i + 1}` }),
+      n('span', { style:'flex:1' }),
+      n('button', { class:'iconbtn', title:'Atrás', text:'↑', onclick:() => mover(S.imagenes, i, -1) }),
+      n('button', { class:'iconbtn', title:'Adelante', text:'↓', onclick:() => mover(S.imagenes, i, 1) }),
+      n('button', { class:'iconbtn', title:'Quitar', text:'✕',
+        onclick:() => { S.imagenes.splice(i, 1); repintar() } }),
+    ]),
+    n('img', { class:'thumb', src:im.src, alt:'' }),
+    n('div', { class:'mini' }, [
+      selector(ZONAS, `${im.col},${im.row},${im.cs},${im.rs}`, (v) => {
+        const [c, r, cs, rs] = v.split(',').map(Number)
+        Object.assign(im, { col:c, row:r, cs, rs }); render()
+      }),
+      selector([['cover','Rellenar'],['contain','Contener']], im.ajuste,
+        (v) => { im.ajuste = v; render() }),
+    ]),
+  ]))
+  if (!items.length) items.push(n('div', { class:'empty', text:'Sin imágenes dentro de la pieza.' }))
+  items.push(botonArchivo('+  Imagen en la pieza', (src) => { añadirImagen(src); repintar() }))
+  return seccion('imagenes', 'Imágenes', S.imagenes.length, items)
+}
+
+function añadirImagen(src) {
+  const z = ZONAS[S.imagenes.length % 5][0].split(',').map(Number)
+  S.imagenes.push({ id:nid('i'), src, col:z[0], row:z[1], cs:z[2], rs:z[3], ajuste:'cover' })
+  render()
+}
+
+/* — Logo — */
+function secLogo() {
+  const grid = n('div', { class:'anchors' })
+  for (const a of ANCLAJES) {
+    grid.appendChild(n('button', { title:a, 'aria-pressed':String(a === S.logo.anchor),
+      onclick:() => { S.logo.anchor = a; repintar() } }))
+  }
+  const items = [
+    fila('Mostrar', check(S.logo.visible, (v) => { S.logo.visible = v; repintar() })),
+    fila('Texto', texto(S.logo.texto, (v) => { S.logo.texto = v; render() }, 'grow')),
+    fila('Posición', grid),
+    fila('Tamaño', ...slider(3, 14, .5, S.logo.height, (v) => { S.logo.height = v; render() }, '%')),
+    n('div', { class:'row' }, [
+      n('label', { text:'Color fijo' }),
+      check(S.logo.fijo, (v) => { S.logo.fijo = v; repintar() }),
+      n('input', { type:'color', value:S.logo.color,
+        oninput:(e) => { S.logo.color = e.target.value.toUpperCase(); S.logo.fijo = true; repintar() } }),
+    ]),
+  ]
+  if (S.logo.fijo) {
+    const chk = checkFixedLogo(S.logo.color, fondoEfectivo())
+    items.push(n('div', { class:chk.safe ? 'note' : 'warn',
+      text:chk.safe ? `Contraste ${chk.ratio.toFixed(1)}:1 · legible.`
+                    : `Contraste ${chk.ratio.toFixed(1)}:1 · ${chk.remedio}.` }))
+  } else {
+    const v = pickLogoVariant(fondoEfectivo())
+    items.push(n('div', { class:'note',
+      text:`Tinta automática: ${v.variant === 'dark' ? 'oscura' : 'clara'} (${v.ratio.toFixed(1)}:1 sobre el fondo actual).` }))
+  }
+  return seccion('logo', 'Logo', null, items)
+}
+
+/* — Marca — */
+function secMarca() {
+  const tipos = [['sans','Sans'],['serif','Serif'],['mono','Mono']]
+  return seccion('marca', 'Marca', null, [
+    colorFila('Tinta', 'ink'),
+    colorFila('Acento', 'accent'),
+    colorFila('Secundario', 'muted'),
+    fila('Titulares', selector(tipos, S.marca.display, (v) => { S.marca.display = v; render() }, 'grow')),
+    fila('Cuerpo', selector(tipos, S.marca.body, (v) => { S.marca.body = v; render() }, 'grow')),
+    fila('Mayúsculas', check(S.marca.uppercase, (v) => { S.marca.uppercase = v; render() })),
+    fila('Radio', ...slider(0, 48, 2, S.marca.radius, (v) => { S.marca.radius = v; render() }, 'px')),
+    fila('Margen', ...slider(3, 15, 1, S.marca.padding, (v) => { S.marca.padding = v; render() }, '%')),
+    n('div', { class:'note', text:'El acento tiñe antetítulos y datos; el secundario, bajadas y pies.' }),
+  ])
+}
+
+function pintarPanel() {
+  const y = panel.scrollTop
+  panel.replaceChildren(secFondo(), secTextos(), secImagenes(), secLogo(), secMarca())
+  panel.scrollTop = y
+}
+const repintar = () => { pintarPanel(); render() }
+
+/* ═══ Barra superior ═══════════════════════════════════════════════ */
+
+function pintarBarra() {
+  const sf = document.getElementById('segFormato')
+  sf.replaceChildren(...Object.entries(FORMATOS).map(([k, v]) =>
+    n('button', { text:k, title:`${v.nombre} · ${v.w}×${v.h}`, 'aria-pressed':String(k === S.formato),
+      onclick:() => { S.formato = k; pintarBarra(); render() } })))
+  const st = document.getElementById('segTemplate')
+  st.replaceChildren(...Object.entries(TEMPLATES).map(([k, t]) =>
+    n('button', { text:t.nombre, 'aria-pressed':String(k === S.template),
+      onclick:() => { cargarTemplate(k, true); pintarBarra(); repintar() } })))
+}
+
+/* ═══ Export PNG: se repinta en canvas a la resolución real ════════ */
+
+const cargarImg = (src) => new Promise((res, rej) => {
+  const i = new Image()
+  i.onload = () => res(i)
+  i.onerror = () => rej(new Error('imagen ilegible'))
+  i.src = src
+})
+
+/** Dibuja una imagen en una caja respetando cover / contain / estirar. */
+function dibujarAjustada(ctx, img, x, y, w, h, modo) {
+  if (modo === '100% 100%') { ctx.drawImage(img, x, y, w, h); return }
+  const k = modo === 'contain'
+    ? Math.min(w / img.width, h / img.height)
+    : Math.max(w / img.width, h / img.height)
+  const dw = img.width * k, dh = img.height * k
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh)
+}
+
+/** Canvas no envuelve texto: hay que cortar las líneas a mano. */
+function envolver(ctx, txt, maxW) {
+  const out = []
+  for (const parrafo of txt.split('\n')) {
+    let linea = ''
+    for (const palabra of parrafo.split(/\s+/)) {
+      const test = linea ? linea + ' ' + palabra : palabra
+      if (linea && ctx.measureText(test).width > maxW) { out.push(linea); linea = palabra }
+      else linea = test
+    }
+    out.push(linea)
+  }
+  return out
+}
+
+async function exportarPNG() {
+  const f = FORMATOS[S.formato]
+  const cv = document.createElement('canvas')
+  cv.width = f.w
+  cv.height = f.h
+  const ctx = cv.getContext('2d')
+
+  if (S.marca.radius > 0) {
+    ctx.beginPath()
+    ctx.roundRect(0, 0, f.w, f.h, S.marca.radius)
+    ctx.clip()
+  }
+  ctx.fillStyle = S.marca.canvas
+  ctx.fillRect(0, 0, f.w, f.h)
+
+  if (S.fondo.imagen) {
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, f.w, f.h); ctx.clip()
+    dibujarAjustada(ctx, await cargarImg(S.fondo.imagen), 0, 0, f.w, f.h, S.fondo.ajuste)
+    ctx.restore()
+    ctx.fillStyle = `rgba(0,0,0,${S.fondo.oscurecer / 100})`
+    ctx.fillRect(0, 0, f.w, f.h)
+  }
+
+  for (const im of S.imagenes) {
+    const b = cellToPixels(im.col, im.row, im.cs, im.rs, S.formato)
+    const img = await cargarImg(im.src)
+    ctx.save()
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, S.marca.radius); ctx.clip()
+    dibujarAjustada(ctx, img, b.x, b.y, b.w, b.h, im.ajuste)
+    ctx.restore()
+  }
+
+  for (const b of S.bloques) {
+    const r = ROLES[b.rol]
+    const box = cellToPixels(b.col, b.row, b.cs, b.rs, S.formato)
+    const size = (r.size / 100) * f.h
+    const lh = size * (r.size >= 12 ? 1 : 1.18)
+    ctx.font = `${r.weight} ${size}px ${FUENTES[esDisplay(b.rol) ? S.marca.display : S.marca.body]}`
+    ctx.letterSpacing = (r.track * size).toFixed(2) + 'px'
+    ctx.fillStyle = colorBloque(b)
+    ctx.textAlign = b.align === 'center' ? 'center' : b.align === 'right' ? 'right' : 'left'
+    ctx.textBaseline = 'alphabetic'
+
+    const lineas = envolver(ctx, mayusculas(b.rol) ? b.texto.toUpperCase() : b.texto, box.w)
+    const alto = lineas.length * lh
+    let y = box.y
+    if (b.valign === 'center') y += (box.h - alto) / 2
+    else if (b.valign === 'end') y += box.h - alto
+    const x = b.align === 'center' ? box.x + box.w / 2
+            : b.align === 'right' ? box.x + box.w : box.x
+    // +0.5·lh centra la línea en su caja; +0.35·size baja a la línea base.
+    // Reproduce dónde deja flexbox cada línea en el preview.
+    lineas.forEach((t, i) => ctx.fillText(t, x, y + i * lh + lh / 2 + size * 0.35))
+  }
+  ctx.letterSpacing = '0px'
+
+  if (S.logo.visible) {
+    const lb = cajaLogo()
+    const fs = lb.fs
+    ctx.fillStyle = colorLogo()
+    ctx.font = `700 ${fs}px ${FUENTES[S.marca.display]}`
+    ctx.letterSpacing = (fs * 0.04).toFixed(2) + 'px'
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = S.logo.anchor.endsWith('right') ? 'right'
+      : S.logo.anchor.endsWith('center') ? 'center' : 'left'
+    const lx = S.logo.anchor.endsWith('right') ? lb.x + lb.w
+      : S.logo.anchor.endsWith('center') ? lb.x + lb.w / 2 : lb.x
+    ctx.fillText(S.logo.texto, lx, lb.y + lb.h / 2)
+    ctx.letterSpacing = '0px'
+  }
+
+  const blob = await new Promise((res) => cv.toBlob(res, 'image/png'))
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `afiche-${S.template}-${f.w}x${f.h}.png`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+}
+
+document.getElementById('btnPng').addEventListener('click', async (ev) => {
+  const b = ev.currentTarget
+  b.disabled = true
+  b.textContent = 'Generando…'
+  try { await exportarPNG() }
+  catch (err) { alert('No se pudo generar el PNG: ' + err.message) }
+  b.disabled = false
+  b.textContent = 'Descargar PNG'
+})
+
+/* ═══ Arrastrar imágenes al lienzo ═════════════════════════════════ */
+
+wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('drop') })
+wrap.addEventListener('dragleave', (e) => { if (e.target === wrap) wrap.classList.remove('drop') })
+wrap.addEventListener('drop', (e) => {
+  e.preventDefault()
+  wrap.classList.remove('drop')
+  // Primera imagen soltada = fondo. Las siguientes van dentro de la pieza.
+  leerArchivo(e.dataTransfer.files[0], (src) => {
+    if (!S.fondo.imagen) S.fondo.imagen = src
+    else añadirImagen(src)
+    repintar()
+  })
+})
+
+/* Pegar una imagen del portapapeles (⌘V). Misma regla que al soltar:
+   la primera va de fondo, las siguientes dentro de la pieza.
+   Se escucha en el documento porque el lienzo no recibe foco, pero se
+   ignora si el cursor está en un campo de texto: ahí ⌘V es pegar texto. */
+document.addEventListener('paste', (e) => {
+  const activo = document.activeElement
+  if (activo && /^(INPUT|TEXTAREA)$/.test(activo.tagName)) return
+
+  const items = e.clipboardData && e.clipboardData.items
+  if (!items) return
+
+  for (const it of items) {
+    if (it.kind !== 'file' || !it.type.startsWith('image/')) continue
+    const file = it.getAsFile()
+    if (!file) continue
+    e.preventDefault()
+    leerArchivo(file, (src) => {
+      const alFondo = !S.fondo.imagen
+      if (alFondo) S.fondo.imagen = src
+      else añadirImagen(src)
+      repintar()
+      avisoLienzo(alFondo ? 'Imagen pegada como fondo' : 'Imagen pegada en la pieza')
+    })
+    return
+  }
+})
+
+/* Confirmación breve sobre el lienzo: pegar no da ninguna otra señal
+   visible si la imagen cae fuera de la vista. */
+let avisoTimer = null
+function avisoLienzo(txt) {
+  let el = document.getElementById('avisoLienzo')
+  if (!el) {
+    el = n('div', { class:'avisoLienzo', id:'avisoLienzo' })
+    wrap.appendChild(el)
+  }
+  el.textContent = txt
+  el.classList.add('on')
+  clearTimeout(avisoTimer)
+  avisoTimer = setTimeout(() => el.classList.remove('on'), 1800)
+}
+
+/* ═══ Generación con IA ════════════════════════════════════════════ */
+
+/**
+ * `invoke` sin bundler. El webview de Tauri inyecta siempre
+ * `__TAURI_INTERNALS__`; el paquete @tauri-apps/api no es más que una
+ * envoltura sobre eso. Como aquí el HTML se sirve tal cual (frontendDist
+ * apunta a src/, no hay empaquetado), un import por nombre de paquete no
+ * resolvería. En el navegador no existe y el bloque queda deshabilitado.
+ */
+const enTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const invocar = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args)
+
+// Largo máximo por rol. Es el error que más arruina un afiche: un titular
+// de 200 caracteres no cabe en la caja y se recorta solo al renderizar.
+const TOPES = { eyebrow:28, titulo:60, dato:8, bajada:120, cuerpo:220, cita:140, pie:48 }
+
+const iaEl = document.getElementById('ia')
+const iaTema = document.getElementById('iaTema')
+const iaMsg = document.getElementById('iaMsg')
+const iaCosto = document.getElementById('iaCosto')
+const btnGenerar = document.getElementById('iaGenerar')
+const btnOtra = document.getElementById('iaOtra')
+const btnEstilo = document.getElementById('iaEstilo')
+const btnDeshacer = document.getElementById('iaDeshacer')
+const chkFondo = document.getElementById('iaConFondo')
+const iaEstim = document.getElementById('iaEstim')
+
+// `pila` guarda los estados anteriores. Con un solo hueco, encadenar
+// "otra versión" cuatro veces dejaba el trabajo manual original sin
+// rescate: cada generación pisaba el único punto de retorno.
+const ia = { generaciones:0, gasto:0, pila:[], ultimo:null, ocupado:false, paleta:null }
+const MAX_DESHACER = 10
+
+/* Señal visual de que hay algo en marcha.
+   Generar una imagen tarda ~17 s: sin esto la app parece colgada.
+   `paso` es el texto de la etiqueta; null apaga el estado. */
+function generando(paso) {
+  const wrap = document.getElementById('canvaswrap')
+  const et = document.getElementById('genPaso')
+  if (!wrap) return
+  if (paso) {
+    if (et) et.textContent = paso
+    wrap.classList.add('gen')
+  } else {
+    wrap.classList.remove('gen')
+  }
+}
+
+function iaAviso(txt, esError) {
+  iaMsg.textContent = txt || ''
+  iaMsg.className = 'iamsg' + (esError ? ' err' : '')
+}
+
+function iaPintarCosto() {
+  if (!ia.generaciones) { iaCosto.textContent = ''; return }
+  // Un afiche cuesta ~$0.00003: con 4 decimales todo se ve como $0.0000 y
+  // el indicador no sirve de nada. Se muestran los céntimos de verdad.
+  const g = ia.gasto
+  const monto = g < 0.01 ? `${(g * 100).toFixed(2)}¢` : `$${g.toFixed(2)}`
+  iaCosto.textContent = `${ia.generaciones} ${ia.generaciones === 1 ? 'generación' : 'generaciones'} · ${monto}`
+}
+
+/**
+ * Instantánea de lo que la IA puede pisar, para poder volver atrás. Ahora
+ * una sola pulsación toca texto, fondo y tintas de marca: si la foto no
+ * entrara aquí, deshacer dejaría el afiche a medio revertir.
+ */
+const instantanea = () => JSON.stringify({
+  template:S.template, bloques:S.bloques, fondo:S.fondo, marca:S.marca,
+})
+
+function restaurar(snap) {
+  const v = JSON.parse(snap)
+  S.template = v.template
+  S.bloques = v.bloques
+  if (v.fondo) S.fondo = v.fondo
+  if (v.marca) S.marca = v.marca
+  pintarBarra()
+  repintar()
+}
+
+/** Apila un punto de retorno respetando el tope de la pila. */
+function apilar() {
+  ia.pila.push(instantanea())
+  if (ia.pila.length > MAX_DESHACER) ia.pila.shift()
+}
+
+/**
+ * Describe al modelo los bloques del template pedido y exige exactamente
+ * esas claves. Sin esto el modelo inventa campos que no existen.
+ */
+function promptSistema(tmplId) {
+  const t = TEMPLATES[tmplId]
+  const campos = t.bloques.map((b, i) => {
+    const r = ROLES[b.rol]
+    return `  "${b.rol}_${i}": ${r.nombre} — máximo ${TOPES[b.rol]} caracteres`
+      + (b.rol === 'cuerpo' ? ' (puede usar saltos de línea para una lista corta)' : '')
+      + (b.rol === 'dato' ? ' (una cifra corta, ej "68%")' : '')
+  }).join('\n')
+
+  return [
+    // El idioma sale del perfil, no del código: el repo es agnóstico y no
+    // asume mercado. Ver docs/ARQUITECTURA.md
+    'Eres redactor de afiches para redes sociales. Escribes en español,',
+    'claro y directo, sin relleno corporativo ni emojis ni hashtags.',
+    '',
+    `Formato de la pieza: ${t.nombre}.`,
+    'Devuelve un objeto JSON con EXACTAMENTE estas claves y nada más:',
+    campos,
+    '  "escena": descripción visual del fondo, EN INGLÉS, máximo 180 caracteres',
+    '',
+    'Reglas estrictas:',
+    '- Respeta el máximo de caracteres de cada campo. Es un afiche: si no cabe, no sirve.',
+    '- Un solo mensaje por pieza. Nada de repetir la misma idea en dos campos.',
+    '- No uses comillas decorativas ni markdown dentro de los valores.',
+    // Un afiche con falta de ortografía es basura, y el modelo las comete
+    // al forzar el recorte de caracteres: prefiere inventar una palabra
+    // corta antes que pasarse del límite. Observado: "Arendar" por
+    // "Arrendar". Antes de recortar, que reescriba.
+    '- ORTOGRAFÍA IMPECABLE: acentos correctos y ninguna palabra mal escrita.',
+    '  Si una palabra no cabe, reescribe la frase entera con otras palabras.',
+    '  Jamás acortes una palabra quitándole letras.',
+    // La escena va en inglés porque los modelos de imagen entienden mucho
+    // mejor el inglés, y describe la MISMA idea del texto: de ahí sale la
+    // coherencia entre lo que dice el afiche y lo que se ve detrás.
+    '- "escena" describe una imagen abstracta o fotográfica que ilustre el mensaje',
+    '  del afiche. Sin texto ni letras en la imagen. Menciona luz, color y ambiente.',
+  ].join('\n')
+}
+
+/* ── Referencia visual: colores de una imagen o de un CSS pegado ──── */
+
+const aHex = (r, g, b) =>
+  '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16)
+    .padStart(2, '0')).join('').toUpperCase()
+
+/**
+ * Colores dominantes de una imagen, en JS puro. Se dibuja a 600 px de
+ * ancho: por debajo de eso el remuestreo mezcla zonas distintas y salen
+ * grises sucios que no existen en la imagen.
+ *
+ * Cuantiza en cubos de 32 niveles por canal y devuelve los cubos más
+ * poblados, promediando los píxeles reales de cada uno para no perder el
+ * matiz exacto.
+ */
+async function paletaDeImagen(src) {
+  const img = await cargarImg(src)
+  const w = 600
+  const h = Math.max(1, Math.round((img.height / img.width) * w))
+  const cv = document.createElement('canvas')
+  cv.width = w; cv.height = h
+  const ctx = cv.getContext('2d', { willReadFrequently:true })
+  ctx.drawImage(img, 0, 0, w, h)
+  const px = ctx.getImageData(0, 0, w, h).data
+
+  const cubos = new Map()
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 128) continue
+    const k = (px[i] >> 5) * 64 + (px[i + 1] >> 5) * 8 + (px[i + 2] >> 5)
+    const c = cubos.get(k) || { n:0, r:0, g:0, b:0 }
+    c.n++; c.r += px[i]; c.g += px[i + 1]; c.b += px[i + 2]
+    cubos.set(k, c)
+  }
+  const top = [...cubos.values()].sort((a, b) => b.n - a.n).slice(0, 8)
+    .map((c) => ({ hex:aHex(c.r / c.n, c.g / c.n, c.b / c.n), n:c.n,
+      lum:luminancia(c.r / c.n, c.g / c.n, c.b / c.n), sat:saturacion(c.r / c.n, c.g / c.n, c.b / c.n) }))
+  if (!top.length) return null
+
+  // Fondo: el cubo más poblado. Tinta: el que más contraste da contra él.
+  // Acento: el más saturado que aún se distinga del fondo.
+  const canvas = top[0].hex
+  const ink = readableInk(canvas, top.map((c) => c.hex).concat(['#FFFFFF', '#111111'])).ink
+  const cand = top.filter((c) => c.hex !== canvas && contrast(c.hex, canvas) >= 1.6)
+  const accent = (cand.sort((a, b) => b.sat - a.sat)[0] || top[top.length - 1]).hex
+  return { canvas, ink, accent, muted:mezclar(ink, canvas, 0.35), todos:top.map((c) => c.hex) }
+}
+
+const luminancia = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+function saturacion(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
+  return mx === 0 ? 0 : (mx - mn) / mx
+}
+function mezclar(a, b, k) {
+  const ra = hexRGB(a), rb = hexRGB(b)
+  if (!ra || !rb) return a
+  return aHex(ra[0] + (rb[0] - ra[0]) * k, ra[1] + (rb[1] - ra[1]) * k, ra[2] + (rb[2] - ra[2]) * k)
+}
+function hexRGB(h) {
+  const m = /^#?([\da-f]{6})$/i.exec(String(h).trim())
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/** Hex sueltos de un CSS pegado. Sin parsear CSS: basta con detectarlos. */
+function hexDeCss(txt) {
+  const out = []
+  for (const m of String(txt).matchAll(/#([\da-f]{3}|[\da-f]{6})\b/gi)) {
+    let h = m[1]
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+    const v = '#' + h.toUpperCase()
+    if (!out.includes(v)) out.push(v)
+  }
+  return out.slice(0, 8)
+}
+
+/**
+ * Ordena una lista de hex en canvas/ink/accent.
+ *
+ * Para el fondo se buscan los colores de luminancia extrema —los muy
+ * claros o muy oscuros, que es lo que sirve de lienzo— y se rompen los
+ * empates por orden de aparición: en una hoja de estilos el fondo casi
+ * siempre se declara antes que los acentos, y ese orden dice más que
+ * cualquier heurística de color. Se filtra por luminancia y no por
+ * saturación porque un fondo azul noche como #101820 está saturado y aun
+ * así es un fondo.
+ */
+function tokensDesde(hexes) {
+  if (!hexes.length) return null
+  const info = hexes.map((h, i) => {
+    const [r, g, b] = hexRGB(h)
+    return { hex:h, i, lum:luminancia(r, g, b), sat:saturacion(r, g, b) }
+  })
+  const lienzo = info.filter((c) => c.lum < 0.22 || c.lum > 0.78)
+  const canvas = (lienzo.length ? lienzo : info)
+    .slice().sort((a, b) => a.i - b.i)[0].hex
+  const ink = readableInk(canvas, hexes.concat(['#FFFFFF', '#111111'])).ink
+  const acc = info.filter((c) => c.hex !== canvas && contrast(c.hex, canvas) >= 1.6)
+    .sort((a, b) => b.sat - a.sat)[0]
+  return { canvas, ink, accent:acc ? acc.hex : info.sort((a, b) => b.sat - a.sat)[0].hex,
+    muted:mezclar(ink, canvas, 0.35), todos:hexes }
+}
+
+/** Recorta en el último espacio antes del tope, para no cortar palabras. */
+function recortar(txt, tope) {
+  const s = String(txt).replace(/\s+$/, '')
+  if (s.length <= tope) return s
+  const duro = s.slice(0, tope)
+  const esp = duro.lastIndexOf(' ')
+  return (esp > tope * 0.6 ? duro.slice(0, esp) : duro).replace(/[,;:.\s]+$/, '')
+}
+
+function aplicar(datos, tmplId) {
+  if (tmplId !== S.template) cargarTemplate(tmplId, false)
+  S.bloques.forEach((b, i) => {
+    const v = datos[`${b.rol}_${i}`]
+    if (typeof v === 'string' && v.trim()) b.texto = recortar(v.trim(), TOPES[b.rol])
+  })
+  pintarBarra()
+  repintar()
+}
+
+/** Elige un template distinto al actual, por si el modelo devuelve el mismo. */
+function otroTemplate() {
+  const ids = Object.keys(TEMPLATES).filter((k) => k !== S.template)
+  return ids[Math.floor(Math.random() * ids.length)]
+}
+
+function mensajeError(err) {
+  const t = String(err && err.message ? err.message : err)
+  if (/clave/i.test(t)) return 'No hay clave de OpenAI configurada. Ponla en ~/.brand-studio/openai.key'
+  if (/conectar|network|dns|timed? ?out/i.test(t)) return 'Sin conexión con OpenAI. Revisa tu internet.'
+  if (/429/.test(t)) return 'OpenAI está limitando las peticiones. Espera unos segundos.'
+  if (/401|403/.test(t)) return 'La clave de OpenAI no es válida.'
+  return 'No se pudo generar. Inténtalo de nuevo.'
+}
+
+/**
+ * Ajuste de coherencia: con la foto ya puesta, sube el oscurecimiento
+ * hasta que la tinta se lea, y si aun al 90% no llega, cambia la tinta
+ * de los bloques por la variante legible.
+ *
+ * Es la otra mitad de "que el texto tenga coherencia con lo generado":
+ * la primera es que la escena salga del mensaje; esta, que el mensaje
+ * siga leyéndose encima de ella.
+ */
+function coherenciaTexto() {
+  if (!S.fondo.imagen) return null
+  const inicial = S.fondo.oscurecer
+
+  // Oscurecer NO siempre ayuda: con tinta oscura, más velo negro acerca
+  // el fondo a la tinta y empeora la lectura. Por eso se recorre todo el
+  // rango en vez de subir a ciegas, y se mide el contraste real en cada
+  // paso. Se prefiere el ajuste más pequeño que ya cumpla, para no
+  // desfigurar la foto que se acaba de generar.
+  let mejor = { v:inicial, c:0 }
+  let suficiente = null
+  for (let v = 0; v <= 90; v += 5) {
+    S.fondo.oscurecer = v
+    const c = contrast(S.marca.ink, fondoEfectivo())
+    if (c > mejor.c) mejor = { v, c }
+    if (c >= 4.5 && (suficiente === null || Math.abs(v - inicial) < Math.abs(suficiente - inicial))) {
+      suficiente = v
+    }
+  }
+  if (suficiente !== null) {
+    S.fondo.oscurecer = suficiente
+    return `oscurecimiento ${suficiente}%`
+  }
+
+  // Ni en el mejor punto del rango alcanza: la tinta de marca no sirve
+  // sobre esta foto. Se deja el fondo donde más contraste da y se marca
+  // "tinta legible" en los bloques, que es exactamente para esto.
+  S.fondo.oscurecer = mejor.v
+  const tinta = readableInk(fondoEfectivo(), ['#FFFFFF', S.marca.ink])
+  for (const b of S.bloques) b.invertir = true
+  return `oscurecimiento ${mejor.v}% y tinta ${tinta.ink === '#FFFFFF' ? 'clara' : 'de marca'}`
+}
+
+/** Prompt de imagen: la escena del texto, más la paleta si hay referencia. */
+function descripcionFondo(escena) {
+  let d = escena
+  if (ia.paleta) {
+    d += `. Color palette: ${ia.paleta.todos.slice(0, 4).join(', ')}`
+      + `, background tone close to ${ia.paleta.canvas}`
+  }
+  return d
+}
+
+async function generar(modo) {
+  if (ia.ocupado || iaEl.getAttribute('aria-disabled') === 'true') return
+  const tema = iaTema.value.trim()
+  if (!tema) { iaAviso('Describe el afiche que quieres.', true); iaTema.focus(); return }
+
+  // El template destino: el actual, o uno distinto si se pide cambiar estilo.
+  const cambiaEstilo = modo === 'estilo'
+  const objetivo = cambiaEstilo ? otroTemplate() : S.template
+  // Solo el botón principal gasta en imagen; "otra versión" y "cambiar
+  // estilo" reescriben el texto sobre el fondo que ya gustó.
+  const conFondo = modo === 'nueva' && chkFondo.checked
+
+  ia.ocupado = true
+  const etiqueta = btnGenerar.textContent
+  for (const b of [btnGenerar, btnOtra, btnEstilo]) b.disabled = true
+  btnGenerar.textContent = conFondo ? 'Escribiendo…' : 'Generando…'
+  iaAviso('')
+  generando(conFondo ? 'Escribiendo el mensaje…' : 'Escribiendo…')
+
+  try {
+    let usuario = `Petición del afiche: ${tema}`
+    if (modo === 'otra' && ia.ultimo) {
+      usuario += `\n\nYa generaste esta versión:\n${JSON.stringify(ia.ultimo)}`
+        + '\nDame una alternativa claramente distinta: otro ángulo, otras palabras.'
+    }
+    if (cambiaEstilo) {
+      usuario += `\n\nEs una pieza distinta a la anterior: reescribe el mensaje para el formato "${TEMPLATES[objetivo].nombre}".`
+    }
+    if (ia.paleta) {
+      usuario += `\n\nLa marca usa esta paleta: ${ia.paleta.todos.slice(0, 5).join(', ')}.`
+        + ' Que la escena encaje con esos colores.'
+    }
+
+    // El template lo decide la interfaz, no el modelo. Si se le pidiera
+    // elegirlo, devolvería las claves de un template y se aplicarían a
+    // otro: ninguna encajaría y el afiche se quedaría con el texto de
+    // relleno. Aquí el prompt describe siempre el template que se aplica.
+    const r = await invocar('generar_afiche', {
+      sistema: promptSistema(objetivo),
+      usuario,
+    })
+
+    let datos
+    try { datos = JSON.parse(r.contenido) } catch { throw new Error('respuesta ilegible') }
+    if (!datos || typeof datos !== 'object') throw new Error('respuesta ilegible')
+
+    // Si el modelo no devolvió ninguna de las claves pedidas, aplicar
+    // dejaría el afiche intacto y el usuario vería "Listo" sin cambios.
+    const esperadas = TEMPLATES[objetivo].bloques.map((b, i) => `${b.rol}_${i}`)
+    if (!esperadas.some((k) => typeof datos[k] === 'string' && datos[k].trim())) {
+      throw new Error('respuesta ilegible')
+    }
+
+    // Un solo punto de retorno para toda la operación: deshacer una vez
+    // revierte texto y fondo juntos, que es como se generaron.
+    apilar()
+    aplicar(datos, objetivo)
+    ia.ultimo = datos
+    ia.generaciones++
+    ia.gasto += r.costo_usd || 0
+    iaPintarCosto()
+    btnDeshacer.classList.remove('hidden')
+
+    if (!conFondo) {
+      // Sin imagen nueva, el ajuste de coherencia sigue teniendo sentido
+      // si ya había un fondo: el texto cambió, la legibilidad se revisa.
+      const ajuste = coherenciaTexto()
+      repintar()
+      iaAviso(ajuste ? `Listo · ${ajuste} para que se lea.` : 'Listo. Edítalo a mano si hace falta.')
+      return
+    }
+
+    // ── Imagen: la escena que escribió el propio modelo, no el texto
+    // crudo del usuario. Así el fondo ilustra lo que dice el afiche.
+    const escena = typeof datos.escena === 'string' && datos.escena.trim()
+      ? datos.escena.trim() : tema
+    btnGenerar.textContent = 'Dibujando el fondo…'
+    iaAviso('Texto listo. La imagen tarda unos 20 segundos.')
+    generando('Dibujando el fondo… (~20 s)')
+
+    const im = await invocar('generar_fondo', {
+      descripcion: descripcionFondo(escena), formato: S.formato,
+    })
+    if (!im || !im.data_uri) throw new Error('respuesta ilegible')
+
+    S.fondo.imagen = im.data_uri
+    ia.generaciones++
+    ia.gasto += im.costo_usd || 0
+    iaPintarCosto()
+
+    const ajuste = coherenciaTexto()
+    repintar()
+    iaAviso(`Afiche y fondo listos · ${ajuste}.`)
+  } catch (err) {
+    iaAviso(mensajeError(err), true)
+  } finally {
+    ia.ocupado = false
+    generando(null)
+    btnGenerar.textContent = etiqueta
+    for (const b of [btnGenerar, btnEstilo]) b.disabled = false
+    btnOtra.disabled = !ia.ultimo
+  }
+}
+
+btnGenerar.addEventListener('click', () => generar('nueva'))
+btnOtra.addEventListener('click', () => generar('otra'))
+btnEstilo.addEventListener('click', () => generar('estilo'))
+
+/* ── Costo estimado, visible ANTES de pulsar ─────────────────────── */
+
+// Texto: ~0.004¢. Imagen: ~4¢. Mil veces más: por eso el checkbox.
+const COSTO_TEXTO = 0.00004
+const COSTO_IMAGEN = 0.04
+
+function iaPintarEstimado() {
+  const t = chkFondo.checked
+    ? `≈ ${((COSTO_TEXTO + COSTO_IMAGEN) * 100).toFixed(0)}¢ · tarda ~20 s`
+    : `≈ ${(COSTO_TEXTO * 100).toFixed(3)}¢ · inmediato`
+  iaEstim.textContent = t
+  btnGenerar.textContent = chkFondo.checked ? 'Generar afiche' : 'Generar solo el texto'
+}
+chkFondo.addEventListener('change', iaPintarEstimado)
+iaPintarEstimado()
+
+/* ── Referencia visual ───────────────────────────────────────────── */
+
+const iaDrop = document.getElementById('iaDrop')
+const iaRefFile = document.getElementById('iaRefFile')
+const iaPal = document.getElementById('iaPal')
+const iaCss = document.getElementById('iaCss')
+const iaPalCss = document.getElementById('iaPalCss')
+
+/** Muestra una paleta con botones de aceptar / descartar. */
+function pintarPaleta(cont, p, origen) {
+  cont.replaceChildren()
+  if (!p) { cont.classList.add('hidden'); return }
+  cont.classList.remove('hidden')
+  for (const h of p.todos.slice(0, 6)) {
+    cont.appendChild(n('span', { class:'iasw', title:h, style:`background:${h}` }))
+  }
+  cont.appendChild(n('button', { class:'btn btn-sm', text:'Usar', onclick:() => {
+    apilar()
+    Object.assign(S.marca, { canvas:p.canvas, ink:p.ink, accent:p.accent, muted:p.muted })
+    ia.paleta = p
+    btnDeshacer.classList.remove('hidden')
+    repintar()
+    iaAviso(`Paleta de ${origen} aplicada. También guiará la imagen que generes.`)
+  } }))
+  cont.appendChild(n('button', { class:'btn btn-sm', text:'Descartar', onclick:() => {
+    if (ia.paleta === p) ia.paleta = null
+    pintarPaleta(cont, null)
+  } }))
+}
+
+async function usarReferencia(src) {
+  iaDrop.textContent = 'Leyendo colores…'
+  try {
+    const p = await paletaDeImagen(src)
+    pintarPaleta(iaPal, p, 'la imagen')
+    iaDrop.textContent = p ? 'Otra imagen de referencia' : 'No se pudieron leer colores. Prueba otra imagen.'
+  } catch {
+    iaDrop.textContent = 'No se pudo leer la imagen. Prueba otra.'
+  }
+}
+
+iaDrop.addEventListener('click', () => iaRefFile.click())
+iaRefFile.addEventListener('change', (e) => {
+  leerArchivo(e.target.files[0], usarReferencia)
+  e.target.value = ''
+})
+for (const ev of ['dragover', 'dragenter']) {
+  iaDrop.addEventListener(ev, (e) => { e.preventDefault(); iaDrop.classList.add('over') })
+}
+iaDrop.addEventListener('dragleave', () => iaDrop.classList.remove('over'))
+iaDrop.addEventListener('drop', (e) => {
+  e.preventDefault()
+  e.stopPropagation()
+  iaDrop.classList.remove('over')
+  leerArchivo(e.dataTransfer.files[0], usarReferencia)
+})
+
+iaCss.addEventListener('input', () => {
+  pintarPaleta(iaPalCss, tokensDesde(hexDeCss(iaCss.value)), 'los tokens')
+})
+btnDeshacer.addEventListener('click', () => {
+  const previo = ia.pila.pop()
+  if (!previo) return
+  restaurar(previo)
+  // Tras deshacer, "otra versión" ya no tiene de qué partir.
+  ia.ultimo = null
+  btnOtra.disabled = true
+  if (!ia.pila.length) btnDeshacer.classList.add('hidden')
+  iaAviso(ia.pila.length
+    ? `Versión anterior restaurada. Queda${ia.pila.length === 1 ? '' : 'n'} ${ia.pila.length} paso${ia.pila.length === 1 ? '' : 's'} atrás.`
+    : 'Se restauró la versión anterior.')
+})
+
+async function arrancarIA() {
+  if (!enTauri) {
+    iaEl.setAttribute('aria-disabled', 'true')
+    iaAviso('La generación con IA solo está disponible en la app de escritorio.')
+    return
+  }
+  try {
+    if (!(await invocar('hay_clave_ia'))) {
+      iaEl.setAttribute('aria-disabled', 'true')
+      iaAviso('Falta la clave de OpenAI. Ponla en ~/.brand-studio/openai.key', true)
+    }
+  } catch {
+    iaEl.setAttribute('aria-disabled', 'true')
+    iaAviso('No se pudo comprobar la clave de OpenAI.', true)
+  }
+}
+
+/* ═══ Arranque ═════════════════════════════════════════════════════ */
+
+cargarTemplate('portada', false)
+pintarBarra()
+repintar()
+arrancarIA()
+addEventListener('resize', render)
+</script>
+</body>
+</html>

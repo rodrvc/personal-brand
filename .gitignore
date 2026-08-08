@@ -3,3 +3,11 @@
 # Profiles are private — only the example template is tracked
 profiles/*
 !profiles/example/
+
+# Dependencias
+node_modules/
+
+# app/: artefactos de build y copias generadas
+app/src/core/
+app/src-tauri/target/
+app/src-tauri/gen/
