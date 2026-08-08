@@ -105,19 +105,31 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
 2. Ningún módulo escribe dentro de otro módulo.
 3. `system/` no contiene literales de marca. Verificable:
    `grep -rE '#[0-9A-Fa-f]{6}' system/` debe salir vacío.
-4. La app no puede escribir fuera de la raíz del repo. Ya implementado en
-   `resolver_dentro()` de `app/src-tauri/src/main.rs`, con 5 casos probados.
+4. La app solo puede escribir dentro de `profiles/`. Implementado en
+   `resolver_dentro()` de `app/src-tauri/src/main.rs` con dos cercos: no
+   salir de la raíz del repo, y no salir de `profiles/`. Cubierto por
+   tests: `cd app/src-tauri && cargo test`.
+
+   Una revisión encontró que la primera versión solo confinaba a la raíz,
+   así que `system/templates/x.md` pasaba. De ahí los tests: la garantía
+   estaba escrita aquí antes de existir en el código.
 
 ## Estado de aislamiento — verificado 2026-08-08
 
-La app **no menciona** `system/` ni `.claude/agents/`. Solo escribe:
+La app **no puede** escribir fuera de `profiles/`: lo impide
+`resolver_dentro()` y lo comprueban 6 tests en Rust. Solo escribe:
 
 - `profiles/<m>/brand.yaml`
 - `profiles/<m>/content/**/*.md`
-- mover un `.md` de `drafts/` a `published/`
+- mover un `.md` de `drafts/` a `published/` (y solo desde `drafts/`)
 
 El sistema de markdown y los 7 agentes funcionan igual con la app instalada
 o sin ella. **Se puede subir el módulo incompleto sin romper nada.**
+
+Nota de estado: hoy la interfaz **todavía no llama** a los comandos de
+perfiles — `listar_perfiles`, `guardar_brand`, `listar_piezas`,
+`guardar_pieza` y `marcar_publicado` existen y están probados, pero nadie
+los invoca. La app trabaja en memoria. Conectarlos es lo siguiente.
 
 ## Cómo añadir un módulo nuevo
 

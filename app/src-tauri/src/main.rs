@@ -164,11 +164,13 @@ fn marcar_publicado(estado: tauri::State<Config>, ruta: String) -> Result<String
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or("Nombre inválido")?;
-    let destino_dir = origen
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or("Ruta inesperada")?
-        .join("published");
+    // La pieza tiene que venir de drafts/. Sin esta comprobación se
+    // podría crear un published/ en cualquier carpeta del perfil.
+    let carpeta = origen.parent().ok_or("Ruta inesperada")?;
+    if carpeta.file_name().and_then(|s| s.to_str()) != Some("drafts") {
+        return Err("Solo se publican piezas que estén en drafts/".into());
+    }
+    let destino_dir = carpeta.parent().ok_or("Ruta inesperada")?.join("published");
     fs::create_dir_all(&destino_dir).map_err(|e| e.to_string())?;
     let destino = destino_dir.join(nombre);
     fs::rename(&origen, &destino).map_err(|e| e.to_string())?;
@@ -183,12 +185,32 @@ fn slug_valido(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Resuelve una ruta relativa asegurando que no se escapa de la raíz.
-/// Sin esto, un "../../etc/passwd" saldría del repo.
+/// Resuelve una ruta relativa a la raíz, confinada a `profiles/`.
+///
+/// Dos cercos, no uno:
+///   1. No salir de la raíz del repo — bloquea `../../etc/passwd`.
+///   2. No salir de `profiles/` — este módulo NO puede escribir en
+///      `system/` (el motor) ni en `.claude/agents/` (otro módulo).
+///
+/// El cerco 2 es la prohibición dura de docs/ARQUITECTURA.md. Sin él,
+/// bastaba con pedir `system/templates/x.md` para pisar el motor: la
+/// ruta no contiene `..` y cae dentro de la raíz.
 fn resolver_dentro(raiz: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel.contains("..") || Path::new(rel).is_absolute() {
         return Err("Ruta no permitida".into());
     }
+    // Solo se escribe dentro de profiles/. Se comprueba por componentes
+    // y no con starts_with sobre la cadena, para que "profilesX/" no
+    // cuele por prefijo.
+    let mut comps = Path::new(rel).components();
+    match comps.next().and_then(|c| c.as_os_str().to_str()) {
+        Some("profiles") => {}
+        _ => return Err("Este módulo solo puede escribir dentro de profiles/".into()),
+    }
+    if comps.next().is_none() {
+        return Err("Falta el perfil en la ruta".into());
+    }
+
     let full = raiz.join(rel);
     let raiz_c = raiz.canonicalize().map_err(|e| e.to_string())?;
     // El archivo puede no existir todavía: se valida el directorio padre
@@ -196,6 +218,10 @@ fn resolver_dentro(raiz: &Path, rel: &str) -> Result<PathBuf, String> {
     let padre_c = padre.canonicalize().map_err(|e| e.to_string())?;
     if !padre_c.starts_with(&raiz_c) {
         return Err("Ruta fuera del proyecto".into());
+    }
+    // Y que tras resolver symlinks siga dentro de profiles/
+    if !padre_c.starts_with(raiz_c.join("profiles")) {
+        return Err("Ruta fuera de profiles/".into());
     }
     Ok(full)
 }
@@ -205,6 +231,72 @@ fn escribir_atomico(destino: &Path, contenido: &str) -> Result<(), String> {
     fs::write(&tmp, contenido).map_err(|e| e.to_string())?;
     fs::rename(&tmp, destino).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Repo de prueba con la estructura real del proyecto.
+    fn repo() -> PathBuf {
+        let base = std::env::temp_dir().join("bs-test-rutas");
+        for d in [
+            "profiles/ejemplo/content/drafts",
+            "profiles/ejemplo/content/published",
+            "system/templates",
+            ".claude/agents",
+        ] {
+            fs::create_dir_all(base.join(d)).unwrap();
+        }
+        base
+    }
+
+    #[test]
+    fn permite_escribir_dentro_de_un_perfil() {
+        let r = repo();
+        assert!(resolver_dentro(&r, "profiles/ejemplo/content/drafts/x.md").is_ok());
+        assert!(resolver_dentro(&r, "profiles/ejemplo/brand.yaml").is_ok());
+    }
+
+    #[test]
+    fn bloquea_el_motor_y_los_demas_modulos() {
+        let r = repo();
+        // La prohibición dura de docs/ARQUITECTURA.md
+        assert!(resolver_dentro(&r, "system/templates/evil.md").is_err());
+        assert!(resolver_dentro(&r, ".claude/agents/evil.md").is_err());
+        assert!(resolver_dentro(&r, "CLAUDE.md").is_err());
+    }
+
+    #[test]
+    fn bloquea_salir_del_repo() {
+        let r = repo();
+        assert!(resolver_dentro(&r, "../../etc/passwd").is_err());
+        assert!(resolver_dentro(&r, "/etc/passwd").is_err());
+        assert!(resolver_dentro(&r, "profiles/../system/x.md").is_err());
+    }
+
+    #[test]
+    fn no_cuela_por_prefijo_de_nombre() {
+        let r = repo();
+        fs::create_dir_all(r.join("profilesX")).unwrap();
+        // "profilesX" empieza por "profiles" pero es otra carpeta
+        assert!(resolver_dentro(&r, "profilesX/x.md").is_err());
+    }
+
+    #[test]
+    fn exige_nombrar_el_perfil() {
+        let r = repo();
+        assert!(resolver_dentro(&r, "profiles").is_err());
+    }
+
+    #[test]
+    fn valida_el_slug() {
+        assert!(slug_valido("mi-marca_2"));
+        assert!(!slug_valido(""));
+        assert!(!slug_valido("../otro"));
+        assert!(!slug_valido("con espacio"));
+        assert!(!slug_valido(&"x".repeat(65)));
+    }
 }
 
 fn main() {

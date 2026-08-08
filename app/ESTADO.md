@@ -24,8 +24,8 @@ Solo escribe tres cosas, todas dentro de `profiles/`:
 - `profiles/<marca>/content/**/*.md`
 - mover un `.md` de `drafts/` a `published/`
 
-**No toca** `system/`, ni `.claude/agents/`, ni ningún otro módulo.
-Verificado 2026-08-08. Se puede publicar incompleto sin romper nada.
+**No puede tocar** `system/`, ni `.claude/agents/`, ni ningún otro módulo:
+lo impide `resolver_dentro()` y lo comprueban 6 tests (`cargo test`). Se puede publicar incompleto sin romper nada.
 
 ## Cómo abrirla
 
@@ -121,14 +121,17 @@ imagen. El contador de la sesión se muestra en el panel.
 
 ## Qué falta
 
-- **El panel de marca no guarda en `brand.yaml`.** Cambias colores y se ven,
-  pero al cerrar se pierden. Falta conectar `guardar_brand`, que ya existe
-  en el backend.
+- **La app no lee ni escribe ningún perfil todavía.** Trabaja en memoria:
+  cambias colores, cierras, se pierden. Los cinco comandos del backend
+  (`listar_perfiles`, `guardar_brand`, `listar_piezas`, `guardar_pieza`,
+  `marcar_publicado`) existen y están probados, pero **la interfaz no los
+  llama**. Solo se usan los tres de IA. Conectarlos es lo siguiente.
 - Elegir carpeta de trabajo la primera vez que se abre.
 - Icono propio (hoy hay uno generado) y firma para Mac (~99 USD/año, sin
   ella el primer arranque muestra un aviso).
-- `app/src/data.js` es código muerto: nada lo importa. El editor llama a
-  `window.__TAURI_INTERNALS__.invoke` directo.
+- Eliminado `app/src/data.js` (código muerto) y la dependencia
+  `@tauri-apps/api`: el editor llama a `window.__TAURI_INTERNALS__.invoke`
+  directo, sin bundler.
 
 ## Trampas conocidas
 

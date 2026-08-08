@@ -363,7 +363,7 @@ const TEMPLATES = {
     nombre:'Cita',
     bloques:[
       { rol:'cita', texto:'«Publicar todos los días no es una estrategia. Es una rutina sin dirección.»', col:2, row:4, cs:9, rs:4, align:'left', valign:'center' },
-      { rol:'pie', texto:'— Camila Rojas, directora creativa', col:2, row:9, cs:8, rs:1, align:'left', valign:'start' },
+      { rol:'pie', texto:'— Nombre Apellido, cargo', col:2, row:9, cs:8, rs:1, align:'left', valign:'start' },
     ],
   },
   lista: {
@@ -1136,7 +1136,9 @@ function promptSistema(tmplId) {
   }).join('\n')
 
   return [
-    'Eres redactor de afiches para redes sociales. Escribes en español de Chile,',
+    // El idioma sale del perfil, no del código: el repo es agnóstico y no
+    // asume mercado. Ver docs/ARQUITECTURA.md
+    'Eres redactor de afiches para redes sociales. Escribes en español,',
     'claro y directo, sin relleno corporativo ni emojis ni hashtags.',
     '',
     `Formato de la pieza: ${t.nombre}.`,

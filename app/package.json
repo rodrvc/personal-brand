@@ -8,9 +8,6 @@
     "build": "node sync-core.mjs && PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
     "test": "node ../core/test/run.mjs"
   },
-  "dependencies": {
-    "@tauri-apps/api": "^2"
-  },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
   }
