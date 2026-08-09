@@ -1,0 +1,14 @@
+{
+  "name": "brand-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node sync-core.mjs && PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
+    "build": "node sync-core.mjs && PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
+    "test": "node ../core/test/run.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

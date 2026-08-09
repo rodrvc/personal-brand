@@ -1,6 +1,20 @@
 # Esquema de configuración de perfil
 
-Cada perfil puede tener un archivo `profiles/<perfil>/config.yaml`.
+Cada perfil se describe con dos archivos:
+
+| Archivo | Qué define | Quién lo edita |
+|---|---|---|
+| `config.yaml` | Estrategia: pilares, tono, canales | A mano. Cambia poco. |
+| `brand.yaml` | Apariencia: colores, tipografía, forma | La interfaz visual. Cambia seguido. |
+
+Están separados a propósito: mezclarlos haría que una herramienta reescriba
+un archivo que tú mantienes con comentarios.
+
+`brand.yaml` es **opcional**. Si falta, se usan los valores por defecto.
+
+---
+
+# `config.yaml` — estrategia
 
 ## Estructura sugerida
 
@@ -322,14 +336,166 @@ Lo que describe **el contenido** (no la marca) viaja acá:
 
 ---
 
-## Regla práctica
+## Dos archivos de apariencia, y cuál usar
+
+`brand.yaml` y `brand.json` describen los dos el aspecto de la misma marca. No
+es duplicación accidental: **son dos motores de render con restricciones
+distintas.**
+
+| | `brand.yaml` | `brand.json` |
+|---|---|---|
+| Lo consume | la app de afiches (render Satori) | `system/ig-carousel/`, `system/ig-reel/` (navegador headless) |
+| Lo escribe | la app, con un editor visual | a mano, compilado desde `brand-spec.md` |
+| Color | 7 roles fijos | paleta libre + `roles{}` que mapea a ella |
+| Tipografía | `sans`/`serif`/`mono`, **sin webfonts** | familias libres + `googleFontsHref` opcional |
+| Validación | ninguna | `loadBrand()`, con features opt-in por template |
+
+La prohibición de webfonts de `brand.yaml` **no es un criterio distinto sobre
+tipografía**: en Satori una fuente remota que no carga rompe el PNG en
+silencio. El motor headless sí las carga. La restricción es del renderizador,
+no de la marca.
+
+**`brand.yaml` es un subconjunto restringido; `brand.json` es el espacio
+completo.** De ahí se sigue la única dirección permitida:
+
+```
+brand.yaml  ──proyectable──▶  brand.json
+brand.json  ──NO──▶  brand.yaml     (googleFontsHref y categories no caben)
+```
+
+**`brand.yaml` nunca gana sobre `brand.json`.** Si algún día se genera uno
+desde el otro, es en ese sentido.
+
+### Correspondencia de roles
+
+Es lo que convierte "dos formatos" en "un formato y su proyección". Mantenla
+al día: es lo que hará mecánica una unificación futura.
+
+| `brand.yaml` | `brand.json` |
+|---|---|
+| `colors.canvas` | `roles.surface` |
+| `colors.ink` | `roles.onSurface` |
+| `colors.accent` | `roles.accent` |
+| `colors.muted` | `roles.onSurfaceMuted` |
+| `colors.accent_soft` / `accent_ink` | (sin equivalente; el motor headless deriva con `withAlpha()`) |
+| `colors.line` | (sin equivalente) |
+| `type.display` / `type.body` | `fonts.logo` / `fonts.body` |
+| `canvas_scheme` | (sin equivalente) |
+| `logo` | **(sin equivalente — ver riesgo abajo)** |
+
+### Cuándo se unifica
+
+No en una fecha, que se vence y se ignora, sino en una condición observable:
+
+> **El día que la UI de la app llame a `guardar_brand` y un perfil real tenga
+> que mantener los dos archivos a mano, se unifican.**
+
+Hoy no se sostiene ningún costo porque **la app todavía no guarda**:
+`guardar_brand()` existe y está testeada, pero la interfaz no la invoca. En
+cuanto lo haga, `profiles/<slug>/` tendrá dos archivos con el color de marca y
+**nada que verifique que coinciden** — el usuario cambiará el acento en el
+editor, renderizará un reel y saldrá el color viejo. Ese bug parecerá un fallo
+de render y no lo será.
+
+La forma correcta cuando toque: **`brand.json` es la fuente y `brand.yaml` el
+derivado** (es el superset y el único con validación). Y la app no reescribe
+`brand.json` entero: hace un merge parcial sobre `roles{}` y `colors{}`,
+preservando lo demás.
+
+### El riesgo a vigilar: `logo`
+
+Los colores son proyectables. `logo{}` **no existe en `brand.json`**, y los
+motores de carrusel y reel van a querer estampar un logo tarde o temprano.
+Ese día hay dos salidas malas: duplicar el bloque en `brand.json` (y ahí sí
+habría el mismo dato en dos sitios) o leer `brand.yaml` desde el motor
+headless (y romper el desacople que hoy existe de verdad).
+
+**Es la costura por donde esto se va a romper.** Cuando aparezca, es el momento
+de unificar, no de parchear.
+
+---
+
+# `brand.yaml` — apariencia editable por la app
+
+Define cómo se ve la marca. Alimenta el preview de posts y el render de afiches.
+
+Ver ejemplo comentado en `profiles/example/brand.yaml`.
+
+## Campos
+
+### `colors`
+Solo hex de 6 dígitos — nada de `rgba()` ni nombres CSS: el render a imagen
+necesita valores literales.
+
+- `canvas`: fondo de la pieza
+- `ink`: tinta principal sobre ese fondo
+- `accent`: color de marca
+- `accent_soft`: versión suave, para fondos de bloque
+- `accent_ink`: tinta que va encima del acento cuando el acento es fondo
+- `muted`: texto secundario
+- `line`: divisorias y bordes
+
+`accent_soft` se declara explícito en vez de calcularse con opacidad: al
+exportar a PNG el color debe ser exacto.
+
+### `canvas_scheme`
+`light` o `dark`. Determina qué variante de logo se usa y cómo se calcula
+el contraste.
+
+### `type`
+- `display` / `body`: `sans`, `serif` o `mono`
+- `display_weight` / `body_weight`: peso numérico
+- `display_tracking`: espaciado entre letras del titular, en em
+- `display_uppercase`: titulares en mayúscula
+
+Solo familias del sistema. Sin webfonts remotas: si no cargan, el export
+sale roto y sin avisar.
+
+### `shape`
+- `radius`: radio de esquinas en px
+- `padding`: margen interior, en % del lado menor
+
+### `logo`
+- `dark` / `light`: rutas relativas a la carpeta del perfil
+- `height`: alto como % de la dimensión menor de la pieza
+- `anchor`: una de las 9 posiciones (`top-left` … `bottom-right`)
+
+Las variantes se nombran por el color de la **tinta** del logo, no por el
+fondo: `dark` es tinta oscura y va sobre fondos claros. Es la fuente de
+error más común.
+
+Si no hay logo, se usan las iniciales del perfil como monograma.
+
+---
+
+# Regla práctica
 
 - `profile.md` = contexto humano y narrativo
 - `config.yaml` = valores operativos y parametrizables
 - `brand-spec.md` = decisiones de marca y su procedencia
 - `brand.json` = esas mismas decisiones, compiladas para el motor
+- `brand.yaml` = el subconjunto de apariencia que edita la app de afiches
 
 Evitar duplicar datos salvo que haga falta por claridad. La duplicación entre
 `brand-spec.md` y `brand.json` es deliberada y direccional: el `.md` lleva el
 porqué (que el JSON no puede expresar), el `.json` lleva la forma que el
-motor sabe leer.
+motor sabe leer. La que hay entre `brand.yaml` y `brand.json` **no** es
+deliberada, es el estado de hoy: ver "Dos archivos de apariencia, y cuál usar"
+para la dirección de proyección y el disparador de unificación.
+
+## Regla motor / negocio
+
+`system/` es el motor genérico y **no debe contener literales de marca**:
+ni colores hex, ni nombres propios, ni hashtags concretos. Los toma de
+`profiles/`.
+
+Test de aceptación: un segundo perfil debe renderizar sin tocar `system/`.
+
+Verificación mecánica:
+
+```bash
+grep -rE '#[0-9A-Fa-f]{6}' system/    # no debe devolver nada
+```
+
+El chequeo completo, que además audita `.claude/` y la capa de prosa, es
+`python3 scripts/validate_commit_guardian.py --scan`.

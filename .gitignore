@@ -54,3 +54,9 @@ scripts/brand-denylist.local.txt
 # "real drafts for a specific person", "local working cards", "content
 # describing a real person's audience, objectives, voice, CTA, or positioning".
 docs/pi-local-card-*.md
+
+# app/: artefactos de build y copias generadas. Sin esto un `cargo build`
+# ensucia el repo con el target de Rust y el proyecto generado por Tauri.
+app/src/core/
+app/src-tauri/target/
+app/src-tauri/gen/

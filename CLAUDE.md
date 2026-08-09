@@ -1,5 +1,23 @@
 # Personal Brand System
 
+> **Esto es una plataforma de contenido con módulos**, no una sola app.
+> Lee [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) antes de tocar nada:
+> explica las tres capas y las fronteras entre módulos.
+>
+> **¿Vas a tocar el editor de afiches (`app/`)?** Lee además
+> [`app/ESTADO.md`](app/ESTADO.md): decisiones, porqués y trampas conocidas.
+>
+> Tres reglas que mandan sobre todo lo demás:
+> 1. **El proyecto es AGNÓSTICO: ninguna marca vive en el repo.** Ni
+>    nombres, ni colores, ni ciudades, ni copy real. El repo es el motor;
+>    las marcas viven en `profiles/<marca>/`, fuera de git. Test: quien
+>    clone el repo no debe poder deducir para qué marca se construyó.
+> 2. **Los módulos no se rompen entre sí.** Se comunican por los archivos
+>    de `profiles/`, nunca importando código ajeno.
+> 3. **El sistema de markdown y los agentes de `.claude/agents/` deben
+>    seguir funcionando igual.** La app es un módulo más y escribe los
+>    mismos archivos.
+
 ## Propósito
 
 Este repo guarda un **sistema reusable de contenido/marca** separado de los **perfiles específicos** que lo usan.

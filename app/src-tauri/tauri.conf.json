@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Brand Studio",
+  "version": "0.1.0",
+  "identifier": "dev.brandstudio.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Brand Studio",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "copyright": "",
+    "category": "Productivity",
+    "shortDescription": "Gestión de marca y contenido",
+    "longDescription": "Crea y previsualiza posts y afiches con la identidad visual de cada marca."
+  },
+  "plugins": {}
+}

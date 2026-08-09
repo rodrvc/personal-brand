@@ -1,0 +1,79 @@
+# Identidad visual del perfil
+#
+# Este archivo define CÓMO SE VE la marca: colores, tipografía y forma.
+# Es opcional: si no existe, se usan los valores por defecto del sistema.
+#
+# Separado de `config.yaml` a propósito:
+#   - config.yaml → estrategia (pilares, tono, canales). Se edita a mano, cambia poco.
+#   - brand.yaml  → apariencia. Lo escribe la interfaz visual, cambia seguido.
+#
+# Estos valores alimentan el preview de posts y el render de afiches.
+# El motor (`system/`) nunca contiene colores: los toma de aquí.
+
+schema_version: 1
+
+# ─── Colores ────────────────────────────────────────────────────────
+# Solo hex de 6 dígitos. Nada de rgba() ni nombres CSS: el render a
+# imagen necesita valores literales.
+colors:
+  # Fondo de la pieza y tinta principal sobre ese fondo.
+  canvas: "#FFFFFF"
+  ink: "#1A1A1A"
+
+  # Color de marca. Se usa en títulos destacados, bandas y detalles.
+  accent: "#2D6BB8"
+  # Versión suave del acento, para fondos de bloque.
+  # Explícito y no calculado con opacidad: al exportar a PNG el color
+  # debe ser exacto.
+  accent_soft: "#E8F0FA"
+  # Tinta que va ENCIMA del acento cuando el acento es fondo.
+  accent_ink: "#FFFFFF"
+
+  # Texto secundario: bajadas, pies, fechas.
+  muted: "#6B6B6B"
+  # Líneas divisorias y bordes.
+  line: "#E0E0E0"
+
+# ¿El lienzo es claro u oscuro? Determina qué variante de logo se usa
+# y cómo se calcula el contraste.
+canvas_scheme: light
+
+# ─── Tipografía ─────────────────────────────────────────────────────
+# Solo familias del sistema por ahora: sans | serif | mono.
+# No se admiten webfonts remotas: si no cargan, el export sale roto
+# y sin avisar.
+type:
+  display: sans        # titulares
+  body: sans           # cuerpo de texto
+  display_weight: 700
+  body_weight: 400
+  # Espaciado entre letras del titular, en em. Negativo aprieta.
+  display_tracking: -0.02
+  # Titulares en MAYÚSCULA: true | false
+  display_uppercase: false
+
+# ─── Forma ──────────────────────────────────────────────────────────
+shape:
+  # Radio de esquinas en px. 0 = esquinas rectas.
+  radius: 8
+  # Margen interior de las piezas, en % del lado menor.
+  padding: 8
+
+# ─── Logo ───────────────────────────────────────────────────────────
+# Rutas relativas a esta carpeta. Deja "" si no hay logo:
+# el sistema usa las iniciales del perfil como monograma.
+#
+# Las variantes se nombran por el color de la TINTA del logo,
+# no por el fondo donde va:
+#   dark  → logo de tinta oscura, para fondos claros
+#   light → logo de tinta clara, para fondos oscuros
+logo:
+  dark: ""
+  light: ""
+  # Alto del logo como % de la dimensión menor de la pieza.
+  height: 6
+  # Posición por defecto. Valores:
+  # top-left    top-center    top-right
+  # mid-left    mid-center    mid-right
+  # bottom-left bottom-center bottom-right
+  anchor: bottom-right
