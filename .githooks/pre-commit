@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+# A commit with nothing staged is either a merge commit (git supplies the tree,
+# there is nothing for the guardian to review) or an empty/amend commit, which
+# must NOT ride on an approval already spent on a previous commit — see the
+# single-use check in validate_commit_guardian.py. Merges are the only case
+# that legitimately skips review.
+if [ -z "$(git diff --cached --name-only)" ] && [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+python3 scripts/validate_commit_guardian.py

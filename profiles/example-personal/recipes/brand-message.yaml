@@ -1,0 +1,21 @@
+# Parametriza system/recipes/brand-message.md. Solo llena huecos:
+# no puede agregar etapas ni reordenar el pipeline.
+recipe: brand-message
+version: 1
+
+# Sin `image_hosts`. Este perfil no tiene libreria de fotografia y sus slides
+# son solo tipograficas, asi que no hay imagen cuya procedencia verificar; y si
+# algun dia agrega una, puede venir de donde sea.
+#
+# La ausencia de la clave ES la declaracion ("mis imagenes pueden estar en
+# cualquier parte"), y es la unica forma de decirlo: un `image_hosts: ["*"]`
+# es error de carga, porque una allowlist que permite todo deja el archivo
+# leyendo como si el chequeo estuviera encendido.
+#
+# El archivo existe igual, aunque quede casi vacio: es lo que hace que la
+# politica sea una decision escrita del perfil y no el silencio de un archivo
+# que nadie creo. Sin el, la primera slide con imagen falla en duro.
+source: {}
+
+render:
+  script: render-brand

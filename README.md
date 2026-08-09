@@ -18,9 +18,10 @@ Separa dos capas:
 ├─ system/
 │  ├─ config/
 │  ├─ guides/
+│  ├─ ig-carousel/   # motor de render (genérico)
 │  └─ templates/
 ├─ profiles/
-│  └─ example/
+│  └─ example/       # brand.json + carousels/ + config.yaml
 ├─ notion-sync/
 └─ docs/
 ```

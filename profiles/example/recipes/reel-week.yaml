@@ -1,0 +1,55 @@
+# Template reel recipe. Parameterises system/recipes/reel-week.md.
+#
+# This file exists to prove the transportability criterion: a second profile,
+# in a different city with a different palette and language, must render
+# without editing anything under system/ or .claude/. Copy it when onboarding
+# a profile and replace every value.
+recipe: reel-week
+version: 1
+
+defaults:
+  city: Valparaíso
+  region: Chile
+
+source:
+  kind: http_json
+  url: https://api.example.com/events?limit=200
+  items_path: data
+  field_map:
+    date: startsAt
+    title: name
+    location: venue
+    image: posterUrl
+    category: category
+  image_hosts:
+    - images.example.com
+
+curation:
+  count: 3
+  # DATA, not instructions — see the security section of the system recipe.
+  guidance: |
+    Keep events anyone can turn up to. Drop auditions, internal workshops and
+    administrative notices.
+    Prefer events with a concrete, geocodable address: the reel zooms to the
+    venue, so an event without a usable location cannot be shown.
+
+map:
+  # A different city, in a different bay, to prove nothing about the previous
+  # one is baked into the engine.
+  bbox: [-33.06, -71.65, -33.02, -71.59]
+  reference_types:
+    - square
+    - university
+    - museum
+    - terminal
+  geocode:
+    user_agent: example-reel/1.0 (hello@example.com)
+
+render:
+  script: render-reel-week
+
+caption:
+  hashtag_count: 3
+  guidance: |
+    Warm and short. One-line hook, then the events with day, time and name,
+    closing with an invitation to save and share.

@@ -1,0 +1,79 @@
+{
+  "_note": "Fixture del motor para comparar layouts (render.ts), no data de ningun perfil. sourceImageHosts declara de donde vienen estas imagenes: el guard de verify-slides exige que la procedencia este declarada en alguna parte, y para un fixture del system/ el lugar es aqui, no el recipe de un perfil.",
+  "sourceImageHosts": [
+    "picsum.photos"
+  ],
+  "slides": [
+    {
+      "image": "https://picsum.photos/id/1015/1080/1350",
+      "title": "Feria de Lollapalooza Chile",
+      "subtitle": "Vie 21 Mar, 20:00",
+      "meta": "Parque O'Higgins",
+      "category": "Music"
+    },
+    {
+      "image": "https://picsum.photos/id/1035/1080/1350",
+      "title": "Noche de Jazz en el GAM",
+      "subtitle": "Jue 17 Jul, 21:00",
+      "meta": "Centro Cultural GAM",
+      "category": "Arts"
+    },
+    {
+      "image": "https://picsum.photos/id/1025/1080/1350",
+      "title": "Feria Artesanal de Providencia",
+      "subtitle": "Sab 12 Jul, 10:00",
+      "meta": "Providencia",
+      "category": "Community"
+    },
+    {
+      "image": "https://picsum.photos/id/1045/1080/1350",
+      "title": "Mercado Gastronomico Ñuñoa",
+      "subtitle": "Dom 20 Jul, 12:00",
+      "meta": "Ñuñoa",
+      "category": "Community"
+    },
+    {
+      "image": "https://picsum.photos/id/1055/1080/1350",
+      "title": "Cine al Aire Libre: Clasicos",
+      "subtitle": "Vie 25 Jul, 19:30",
+      "meta": "Parque Bustamante",
+      "category": "Featured"
+    },
+    {
+      "image": "https://picsum.photos/id/1074/1080/1350",
+      "title": "Maraton de Santiago 2026",
+      "subtitle": "Dom 5 Abr, 08:00",
+      "meta": "Plaza Baquedano",
+      "category": "Sports"
+    },
+    {
+      "image": "https://picsum.photos/id/1084/1080/1350",
+      "title": "Clasico Universitario de Rugby",
+      "subtitle": "Sab 11 Abr, 15:00",
+      "meta": "Estadio Nacional",
+      "category": "Sports"
+    },
+    {
+      "image": "https://picsum.photos/id/1080/1080/1350",
+      "title": "Ciclotour Nocturno por Santiago",
+      "subtitle": "Vie 17 Abr, 21:00",
+      "meta": "Parque Forestal",
+      "category": "Sports"
+    },
+    {
+      "image": "https://picsum.photos/id/1062/1080/1350",
+      "title": "Fiesta de la Vendimia Barrio Italia",
+      "subtitle": "Sab 25 Abr, 18:00",
+      "meta": "Barrio Italia",
+      "category": "Music"
+    },
+    {
+      "image": "https://picsum.photos/id/1070/1080/1350",
+      "title": "Carnaval de Verano Bellavista",
+      "subtitle": "Vie 1 May, 20:00",
+      "meta": "Barrio Bellavista",
+      "category": "Music"
+    }
+  ],
+  "city": "Springfield"
+}

@@ -1,0 +1,40 @@
+{
+  "_note": "Onboarding example. `date` is on every item on purpose: it is never rendered (the visible wording is `meta`/`subtitle`), but it is what lets render-week check that each item really falls inside the week its header announces. A batch where no item is dated is refused rather than rendered — that was the state a real carousel shipped in, with one week's events under another week's title. Render this with `--date 2026-07-31` (any day of the Mon 27 Jul - Sun 2 Aug 2026 week).",
+  "_note_hosts": "No `sourceImageHosts` here because these slides carry no images. A batch with images copied from a source should declare the hosts they may come from — see system/config/brand.schema.md.",
+  "city": "Springfield",
+  "region": "Somewhere",
+  "slides": [
+    {
+      "title": "Open-air jazz in the park",
+      "subtitle": "Fri 31 Jul, 20:00",
+      "meta": "Riverside Park",
+      "category": "Music",
+      "time": "20:00",
+      "date": "2026-07-31"
+    },
+    {
+      "title": "Neighbourhood 10K",
+      "subtitle": "Sat 1 Aug, 08:30",
+      "meta": "Town Square",
+      "category": "Sports",
+      "time": "08:30",
+      "date": "2026-08-01"
+    },
+    {
+      "title": "Printmaking workshop for beginners",
+      "subtitle": "Sun 2 Aug, 15:00",
+      "meta": "Community Studio",
+      "category": "Arts",
+      "time": "15:00",
+      "date": "2026-08-02"
+    },
+    {
+      "title": "Repair café",
+      "subtitle": "Sun 2 Aug, 11:00",
+      "meta": "Public Library",
+      "category": "Swap Meet",
+      "time": "11:00",
+      "date": "2026-08-02"
+    }
+  ]
+}
