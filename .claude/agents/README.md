@@ -9,6 +9,9 @@ Agentes disponibles en `.claude/agents/`:
 - `channel-adapter.md`
 - `content-publisher.md`
 - `analytics-reviewer.md`
+- `commit-guardian.md`
+- `memory-engineer.md`
+- `notion-sync.md` (sync explícito a Notion, solo cuando el usuario lo pide)
 
 ## Regla base
 

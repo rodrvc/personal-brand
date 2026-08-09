@@ -1,0 +1,36 @@
+# Literales de marca que NO pueden aparecer bajo system/ ni .claude/.
+#
+# El motor y los orquestadores son genéricos por contrato (ver CLAUDE.md).
+# Un perfil los parametriza; nunca los nombra. En system/ y .claude/ estos
+# valores se escriben como <marca>, <ciudad>, <slug>, profiles/<perfil>/.
+#
+# Una línea por término, sin distinción de mayúsculas. '#' comenta.
+#
+# ESTE FICHERO YA NO ES LA FUENTE PRINCIPAL. El slug, el wordmark, el dominio,
+# los hashtags, la ciudad, los hosts de imágenes y el @handle de cada perfil
+# real en `profiles/<slug>/` se DERIVAN automáticamente (ver `derive_terms()`
+# en validate_commit_guardian.py). Dar de alta una marca ya no requiere tocar
+# este fichero: basta con que su carpeta exista en disco.
+#
+# Aquí van solo los términos que la derivación no puede ver:
+#   · nombres de repos, productos o servicios privados
+#   · alias antiguos y marcas retiradas cuyo perfil ya no está en disco
+#   · términos de menos de 4 caracteres (la derivación los descarta para no
+#     generar falsos positivos masivos)
+#   · palabras genéricas que la derivación descarta a propósito (una ciudad
+#     muy común, un wordmark que es una palabra corriente) y que para esta
+#     marca sí hay que vigilar — asumiendo aquí el coste en falsos positivos
+#
+# Lo que se escriba aquí se SUMA a lo derivado; nada se pierde.
+# `--scan` imprime la procedencia de cada término.
+
+# ---------------------------------------------------------------------------
+# Los términos que NO pueden viajar al repo público van en el gemelo local
+# `scripts/brand-denylist.local.txt`, que está en .gitignore y que el validador
+# suma a este.
+#
+# La razón: para prohibir una palabra hay que escribirla, así que un denylist
+# publicado ES la lista literal de todo lo que se quiso ocultar. El nombre de
+# un repo privado llegó a estar aquí, junto al comentario "no debe aparecer en
+# el repo público".
+# ---------------------------------------------------------------------------

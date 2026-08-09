@@ -1,0 +1,78 @@
+{
+  "_source": "Placeholder brand for the example profile. Deliberately unlike any real profile — different palette, English category taxonomy, system fonts and NO googleFontsHref — so that rendering with it proves the engine carries no brand assumptions of its own. Copy this file when onboarding a new profile and replace every value.",
+
+  "locale": "en-US",
+
+  "colors": {
+    "ink": "#14213d",
+    "signal": "#fca311",
+    "slate": "#3d405b",
+    "mist": "#8d99ae",
+    "paper": "#ffffff",
+    "sky": "#4361ee"
+  },
+
+  "roles": {
+    "accent": "signal",
+    "wordmark": "ink",
+    "surface": "paper",
+    "onSurface": "slate",
+    "onSurfaceMuted": "mist",
+    "flourish": "sky",
+    "highlight": "signal"
+  },
+
+  "fonts": {
+    "logo": "Georgia, serif",
+    "body": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    "handwritten": "Georgia, serif"
+  },
+
+  "radius": { "card": "8px" },
+  "gradients": {
+    "signalSky": "linear-gradient(135deg, #fca311, #4361ee)",
+    "cover": "linear-gradient(180deg, #4361ee, #14213d)"
+  },
+
+  "categories": {
+    "fallback": { "solid": "#8d99ae" },
+    "byName": {
+      "Music": { "solid": "#e63946" },
+      "Sports": { "solid": "#2a9d8f" },
+      "Arts": { "solid": "#9d4edd" },
+      "Community": { "solid": "#588157" }
+    }
+  },
+
+  "copy": {
+    "wordmark": "Example",
+    "site": "example.com",
+    "listFormat": {
+      "headerTitle": "What's on",
+      "headerLabelFallback": "this week",
+      "headerSubtitle": "Everything happening in {city}, in one place.",
+      "footerLocation": "{city}, {region}",
+      "footerCta": "Find more at",
+      "timeSuffix": "",
+      "categoryFallbackLabel": "Event"
+    },
+    "brandMessage": {
+      "footerCta": "Find more at"
+    },
+    "reel": {
+      "coverTitle": "What's on",
+      "coverSubtitle": "in {city}",
+      "coverCount": "{count} picks this week",
+      "closingCta": "Find more at"
+    }
+  },
+
+  "dates": {
+    "monthAbbr": [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ],
+    "weekRangeSameMonth": "{startMonth} {startDay}–{endDay}",
+    "weekRangeCrossMonth": "{startMonth} {startDay} – {endMonth} {endDay}"
+  }
+}

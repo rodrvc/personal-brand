@@ -1,0 +1,14 @@
+{
+  "slides": [
+    {
+      "meta": "What I do",
+      "title": "I help teams ship the boring parts faster",
+      "subtitle": "Ten years of build systems, CI and the unglamorous glue that decides whether a release is calm or a fire."
+    },
+    {
+      "meta": "How I work",
+      "title": "Delete more than you add",
+      "subtitle": "Most performance problems are a feature nobody uses. The fastest code is the code that never runs."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "personal-brand",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Instagram carousel PNG and reel MP4 generators (system/ig-carousel, system/ig-reel): generic render engines fed by profiles/<slug>/.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx system/ig-carousel/verify-slides.test.ts && tsx system/ig-carousel/recipe.test.ts && tsx system/ig-reel/reel.test.ts",
+    "check": "npm run typecheck && npm run test",
+    "render:all": "tsx system/ig-carousel/render.ts --profile example"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright": "^1.61.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

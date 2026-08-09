@@ -1,0 +1,16 @@
+profile:
+  slug: example-personal
+  name: Jordan Avery
+  title: Platform engineer
+  primary_language: en
+
+channels:
+  active:
+    - linkedin
+  primary: linkedin
+
+outputs:
+  # Relative, so this template profile writes inside its own folder and needs
+  # no machine-specific config.local.yaml to render.
+  base_dir: outputs
+  brand_message: brand-intro

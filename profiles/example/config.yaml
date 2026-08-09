@@ -36,3 +36,9 @@ notion:
   enabled: false
   database_id: ""
   parent_page_id: ""
+
+outputs:
+  # Subfolder under `outputs.base_dir` for the brand-message carousel
+  # (render-brand.ts). It lives here rather than in brand.json because it is
+  # an output-layout concern, not a brand token.
+  brand_message: brand-intro

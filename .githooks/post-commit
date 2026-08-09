@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# Consume the approval once the commit it authorized has landed.
+#
+# The approval pins a `staged_tree` hash, and pre-commit refuses to run when
+# the staged tree no longer matches — but immediately after a commit the index
+# still equals the tree that was just committed, so the hash keeps matching.
+# A second commit (an empty one, an amend, a re-commit of the same content)
+# would sail through on an approval nobody re-issued.
+#
+# Deleting it here makes an approval single-use: one review, one commit.
+
+rm -f "$(git rev-parse --git-dir)/commit-guardian-approval.json"

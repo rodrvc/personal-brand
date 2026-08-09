@@ -1,0 +1,40 @@
+{
+  "_note": "Template reel input. Fictional events in a different city from any real profile, with synthetic placeholder images — this profile is tracked in git, so it carries no real photograph and no real brand. It exists to prove the transportability criterion: rendering this must require no edit under system/ or .claude/.",
+  "city": "Valparaíso",
+  "region": "Chile",
+  "items": [
+    {
+      "title": "Harbour Sessions: live music on the waterfront",
+      "date": "2026-08-11",
+      "when": "Tue 11 Aug · 20:00",
+      "where": "Plaza Sotomayor",
+      "mapLabel": "Plaza Sotomayor",
+      "image": "assets/reel/item1.jpg",
+      "category": "Music",
+      "lat": -33.0369,
+      "lng": -71.6255
+    },
+    {
+      "title": "Open-air print fair",
+      "date": "2026-08-13",
+      "when": "Thu 13 Aug · 11:00",
+      "where": "Plaza Aníbal Pinto",
+      "mapLabel": "Plaza Aníbal Pinto",
+      "image": "assets/reel/item2.jpg",
+      "category": "Arts",
+      "lat": -33.0448,
+      "lng": -71.6222
+    },
+    {
+      "title": "Neighbourhood football final",
+      "date": "2026-08-15",
+      "when": "Sat 15 Aug · 16:30",
+      "where": "Avenida Argentina",
+      "mapLabel": "Avenida Argentina",
+      "image": "assets/reel/item3.jpg",
+      "category": "Sports",
+      "lat": -33.0472,
+      "lng": -71.6118
+    }
+  ]
+}

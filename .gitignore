@@ -1,13 +1,62 @@
 .claude/settings.local.json
+.DS_Store
 
-# Profiles are private — only the example template is tracked
+# Only the fictional onboarding profiles live in the tree. A real profile is
+# brand data, not project data: it belongs outside the repo, pointed at by
+# BRAND_PROFILES_DIR (see CLAUDE.md → "Dónde vive un perfil real").
+#
+# Do NOT add `!profiles/<brand>/` here to track a real profile. That negation
+# is how real brand data got committed to this public repo; the commit gate
+# now rejects it (scripts/validate_commit_guardian.py).
 profiles/*
 !profiles/example/
+!profiles/example-personal/
 
-# Dependencias
+# Reels engine spike (ACU-74). Untracked on purpose — it still has brand
+# literals baked in and hasn't been ported to system/ yet — but it is the ONLY
+# copy of that work, so it is listed here to keep `git clean -fd` from
+# deleting it. Backup: ~/respaldos/prototipo-reel-<fecha>/
+prototipo-reel/
+
+# Node / IG carousel generator (system/ig-carousel)
 node_modules/
+dist/
+__pycache__/
+system/ig-carousel/output/
+system/ig-carousel/week-input.json
 
-# app/: artefactos de build y copias generadas
+# Rendered output of the template profiles (regenerated on demand).
+profiles/example/outputs/
+profiles/example-personal/outputs/
+
+# Planning notes for the reel/skills separation. Untracked on purpose: the
+# document argues about a *specific* brand's leak, so it names that brand,
+# its API host and its city throughout. It was written to be read next to the
+# work, not published with it.
+docs/PLAN-skills-agnosticas.md
+
+# Cached OpenStreetMap responses (system/ig-reel/osm-cache.ts). Never tracked:
+# it is a derivative with a TTL, not source, and a blob of a real city's street
+# names is dead weight in a public repo that would also age in silence.
+#
+# Being ignored is also what keeps it out of `--scan`, which walks tracked and
+# untracked-but-not-ignored files. Removing this line would make the auditor
+# read cached street names as a brand leak.
+.cache/
+
+# Términos vigilados que no pueden viajar al repo público (ver
+# scripts/brand-denylist.txt y manual_terms() en el validador). Nunca trackeado:
+# publicar un denylist es publicar la lista de lo que se quiso ocultar.
+scripts/brand-denylist.local.txt
+
+# Borradores de contenido de una persona real (briefs con audiencia, objetivo,
+# CTA y posicionamiento). docs/public-repo-rules.md los prohíbe explícitamente:
+# "real drafts for a specific person", "local working cards", "content
+# describing a real person's audience, objectives, voice, CTA, or positioning".
+docs/pi-local-card-*.md
+
+# app/: artefactos de build y copias generadas. Sin esto un `cargo build`
+# ensucia el repo con el target de Rust y el proyecto generado por Tauri.
 app/src/core/
 app/src-tauri/target/
 app/src-tauri/gen/

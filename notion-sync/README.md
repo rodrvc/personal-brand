@@ -42,6 +42,27 @@ Después de publicar una pieza:
 3. Marcar `Estado = Publicado`
 4. Guardar el link público si existe
 
+## Cómo disparar el sync
+
+El sync a Notion es siempre explícito, nunca automático. El usuario lo dispara
+pidiéndolo directamente, por ejemplo:
+
+- "sync con Notion"
+- "actualiza Notion con lo publicado"
+- "refleja el backlog en Notion"
+
+Cuando el usuario pide esto, se usa el agente `notion-sync`
+(`.claude/agents/notion-sync.md`). Ese agente:
+1. Confirma `notion.enabled` y `notion.database_id` en `config.yaml` (o `config.local.yaml`).
+2. Lee el estado actual de `profiles/<perfil>/content/published/` (y opcionalmente
+   drafts/ideas si el usuario lo pide).
+3. Usa los tools MCP de Notion (`mcp__notion__*`) para crear o actualizar los
+   registros correspondientes en la base de datos descrita arriba.
+4. Pregunta antes de crear una base de datos nueva si todavía no existe.
+
+El repo sigue siendo la fuente de verdad: el sync empuja el estado del repo hacia
+Notion, no al revés.
+
 ## Regla práctica
 
 - Los valores públicos pueden vivir en `config.yaml`

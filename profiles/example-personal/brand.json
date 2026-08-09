@@ -1,0 +1,36 @@
+{
+  "_source": "Minimal personal-brand profile: the smallest brand.json the engine accepts. It renders ONLY the brand-message template, so it declares no event-category taxonomy, no month names and no list-format copy — data a typography-led carousel never reads. Its existence is the regression test for that: if loadBrand ever goes back to validating the whole schema unconditionally, `render-brand.ts --profile example-personal` stops working.",
+
+  "locale": "en-US",
+
+  "colors": {
+    "graphite": "#22252a",
+    "lime": "#b8e62e",
+    "fog": "#7c8493",
+    "bone": "#f4f2ed"
+  },
+
+  "roles": {
+    "accent": "lime",
+    "wordmark": "graphite",
+    "surface": "bone",
+    "onSurface": "graphite",
+    "onSurfaceMuted": "fog",
+    "flourish": "lime",
+    "highlight": "lime"
+  },
+
+  "fonts": {
+    "logo": "Georgia, serif",
+    "body": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    "handwritten": "Georgia, serif"
+  },
+
+  "radius": { "card": "10px" },
+
+  "copy": {
+    "wordmark": "Jordan Avery",
+    "site": "jordanavery.dev",
+    "brandMessage": { "footerCta": "More at" }
+  }
+}
