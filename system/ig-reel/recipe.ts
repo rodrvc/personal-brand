@@ -3,8 +3,8 @@
  *
  * Unlike the carousel — where code reads exactly one field and the agent
  * interprets the rest — this loader reads the whole file, because the reel's
- * engine consumes `map.bbox` and `map.reference_types` directly: they become a
- * projection and an Overpass query, not prose an agent acts on.
+ * engine consumes `map.bbox` directly: it becomes the camera's wide framing
+ * and the geocoding bound, not prose an agent acts on.
  *
  * Validation happens **at load, before any request**. A recipe asking for
  * something unsupported fails with a sentence naming what it asked for and
@@ -34,11 +34,48 @@ export interface ReelRecipe {
   source?: Record<string, unknown>;
   curation?: { count?: number; guidance?: string };
   map: {
+    /**
+     * The framing for the whole city, and the outer bound for every zone.
+     * An item outside it is dropped: the frame is a declared decision, not
+     * something an item can move.
+     */
     bbox: unknown;
-    reference_types: unknown;
+    /**
+     * DEPRECATED — accepted for compatibility with existing recipes, ignored
+     * by the tile-based renderer. Zones were sub-frames of the drawn SVG map;
+     * a MapLibre camera can centre any coordinate in the bbox, so there is
+     * nothing left for a zone to fix.
+     */
+    zones?: Record<string, unknown>;
+    /**
+     * DEPRECATED — accepted for compatibility, ignored. Landmark discovery
+     * belonged to the drawn map; the raster tiles carry their own labels.
+     * No longer validated against an enum.
+     */
+    reference_types?: unknown;
     geocode?: { user_agent?: string };
   };
   render: { script: string };
+  /**
+   * How this brand sounds when the reel is narrated. Optional: a profile that
+   * never uses --voice does not declare it. The API key is NOT here — that is
+   * a machine credential, read from the environment.
+   */
+  voice?: {
+    voice_id: string;
+    model_id?: string;
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    speed?: number;
+    use_speaker_boost?: boolean;
+  };
+  /**
+   * The mood of the instrumental bed, as a prompt. Optional, and a prompt
+   * rather than a file path because the bed is generated to the length of the
+   * week's video — which a profile cannot know in advance.
+   */
+  music?: { prompt: string; gain_db?: number; intro_seconds?: number };
   caption?: Record<string, unknown>;
 }
 
@@ -126,12 +163,14 @@ function scalar(raw: string): unknown {
 }
 
 const ALLOWED_KEYS: Record<string, readonly string[]> = {
-  "": ["recipe", "version", "defaults", "source", "curation", "map", "render", "caption"],
+  "": ["recipe", "version", "defaults", "source", "curation", "map", "render", "voice", "music", "caption"],
   defaults: ["city", "region"],
   source: ["kind", "url", "path", "items_path", "field_map", "image_hosts", "filters"],
   curation: ["count", "guidance", "prefer"],
-  map: ["bbox", "reference_types", "geocode"],
+  map: ["bbox", "zones", "reference_types", "geocode"],
   render: ["script"],
+  voice: ["voice_id", "model_id", "stability", "similarity_boost", "style", "speed", "use_speaker_boost"],
+  music: ["prompt", "gain_db", "intro_seconds"],
   caption: ["hashtag_count", "guidance"],
 };
 
@@ -173,7 +212,7 @@ export function loadReelRecipe(profileDir: string): ReelRecipe {
   const parsed = parseYaml(text, path);
 
   rejectUnknownKeys(parsed, "", path);
-  for (const scope of ["defaults", "source", "curation", "map", "render", "caption"]) {
+  for (const scope of ["defaults", "source", "curation", "map", "render", "voice", "music", "caption"]) {
     const node = parsed[scope];
     if (node && typeof node === "object" && !Array.isArray(node)) {
       rejectUnknownKeys(node as Node, scope, path);
@@ -214,20 +253,69 @@ export function loadReelRecipe(profileDir: string): ReelRecipe {
     );
   }
 
+  // A `voice:` block with no voice_id would fail at synthesis time, after the
+  // video has already rendered — the expensive half of the run.
+  const voice = parsed.voice as Node | undefined;
+  if (voice !== undefined) {
+    if (typeof voice.voice_id !== "string" || !voice.voice_id.trim()) {
+      throw new Error(
+        `${path}: voice.voice_id must be a non-empty string. ` +
+          `It names the voice this brand speaks in, and the engine never picks one for you.`,
+      );
+    }
+    for (const key of ["stability", "similarity_boost", "style"] as const) {
+      const value = voice[key];
+      if (value !== undefined && (typeof value !== "number" || value < 0 || value > 1)) {
+        throw new Error(
+          `${path}: voice.${key} must be a number between 0 and 1, got ${JSON.stringify(value)}.`,
+        );
+      }
+    }
+  }
+
+  const music = parsed.music as Node | undefined;
+  if (music !== undefined) {
+    if (typeof music.prompt !== "string" || !music.prompt.trim()) {
+      throw new Error(
+        `${path}: music.prompt must be a non-empty string describing the bed's mood.`,
+      );
+    }
+    if (
+      music.intro_seconds !== undefined
+      && (typeof music.intro_seconds !== "number" || music.intro_seconds < 0 || music.intro_seconds > 5)
+    ) {
+      throw new Error(
+        `${path}: music.intro_seconds must be a number between 0 and 5, got ${JSON.stringify(music.intro_seconds)}. ` +
+          `It is the head start the bed gets before the narration, not a whole scene.`,
+      );
+    }
+    if (music.gain_db !== undefined && (typeof music.gain_db !== "number" || music.gain_db > 0)) {
+      throw new Error(
+        `${path}: music.gain_db must be a number at or below 0 (it attenuates the bed), ` +
+          `got ${JSON.stringify(music.gain_db)}. A positive value would push the bed over the narration.`,
+      );
+    }
+  }
+
   const curation = parsed.curation as Node | undefined;
   if (curation?.count !== undefined) {
     const count = curation.count;
-    if (typeof count !== "number" || !Number.isInteger(count) || count < 3 || count > 6) {
+    // The floor is 2, not 3: a week where only two items survive verification
+    // is a real outcome of a thin source, and refusing to render it pushed the
+    // operator towards padding the reel with an item that was not verifiable —
+    // which is the failure this engine exists to prevent. Two still reads as a
+    // short tour; one does not, and is where the line stays.
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 2 || count > 6) {
       throw new Error(
-        `${path}: curation.count must be an integer between 3 and 6, got ${JSON.stringify(count)}. ` +
-          `Below 3 the video does not read as a tour; above 6 it runs past the length a reel holds attention for.`,
+        `${path}: curation.count must be an integer between 2 and 6, got ${JSON.stringify(count)}. ` +
+          `A single item does not read as a tour; above 6 it runs past the length a reel holds attention for.`,
       );
     }
   }
 
   const map = parsed.map as ReelRecipe["map"] | undefined;
   if (!map || typeof map !== "object") {
-    throw new Error(`${path}: a "map" block with bbox and reference_types is required.`);
+    throw new Error(`${path}: a "map" block with a bbox is required.`);
   }
 
   return parsed as unknown as ReelRecipe;

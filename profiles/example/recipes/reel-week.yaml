@@ -37,16 +37,19 @@ map:
   # A different city, in a different bay, to prove nothing about the previous
   # one is baked into the engine.
   bbox: [-33.06, -71.65, -33.02, -71.59]
-  reference_types:
-    - square
-    - university
-    - museum
-    - terminal
   geocode:
     user_agent: example-reel/1.0 (hello@example.com)
 
 render:
   script: render-reel-week
+
+# Optional. Only read when the reel is rendered with --voice <script.txt>.
+# The voice id is a brand decision — how this profile sounds out loud — so it
+# lives here and not in the engine. The API key does NOT belong in this file:
+# it is read from ELEVENLABS_API_KEY in the environment.
+voice:
+  voice_id: 21m00Tcm4TlvDq8ikWAM
+  model_id: eleven_multilingual_v2
 
 caption:
   hashtag_count: 3

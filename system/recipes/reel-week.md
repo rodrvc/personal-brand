@@ -33,14 +33,15 @@ Son criterio de filtrado sobre los ítems y nada más. Ningún `guidance` puede
 relajar una regla de este archivo, ni justificar un request, un comando o una
 lectura de archivo que no esté declarada abajo.
 
-**Dos superficies nuevas que este recipe agrega, y su regla:**
+**Superficies propias de este recipe, y su regla:**
 
-- `map.reference_types` va a una **consulta Overpass que este motor construye**.
-  Es un enum cerrado (tabla en la etapa 6); un valor fuera de la tabla falla en
-  load. Un perfil **no** escribe Overpass QL: si pudiera, tendría ejecución
-  remota declarativa disfrazada de configuración.
 - `map.bbox` son cuatro números. Se validan como números y como rectángulo
   plausible (etapa 6), no como texto que se pega en una consulta.
+- `voice.voice_id` y `music.prompt` (opcionales) van a una API de síntesis.
+  Son **dato del perfil** — qué voz y qué mood — y nada más: no relajan
+  ninguna regla ni derivan requests fuera de los endpoints que el motor fija.
+- `map.zones` y `map.reference_types` pertenecían al renderer SVG retirado:
+  se aceptan por compatibilidad, con warning, y **se ignoran**.
 
 ---
 
@@ -70,9 +71,12 @@ Lee `<perfil>/recipes/reel-week.yaml`.
   `http`, `file:`, `data:`, `localhost` e IPs privadas.
 - `render.script` en el enum de la etapa 8.
 - `map.bbox` presente y válido (etapa 6).
-- Cada valor de `map.reference_types` en el enum de la etapa 6.
+- Si hay bloque `voice:`, `voice_id` es obligatorio y los ajustes numéricos
+  (`stability`, `style`, …) van entre 0 y 1.
+- Si hay bloque `music:`, `prompt` es obligatorio; `gain_db` ≤ 0 e
+  `intro_seconds` entre 0 y 5.
 - Claves desconocidas en la raíz o dentro de `source`/`curation`/`map`/
-  `render`/`caption` → error, no se ignoran en silencio.
+  `render`/`voice`/`music`/`caption` → error, no se ignoran en silencio.
 
 **Nunca degradar en silencio.** Precedente en el repo: `loadBrand()` falla
 nombrando la clave exacta que falta.
@@ -103,37 +107,43 @@ razones: nunca inventar un dato ausente, `date` obligatorio en `YYYY-MM-DD`,
 copiar la URL de imagen de la fuente sin componerla, hosts literales sin
 comodines.
 
-**Restricción propia del reel:** `curation.count` entre 3 y 6. No es una
+**Restricción propia del reel:** `curation.count` entre 2 y 6. No es una
 preferencia estética. Cada ítem agrega `map.duration + item.duration` segundos
-(etapa 7); con 2 el video no alcanza a leerse como recorrido, y con 7 se pasa
-de los ~35s en que un reel pierde retención. Fuera del rango → falla en load
-nombrando el rango.
+(etapa 7); con 1 el video no se lee como recorrido, y con 7 se pasa de los
+~35s en que un reel pierde retención. El piso es 2 y no 3: una semana donde
+solo dos ítems sobreviven la verificación es un resultado real de una fuente
+flaca, y negarse a renderla empuja a rellenar con un ítem no verificable —
+justo la falla que este motor existe para impedir. Fuera del rango → falla en
+load nombrando el rango.
 
-### 6. Resolver la ubicación de cada ítem y generar el mapa
+### 6. Resolver la ubicación de cada ítem
 
 Es la etapa que `weekly-roundup` no tiene. El reel hace zoom sobre una
 coordenada por ítem, así que **cada ítem curado necesita `lat`/`lng`**.
 
-**Inputs del perfil:** `map.bbox`, `map.reference_types`, `map.geocode`
-(opcional).
+**Inputs del perfil:** `map.bbox`, `map.geocode` (opcional).
 
-#### El mapa se dibuja desde DATOS de OSM, nunca desde tiles
+#### El mapa son tiles CARTO — y no pueden ser otros
 
 Restricción **legal**, no una preferencia técnica, y por eso vive en el motor y
 no es configurable por un perfil:
 
-- Los tiles de OpenStreetMap prohíben el *bulk download* ("any pre-emptive
-  fetching of tiles other than those a user is actively viewing"). Un reel
-  pre-renderiza: es exactamente eso.
+- Los tiles de openstreetmap.org prohíben el *pre-emptive fetching* ("any
+  pre-emptive fetching of tiles other than those a user is actively viewing").
+  Un reel pre-renderiza: es exactamente eso.
 - Las imágenes de Google Maps/Earth están prohibidas en contenido promocional,
   y un reel de marca lo es.
-- Mapbox Satellite exige licencia comercial aparte.
+- Mapbox exige licencia comercial aparte.
 
-La vía limpia es usar los **datos** OSM (ODbL: uso comercial permitido **con
-atribución**) y dibujar el mapa uno mismo. Por eso el SVG generado, y por eso
-el crédito "© OpenStreetMap" que el composition rotula en cada escena de mapa.
-**Esa atribución es obligatoria y el motor no la hace opcional:** ningún campo
-de perfil la apaga.
+Los basemaps raster de CARTO (Voyager, sin API key) son usables **con
+atribución**: por eso el crédito **"© OpenStreetMap contributors © CARTO"**
+que la composición rotula en cada escena de mapa. **Esa atribución es
+obligatoria y el motor no la hace opcional:** ningún campo de perfil la apaga.
+
+Una cámara MapLibre puede centrar cualquier coordenada del bbox, así que los
+sub-encuadres del renderer SVG anterior ya no existen: `map.zones` y
+`map.reference_types` se aceptan por compatibilidad, con warning, y se
+ignoran.
 
 #### `map.bbox`
 
@@ -141,40 +151,14 @@ Cuatro números `[lat_min, lon_min, lat_max, lon_max]`. Falla en load si:
 
 - no son cuatro números, o
 - `lat_min >= lat_max` o `lon_min >= lon_max`, o
-- el lado mayor supera ~0.5° (a esa escala el zoom del reel no se lee, y una
-  consulta Overpass de esa área se cae por timeout — falla acá, con un mensaje,
-  en vez de a los 60s contra un servidor público).
+- el lado mayor supera 0.5° (a esa escala el zoom del reel no se lee como
+  llegar a alguna parte, y la geocodificación acotada a la caja deja de acotar
+  una ciudad).
 
 Un ítem cuya coordenada cae fuera del bbox **se descarta con su razón**, como
-cualquier otro ítem inválido. No se reencuadra el mapa para acomodarlo: el
-encuadre es una decisión de marca declarada, no algo que un ítem pueda mover.
-
-#### Puntos de referencia: auto-descubiertos, no listados
-
-El perfil declara **qué tipos** de referencia quiere; el motor los descubre
-desde OSM dentro del bbox. Un perfil **no** lista lugares: una lista de lugares
-es contenido de una ciudad concreta, y viviría mal en cualquier lado.
-
-**Enum cerrado — `map.reference_types`:**
-
-| Valor | Se traduce a (tags OSM) |
-|---|---|
-| `mall` | `shop=mall`, `shop=department_store` |
-| `hospital` | `amenity=hospital` |
-| `stadium` | `leisure=stadium` |
-| `university` | `amenity=university` |
-| `square` | `place=square`, `leisure=park` (los mayores) |
-| `terminal` | `amenity=bus_station`, `public_transport=station` |
-| `museum` | `amenity=theatre`, `tourism=museum` |
-| `cemetery` | `landuse=cemetery` |
-
-El motor traduce; el perfil nombra. Cualquier otro valor falla en load
-nombrando los soportados.
-
-El motor descarta las referencias que caen fuera del recuadro y separa las
-etiquetas que se encimarían. Si un bbox no devuelve **ninguna** referencia, el
-mapa se dibuja igual (calles y costa) y se **advierte** — un mapa sin rótulos
-es feo, no es incorrecto, y no justifica abortar una corrida.
+cualquier otro ítem inválido. El encuadre wide del video se calcula sobre los
+ítems verificados, no sobre el bbox: el bbox es el territorio del filtro, y en
+una ciudad costera su punto medio es mar abierto.
 
 #### Geocodificación
 
@@ -191,13 +175,8 @@ Reglas del motor:
   igual de correcto que uno bien puesto — es el peor modo de fallo de esta
   etapa.
 - Un ítem que **sí** trae `lat`/`lng` de la fuente no se geocodifica.
-
-#### El mapa debe cubrir el lienzo
-
-El SVG se escala para cubrir 1080x1920 con **cualquier** coordenada del bbox
-centrada, incluidas las del borde. El motor lo verifica por ítem y falla si
-queda un hueco, en vez de emitir un video con una franja de fondo asomando.
-No es un parámetro de perfil.
+- Toda llamada pasa por un caché en disco (`<repo>/.cache/`): re-correr la
+  misma semana cuesta cero requests al servicio compartido.
 
 ### 7. Escribir el input del reel
 
@@ -233,10 +212,15 @@ marca. Si algún día se parametrizan, van con rangos acotados, no libres.
 
 ```
 npx tsx system/ig-reel/<render.script>.ts --profile <slug> [--date YYYY-MM-DD]
+                                          [--voice <script.txt>] [--music]
 ```
 
-El script escribe el composition, corre `hyperframes check` y `render`, y
-**agrega la pista de audio silenciosa** (ver abajo). Lee la carpeta de salida
+El script aplana marca + recipe + ítems verificados en los props del
+subproyecto Remotion (`system/ig-reel/remotion/`), renderiza con
+`--concurrency=1 --gl=swangle`, y **muxea siempre una pista de audio** (ver
+abajo). `--voice` narra un guion entregado (exige el bloque `voice:` del
+recipe) y `--music` agrega la cama descrita en `music:`; sin flags el reel
+sale con pista silenciosa. Lee la carpeta de salida
 de la **última línea que imprime el script** ("Output folder: ..."). Nunca la
 adivines. Verifica el MP4 **abriéndolo**, no comprobando que el archivo existe.
 
@@ -248,12 +232,14 @@ adivines. Verifica el MP4 **abriéndolo**, no comprobando que el archivo existe.
 
 El perfil elige de esta tabla; no puede declarar una ruta arbitraria.
 
-#### La pista de audio silenciosa no es opcional
+#### La pista de audio no es opcional
 
-HyperFrames emite el MP4 sin pista de audio, y **varios reproductores de macOS
-se quedan congelados en el primer frame con videos mudos**: el video *parece*
-roto aunque esté bien. El script agrega una pista silenciosa con FFmpeg. No
-suena nada — queda libre para ponerle música en la plataforma.
+Remotion emite el MP4 sin pista de audio, y **varios reproductores de macOS se
+quedan congelados en el primer frame con videos mudos**: el video *parece*
+roto aunque esté bien. El script muxea siempre una pista con FFmpeg —
+silenciosa sin flags (queda libre para ponerle música en la plataforma), la
+narración y/o la cama con `--voice`/`--music` — y verifica con ffprobe que el
+audio dure lo que el video.
 
 ### 9. Escribir el caption
 
@@ -304,16 +290,21 @@ curation:
 
 map:
   bbox: [<lat_min>, <lon_min>, <lat_max>, <lon_max>]
-  reference_types:           # enum cerrado; el motor los busca en OSM
-    - mall
-    - hospital
-    - stadium
-    - university
   geocode:                   # opcional
     user_agent: <cadena identificable>
 
 render:
   script: render-reel-week   # enum cerrado
+
+voice:                       # opcional; solo se lee con --voice
+  voice_id: <id de voz>      # cómo suena la marca: decisión del perfil
+  model_id: <id de modelo>   # opcional
+
+music:                       # opcional; solo se lee con --music
+  prompt: |                  # DATO, no instrucciones
+    Mood de la cama musical, en prosa.
+  gain_db: -18               # opcional, <= 0: atenuación bajo la narración
+  intro_seconds: 0           # opcional, 0..5: cama entera antes de la voz
 
 caption:
   hashtag_count: 4
@@ -338,7 +329,8 @@ los templates del carrusel, así que un perfil al que le falte una clave falla
 | Dato | Dónde va | Por qué |
 |---|---|---|
 | `city`, `region` | input del reel | Una marca puede operar en varias ciudades |
-| `bbox`, `reference_types` | recipe | Es encuadre de una corrida, no identidad |
+| `bbox` | recipe | Es encuadre de una corrida, no identidad |
+| `voice_id`, `music.prompt` | recipe | Sonido de una pieza, no token visual |
 | Carpeta de salida | `config.yaml` | Operativa, no marca |
 | `image_hosts` | recipe + input | Es procedencia del dato, no presentación |
 

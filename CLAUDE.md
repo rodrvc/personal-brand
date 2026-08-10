@@ -18,11 +18,18 @@
 >    seguir funcionando igual.** La app es un módulo más y escribe los
 >    mismos archivos.
 
+### EQUIPO
+
+El claude por defecto es un orquestador siempre trata que un sub agente o otro claude realice la tarea. Su labor es verificar y conversar con el humano hacerla las propuestas o direcciones. Discutir tryoff. Debe explicarse de forma breve de forma simple, pero sin omitir informacion. La explicación que de siempre debe ser concisa bien redactada. 
+
+
+
 ## Propósito
 
 Este repo guarda un **sistema reusable de contenido/marca** separado de los **perfiles específicos** que lo usan.
 
 La idea es distinguir entre:
+
 - **system/** → templates, guías y reglas compartidas
 - **profiles/** → identidad, backlog y contenido de cada perfil
 
@@ -30,25 +37,27 @@ La idea es distinguir entre:
 
 ## Estructura del proyecto
 
-| Ruta | Propósito |
-|---|---|
-| `system/templates/` | Templates reutilizables para posts y scripts |
-| `system/guides/` | Guías operativas del sistema |
-| `system/config/` | Esquemas y convenciones de configuración |
-| `system/ig-carousel/` | Motor de render de carruseles (genérico, sin datos de marca) |
-| `system/ig-reel/` | Motor de render de reels en video (genérico, sin datos de marca) |
-| `system/recipes/` | Contratos de flujo: qué etapas fija el motor y qué huecos llena el perfil |
-| `profiles/<perfil>/profile.md` | Identidad, posicionamiento y tono del perfil |
-| `profiles/<perfil>/config.yaml` | Configuración operativa del perfil |
-| `profiles/<perfil>/config.local.yaml` | Overrides locales y privados opcionales |
-| `profiles/<perfil>/brand-spec.md` | Decisiones de marca y su procedencia (para humanos) |
-| `profiles/<perfil>/brand.json` | Esas decisiones compiladas, que consume el motor |
-| `profiles/<perfil>/carousels/` | Inputs de carrusel del perfil |
-| `profiles/<perfil>/ideas/` | Backlog de ideas del perfil |
-| `profiles/<perfil>/content/drafts/` | Borradores en progreso |
-| `profiles/<perfil>/content/published/` | Archivo de contenido publicado |
-| `notion-sync/` | Notas de integración con Notion |
-| `docs/` | Documentación adicional |
+
+| Ruta                                   | Propósito                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `system/templates/`                    | Templates reutilizables para posts y scripts                              |
+| `system/guides/`                       | Guías operativas del sistema                                              |
+| `system/config/`                       | Esquemas y convenciones de configuración                                  |
+| `system/ig-carousel/`                  | Motor de render de carruseles (genérico, sin datos de marca)              |
+| `system/ig-reel/`                      | Motor de render de reels en video (genérico, sin datos de marca)          |
+| `system/recipes/`                      | Contratos de flujo: qué etapas fija el motor y qué huecos llena el perfil |
+| `profiles/<perfil>/profile.md`         | Identidad, posicionamiento y tono del perfil                              |
+| `profiles/<perfil>/config.yaml`        | Configuración operativa del perfil                                        |
+| `profiles/<perfil>/config.local.yaml`  | Overrides locales y privados opcionales                                   |
+| `profiles/<perfil>/brand-spec.md`      | Decisiones de marca y su procedencia (para humanos)                       |
+| `profiles/<perfil>/brand.json`         | Esas decisiones compiladas, que consume el motor                          |
+| `profiles/<perfil>/carousels/`         | Inputs de carrusel del perfil                                             |
+| `profiles/<perfil>/ideas/`             | Backlog de ideas del perfil                                               |
+| `profiles/<perfil>/content/drafts/`    | Borradores en progreso                                                    |
+| `profiles/<perfil>/content/published/` | Archivo de contenido publicado                                            |
+| `notion-sync/`                         | Notas de integración con Notion                                           |
+| `docs/`                                | Documentación adicional                                                   |
+
 
 ---
 
@@ -136,6 +145,7 @@ Ver `system/config/brand.schema.md` para el esquema de `brand.json`.
 ## Cómo trabajar con un perfil
 
 Cuando se trabaje contenido para un autor concreto:
+
 1. leer su `profile.md`
 2. revisar su `config.yaml`
 3. si existe, revisar también `config.local.yaml`
@@ -147,9 +157,11 @@ Cuando se trabaje contenido para un autor concreto:
 ## Workflow
 
 Ver guía principal en:
+
 - `system/guides/workflow.md`
 
 Resumen:
+
 - idea → backlog del perfil
 - draft → `profiles/<perfil>/content/drafts/`
 - revisión del owner
@@ -161,6 +173,7 @@ Resumen:
 ## Regla de separación
 
 No meter en este archivo:
+
 - datos personales del autor
 - narrativa personal específica
 - stack individual
@@ -168,3 +181,21 @@ No meter en este archivo:
 - IDs privados, tokens o enlaces internos
 
 Eso debe vivir en el perfil correspondiente o en archivos locales fuera del repo.
+
+---
+
+## Cómo contestar
+
+**Breve, concreto y en prosa.** Responde lo que se preguntó y para. Un
+"¿en qué estamos?" se contesta en 2-4 líneas, no con un informe.
+
+Sin encabezados, tablas ni resúmenes finales salvo que se pida un documento
+(un plan, un handoff, una guía). Nada de narrar el proceso: importa el
+resultado, no el recorrido.
+
+Ser breve es quitar palabras, **no información**. Un test que falla, un paso
+que se saltó o algo que quedó fuera del alcance se dice siempre, aunque
+alargue. Ante la duda entre una línea de más y ocultar un problema, la línea
+de más.
+
+Detalle en `.claude/skills/breve/SKILL.md`.

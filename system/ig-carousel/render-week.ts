@@ -70,10 +70,12 @@ function parseArgs(argv: string[]): {
   city?: string;
   input?: string;
   reference: Date;
+  eventsPerSlide: number;
 } {
   const profileIndex = argv.indexOf("--profile");
   const cityIndex = argv.indexOf("--city");
   const inputIndex = argv.indexOf("--input");
+  const eventsPerSlideIndex = argv.indexOf("--events-per-slide");
   // `--date YYYY-MM-DD` renders the calendar week containing that date, so a
   // week other than the current one (e.g. "la próxima semana") can be built
   // without waiting for it to arrive. Parsed as local time — a bare
@@ -101,11 +103,20 @@ function parseArgs(argv: string[]): {
     city: cityIndex !== -1 ? argv[cityIndex + 1] : undefined,
     input: inputIndex !== -1 ? argv[inputIndex + 1] : undefined,
     reference,
+    eventsPerSlide:
+      eventsPerSlideIndex !== -1
+        ? Number(argv[eventsPerSlideIndex + 1])
+        : EVENTS_PER_SLIDE,
   };
 }
 
 async function main(): Promise<void> {
-  const { profile, city: cityOverride, input, reference } = parseArgs(process.argv.slice(2));
+  const { profile, city: cityOverride, input, reference, eventsPerSlide } = parseArgs(
+    process.argv.slice(2),
+  );
+  if (!Number.isInteger(eventsPerSlide) || eventsPerSlide < 1) {
+    throw new Error(`--events-per-slide must be a positive integer, got: ${eventsPerSlide}`);
+  }
 
   const profileDir = resolveProfileDir(profile);
   // Whatever the list-format template declares it reads, plus "dates": this
@@ -160,7 +171,7 @@ async function main(): Promise<void> {
   // layout is also more spacious than the old design (bigger cards, more
   // air) — 3 cards no longer fit within the 1080x1350 canvas without
   // clipping the last one. 2 per slide is what actually fits cleanly.
-  const groups = chunkSlides(kept, EVENTS_PER_SLIDE);
+  const groups = chunkSlides(kept, eventsPerSlide);
   await renderSlides({
     items: groups,
     toHtml: (group) => renderListFormat(brand, group, { headerLabel, city, region }),

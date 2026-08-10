@@ -1,0 +1,342 @@
+/*
+ * Structural styles of the reel. No brand values live here: every color,
+ * gradient and font family resolves through a CSS custom property that
+ * `Reel.tsx` sets from the props. Alphas over plain black/white are the only
+ * literals — they are lighting, not identity.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.reelScene {
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: var(--font-body), Inter, ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.reelBackground {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+}
+
+/* Oversized on purpose: hides tile edges while the camera moves. */
+.reelMap {
+  position: absolute;
+  inset: -80px;
+}
+
+.reelMap canvas {
+  outline: none;
+}
+
+.reelMapWash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 24%, rgba(255, 255, 255, 0.14)),
+    radial-gradient(circle at 50% 52%, rgba(255, 255, 255, 0), rgba(0, 0, 0, 0.12) 82%);
+}
+
+.reelLoading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--on-surface);
+  font-size: 42px;
+  font-weight: 700;
+}
+
+.reelCover,
+.reelClose {
+  overflow: hidden;
+}
+
+.reelCoverFill {
+  position: absolute;
+  left: 0;
+  top: -260px;
+  width: 1080px;
+  height: 2440px;
+  background: var(--cover-gradient);
+}
+
+.reelOrb {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  filter: blur(70px);
+}
+
+.reelOrbA {
+  width: 620px;
+  height: 620px;
+  left: -160px;
+  top: 250px;
+  background: var(--orb-a);
+}
+
+.reelOrbB {
+  width: 520px;
+  height: 520px;
+  right: -140px;
+  top: 1180px;
+  background: var(--orb-b);
+}
+
+.reelCoverWrap,
+.reelCloseWrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.reelScript,
+.reelCloseWord {
+  display: block;
+  font-family: var(--font-logo);
+  font-size: 150px;
+  font-weight: 400;
+  line-height: 1.24;
+  padding-bottom: 12px;
+  color: #fff;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+}
+
+.reelCoverSub {
+  display: block;
+  margin-top: 8px;
+  font-size: 80px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
+}
+
+.reelCoverBar {
+  display: block;
+  width: 300px;
+  height: 14px;
+  margin: 52px 0 44px;
+  border-radius: 7px;
+  background: #fff;
+  transform-origin: center center;
+}
+
+.reelCoverCount {
+  display: block;
+  font-size: 50px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.32);
+}
+
+.reelCoverWord {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 150px;
+  text-align: center;
+  font-family: var(--font-logo);
+  font-size: 56px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: #fff;
+  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.35);
+}
+
+.reelMapScene {
+  pointer-events: none;
+}
+
+.reelPinWrap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 132px;
+  height: 176px;
+  transform-origin: 50% 100%;
+}
+
+.reelPin {
+  display: block;
+  width: 132px;
+  height: 176px;
+  filter: drop-shadow(0 16px 22px rgba(0, 0, 0, 0.36));
+}
+
+.reelPinPulse {
+  position: absolute;
+  left: 50%;
+  top: calc(100% - 28px);
+  width: 360px;
+  height: 360px;
+  border: 18px solid var(--pulse);
+  border-radius: 50%;
+  transform-origin: center center;
+}
+
+.reelMapLabel {
+  position: absolute;
+  left: 50%;
+  bottom: 260px;
+  min-width: 360px;
+  padding: 18px 30px 22px;
+  border: 3px solid rgba(255, 255, 255, 0.84);
+  border-radius: 8px;
+  background: var(--label-plate);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.2);
+  color: var(--on-surface);
+  font-size: 52px;
+  font-weight: 900;
+  line-height: 1.05;
+  text-align: center;
+}
+
+.reelMapCredit {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  color: var(--credit);
+  font-size: 20px;
+  font-weight: 700;
+  text-shadow: 0 1px 5px rgba(255, 255, 255, 0.8);
+}
+
+.reelEvent {
+  background: var(--surface);
+}
+
+.reelPosterZone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1080px;
+  height: 1290px;
+  overflow: hidden;
+}
+
+.reelPoster {
+  display: block;
+  width: 1080px;
+  height: 1290px;
+  object-fit: cover;
+  object-position: center 42%;
+  transform-origin: center center;
+}
+
+.reelPosterFade {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1080px;
+  height: 260px;
+  background: linear-gradient(180deg, transparent, var(--surface));
+}
+
+.reelChip {
+  position: absolute;
+  top: 62px;
+  left: 56px;
+  display: block;
+  padding: 14px 28px;
+  border-radius: 22px;
+  color: #fff;
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.reelBand {
+  position: absolute;
+  top: 1290px;
+  left: 0;
+  width: 1080px;
+  height: 630px;
+  padding: 46px 56px 0;
+}
+
+.reelTitle {
+  display: block;
+  max-width: 920px;
+  color: var(--on-surface);
+  font-size: 54px;
+  font-weight: 900;
+  line-height: 1.16;
+}
+
+.reelBar {
+  display: block;
+  width: 120px;
+  height: 10px;
+  margin: 24px 0 30px;
+  border-radius: 5px;
+  background: var(--accent);
+}
+
+.reelWhen {
+  display: block;
+  color: var(--accent);
+  font-size: 40px;
+  font-weight: 700;
+}
+
+.reelWhere {
+  display: block;
+  margin-top: 12px;
+  color: var(--on-surface-muted);
+  font-size: 34px;
+  font-weight: 600;
+}
+
+.reelWordmark {
+  position: absolute;
+  right: 56px;
+  bottom: 44px;
+  display: block;
+  color: var(--wordmark);
+  font-size: 38px;
+  font-weight: 900;
+}
+
+.reelClose {
+  background: var(--cover-gradient);
+}
+
+.reelCloseWord {
+  font-size: 124px;
+  line-height: 1.26;
+  padding-bottom: 10px;
+}
+
+.reelCloseCta {
+  display: block;
+  margin-top: 18px;
+  color: #fff;
+  font-size: 46px;
+  font-weight: 700;
+  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.35);
+}
+
+.reelCloseSite {
+  display: block;
+  margin-top: 44px;
+  padding: 30px 70px 38px;
+  border-radius: 54px;
+  background: #fff;
+  color: var(--accent);
+  font-family: var(--font-logo);
+  font-size: 62px;
+  font-weight: 400;
+  line-height: 1.2;
+}

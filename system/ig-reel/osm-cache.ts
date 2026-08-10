@@ -1,35 +1,20 @@
 /**
- * On-disk cache for third-party map data.
+ * On-disk cache for third-party geodata lookups.
  *
- * The map a reel draws does not change between runs: the bbox comes from the
- * profile's recipe and is stable. Without a cache the engine asks Overpass and
- * Nominatim for the same city every single render — which is slow when those
- * public services are healthy and a hard failure when they are not, and they
- * are down often.
+ * What a reel geocodes does not change between runs: the bbox comes from the
+ * profile's recipe and a venue's address is stable. Without a cache the engine
+ * asks Nominatim about the same venues every single render — which is slow
+ * when that public service is healthy and a hard failure when it is not.
  *
- * **What is cached is the raw upstream response, not the finished SVG.** That
- * distinction is the whole design:
- *
- *   - `osm.ts` (network) and `map-svg.ts` (drawing, with brand tokens) are
- *     cleanly separated, and the SVG is exactly where they meet. Caching there
- *     would make the key depend on the whole `brand.json` plus engine
- *     constants like the landmark cap — a key that depends on code is a key
- *     nobody maintains correctly. You forget to bump it and debug a stale map
- *     believing you changed the renderer.
- *   - Keyed on the raw response, the key is *only declared input*: the literal
- *     query. Change the OSM tags behind a landmark type and the query changes,
- *     so the cache misses on its own with nothing to remember.
- *   - Iterating on how the map is drawn then costs no network at all.
+ * **What is cached is the raw upstream response, keyed on the literal
+ * request.** The key is *only declared input*: change anything about the
+ * query and the cache misses on its own, with nothing to remember to bump.
  *
  * The cache lives at `<repo>/.cache/`, deliberately **not** inside
  * `profiles/<slug>/`. A profile is a transportable declaration of a brand; a
  * cache is a derivative with an expiry date. Copying a profile folder to
  * another machine must carry the brand, not a silent eight-month-old snapshot
- * of a city's streets.
- *
- * This is the same thing `fixtures/bay-coastline.json` already does for the
- * tests — an upstream response kept on disk to avoid the network — promoted
- * from a test fixture to a first-class part of the engine.
+ * of a city's geocodes.
  */
 
 import { createHash } from "node:crypto";

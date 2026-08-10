@@ -4,19 +4,25 @@
  * Plain `tsx` execution with no framework, matching the carousel's tests. What
  * is worth testing here is the same thing worth testing there: the places
  * where a wrong answer would be *silent* — a pin at the wrong coordinate, a
- * period nobody verified, an unknown key that reads as a working setting.
+ * period nobody verified, an unknown key that reads as a working setting, a
+ * camera that never actually arrives over the item.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { isInsideBBox, isPlaceable, placeItem, project, validateBBox, MAX_BBOX_SIDE_DEGREES } from "./geo.js";
-import { loadBrand } from "../ig-carousel/brand-schema.js";
-import { buildMapSvg, chainSegments } from "./map-svg.js";
+import { isInsideBBox, validateBBox, wideFraming, MAX_BBOX_SIDE_DEGREES } from "./geo.js";
 import { withCache } from "./osm-cache.js";
-import { validateReferenceTypes } from "./osm.js";
 import { loadReelRecipe } from "./recipe.js";
+import {
+  CAMERA_MOVE_SECONDS,
+  CLOSE_ZOOM,
+  cameraAt,
+  mapStart,
+  totalFrames,
+  totalSeconds,
+} from "./remotion/src/timeline.js";
 import { verifyOrThrow } from "./verify-items.js";
 import type { ReelInput } from "./types.js";
 
@@ -68,45 +74,9 @@ test("a bbox that is not four numbers is rejected", () => {
   throws(() => validateBBox(["a", 2, 3, 4]), /four finite numbers/, "a string should fail");
 });
 
-test("an oversized bbox fails at load, not at Overpass timeout", () => {
+test("an oversized bbox fails at load, before any request", () => {
   const side = MAX_BBOX_SIDE_DEGREES + 0.1;
   throws(() => validateBBox([0, 0, side, side]), /longest side/, "an oversized box should fail");
-});
-
-console.log("\ngeo — placement");
-
-test("the map covers the canvas for a coordinate at the centre", () => {
-  const place = placeItem(BBOX, -23.65, -70.4, "centre");
-  assert(place.left <= 0 && place.top <= 0, "the layer should start off-canvas");
-});
-
-test("the map covers the canvas anywhere isPlaceable allows", () => {
-  // This is the check that caught a pale band showing through on items near
-  // the edge, back when the layer was scaled at 0.55. `isPlaceable` is the
-  // predicate the guard filters on, so anything it accepts must place without
-  // throwing — otherwise a verified item could still crash the render.
-  const [latMin, lonMin, latMax, lonMax] = BBOX;
-  for (let i = 0; i <= 20; i += 1) {
-    for (let j = 0; j <= 20; j += 1) {
-      const lat = latMin + ((latMax - latMin) * i) / 20;
-      const lng = lonMin + ((lonMax - lonMin) * j) / 20;
-      if (isPlaceable(BBOX, lat, lng)) {
-        placeItem(BBOX, lat, lng, `${lat},${lng}`);
-      }
-    }
-  }
-});
-
-test("a coordinate on the bbox edge is refused placement rather than crashing", () => {
-  // Geometry, not a bug: centring an edge point puts half the canvas beyond
-  // where the map exists, and no MAP_SCALE fixes it. The guard drops such an
-  // item with a reason; placeItem still asserts, as the last line of defence.
-  assert(!isPlaceable(BBOX, -23.7199, -70.4399), "a corner point must not be placeable");
-  throws(
-    () => placeItem(BBOX, -23.7199, -70.4399, "corner"),
-    /does not cover the canvas/,
-    "placing an edge point should assert rather than emit a gap",
-  );
 });
 
 test("isInsideBBox rejects a coordinate outside the declared box", () => {
@@ -114,145 +84,101 @@ test("isInsideBBox rejects a coordinate outside the declared box", () => {
   assert(!isInsideBBox(BBOX, -33.45, -70.66), "a point in another city should be outside");
 });
 
-console.log("\nosm — reference types are a closed enum");
+console.log("\ngeo — the wide framing the camera starts from");
 
-test("supported types pass through", () => {
-  assert(validateReferenceTypes(["mall", "hospital"]).length === 2, "expected two types");
+// Points spread over most of the test bbox, and a cluster in its south half.
+const SPREAD_POINTS = [
+  { lat: -23.71, lng: -70.43 },
+  { lat: -23.6, lng: -70.37 },
+  { lat: -23.66, lng: -70.4 },
+];
+const SOUTH_POINTS = [
+  { lat: -23.715, lng: -70.43 },
+  { lat: -23.7, lng: -70.42 },
+  { lat: -23.69, lng: -70.41 },
+];
+
+/** The same fit formula as the engine's, as an independent oracle for the clamp. */
+function bboxFitZoom(bbox: readonly [number, number, number, number]): number {
+  const [latMin, lonMin, latMax, lonMax] = bbox;
+  const mercY = (lat: number): number => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 180 / 2));
+  const latFrac = (mercY(latMax) - mercY(latMin)) / (2 * Math.PI);
+  const zoomForWidth = Math.log2(((1080 / 512) * 360) / (lonMax - lonMin));
+  const zoomForHeight = Math.log2(1920 / 512 / latFrac);
+  return Math.min(zoomForWidth, zoomForHeight) - 0.3;
+}
+
+test("wideFraming yields a city-scale zoom with its centre inside the bbox", () => {
+  const wide = wideFraming(BBOX, SPREAD_POINTS);
+  assert(Number.isFinite(wide.zoom), "zoom must be a finite number");
+  assert(wide.zoom > 10 && wide.zoom < 15, `expected a city-scale zoom between 10 and 15, got ${wide.zoom}`);
+  const [lng, lat] = wide.center;
+  assert(isInsideBBox(BBOX, lat, lng), `centre (${lat}, ${lng}) must fall inside the bbox`);
+  const [lonSpan, latSpan] = wide.span;
+  // The span is the frame's own: the points' box inflated ×1.4 (above the floor here).
+  assert(Math.abs(lonSpan - 0.06 * 1.4) < 1e-9, `lonSpan must be the padded points span, got ${lonSpan}`);
+  assert(Math.abs(latSpan - 0.11 * 1.4) < 1e-9, `latSpan must be the padded points span, got ${latSpan}`);
 });
 
-test("an unsupported type fails naming what exists", () => {
-  throws(
-    () => validateReferenceTypes(["nightclub"]),
-    /this engine supports/,
-    "an unknown type should fail",
+test("items clustered in the south half pull the frame onto them, closer than the bbox fit", () => {
+  const wide = wideFraming(BBOX, SOUTH_POINTS);
+  const [lng, lat] = wide.center;
+  assert(
+    lat >= -23.715 && lat <= -23.69 && lng >= -70.43 && lng <= -70.41,
+    `centre (${lat}, ${lng}) must fall inside the points' own bounding box, not the bbox's midpoint`,
+  );
+  assert(
+    wide.zoom > bboxFitZoom(BBOX),
+    `a clustered week must open closer than the whole-bbox fit (${bboxFitZoom(BBOX).toFixed(2)}), got ${wide.zoom}`,
   );
 });
 
-test("a profile cannot smuggle Overpass QL through reference_types", () => {
-  throws(
-    () => validateReferenceTypes(['node["amenity"](0,0,1,1);out;']),
-    /this engine supports/,
-    "raw query text should be rejected like any other unknown value",
-  );
+test("a single point hits the half-span floor: finite zoom, still a wide shot", () => {
+  const wide = wideFraming(BBOX, [{ lat: -23.66, lng: -70.4 }]);
+  assert(Number.isFinite(wide.zoom), `zoom must be finite for one point, got ${wide.zoom}`);
+  assert(wide.zoom <= 14, `one point must not zoom past 14, got ${wide.zoom}`);
+  const [lonSpan, latSpan] = wide.span;
+  assert(Math.abs(lonSpan - 0.07) < 1e-9 && Math.abs(latSpan - 0.07) < 1e-9, "the floor gives a 0.07° frame");
 });
 
-console.log("\nmap-svg — coastline chaining");
-
-test("ways that share endpoints join into one chain, whatever order they arrive in", () => {
-  // Out of order and with the middle piece reversed — the shape OSM actually
-  // returns. Sorting by latitude instead of chaining tore this into a zigzag.
-  const chains = chainSegments([
-    [{ x: 20, y: 20 }, { x: 30, y: 30 }],
-    [{ x: 0, y: 0 }, { x: 10, y: 10 }],
-    [{ x: 20, y: 20 }, { x: 10, y: 10 }],
-  ]);
-  assert(chains.length === 1, `expected one chain, got ${chains.length}`);
-  assert(chains[0]!.length === 4, `expected 4 points, got ${chains[0]!.length}`);
+test("no points is a legible error, not a NaN camera", () => {
+  throws(() => wideFraming(BBOX, []), /at least one verified item/, "empty points should fail");
 });
 
-test("genuinely disconnected shores stay separate chains", () => {
-  // An island and the mainland must not be bridged by a false edge.
-  const chains = chainSegments([
-    [{ x: 0, y: 0 }, { x: 10, y: 10 }],
-    [{ x: 500, y: 500 }, { x: 510, y: 510 }],
-  ]);
-  assert(chains.length === 2, `expected two chains, got ${chains.length}`);
-});
-
-test("the longest chain is drawn first so fragments cannot paint over the shore", () => {
-  const chains = chainSegments([
-    [{ x: 900, y: 900 }, { x: 905, y: 905 }],
-    [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }],
-  ]);
-  assert(chains[0]!.length > chains[1]!.length, "the longest chain should come first");
-});
-
-console.log("\nmap-svg — the sea lands on the water, not the town");
-
-test("a concave bay fills the sea on the correct side of the shore", () => {
-  // The regression that cost the most to find. Two polygon approaches passed
-  // a straight north-south coast and painted sea across the middle of a
-  // bay-shaped harbour, which only showed up once a second profile existed.
-  // The fixture is that harbour's real coastline, cached so this needs no
-  // network; the probes are points whose nature is not in dispute.
-  const fixture = JSON.parse(
-    readFileSync(new URL("./fixtures/bay-coastline.json", import.meta.url), "utf-8"),
-  ) as { elements: { geometry: { lat: number; lon: number }[] }[] };
-
-  const bayBBox = validateBBox([-33.06, -71.65, -33.02, -71.59]);
-  const brand = loadBrand("profiles/example", ["reel", "categories"]);
-  const { svg } = buildMapSvg(bayBBox, fixture.elements, [], [], brand);
-
-  // Sea is painted as merged rects; a point is water if a rect covers it.
-  const rects = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"\/>/g)].map(
-    (m) => m.slice(1).map(Number) as [number, number, number, number],
-  );
-  assert(rects.length > 0, "expected the sea to be painted at all");
-
-  const isSea = (lat: number, lng: number): boolean => {
-    const { x, y } = project(bayBBox, lat, lng);
-    return rects.some(([rx, ry, rw, rh]) => x >= rx && x <= rx + rw && y >= ry && y <= ry + rh);
-  };
-
-  const probes: [string, number, number, boolean][] = [
-    ["a hillside inland", -33.048, -71.6, false],
-    ["the town centre", -33.043, -71.615, false],
-    ["a square inland", -33.0448, -71.6222, false],
-    ["a street inland", -33.0472, -71.6118, false],
-    ["open water in the bay", -33.025, -71.62, true],
+test("the zoom never falls below the fit of the declared bbox", () => {
+  // Points at the bbox corners: padded they overflow it, so the clamp engages.
+  const corners = [
+    { lat: -23.72, lng: -70.44 },
+    { lat: -23.58, lng: -70.36 },
   ];
-  for (const [name, lat, lng, wantSea] of probes) {
-    const got = isSea(lat, lng);
-    assert(got === wantSea, `${name} came out as ${got ? "sea" : "land"}, expected ${wantSea ? "sea" : "land"}`);
-  }
+  const wide = wideFraming(BBOX, corners);
+  assert(
+    wide.zoom >= Number(bboxFitZoom(BBOX).toFixed(2)),
+    `zoom must never be farther out than the declared city (${bboxFitZoom(BBOX).toFixed(2)}), got ${wide.zoom}`,
+  );
 });
 
-test("two landmark labels never print on top of each other", () => {
-  // Collision is measured against the box each label is drawn in, not its
-  // anchor point: the text is offset from its dot and anchored to one side,
-  // so an anchor-centred box is not the box on screen.
-  //
-  // Note what this does NOT cover, because chasing it here wasted a render:
-  // the overlap visible on the finished video was between a landmark label
-  // and the *item's own map label*, which the composition draws in a separate
-  // layer this function never sees. No amount of spacing inside the SVG could
-  // have fixed it; the composition gives that label a solid plate instead.
-  const fixture = JSON.parse(
-    readFileSync(new URL("./fixtures/bay-coastline.json", import.meta.url), "utf-8"),
-  ) as { elements: { geometry: { lat: number; lon: number }[] }[] };
-  const bayBBox = validateBBox([-33.06, -71.65, -33.02, -71.59]);
-  const brand = loadBrand("profiles/example", ["reel", "categories"]);
+console.log("\ntimeline — the rhythm the render actually runs");
 
-  // Deliberately adversarial: same spot, names of very different lengths.
-  const crowded = [
-    { name: "Puerto", lat: -33.0369, lng: -71.6255 },
-    { name: "Plaza Sotomayor", lat: -33.037, lng: -71.6256 },
-    { name: "Muelle Prat", lat: -33.0371, lng: -71.6257 },
-  ].map((l) => ({ name: l.name, lat: l.lat, lon: l.lng }));
+test("a four-item reel is 24.2s / 726 frames long", () => {
+  assert(totalSeconds(4) === 24.2, `expected 24.2s, got ${totalSeconds(4)}`);
+  assert(totalFrames(4) === 726, `expected 726 frames, got ${totalFrames(4)}`);
+});
 
-  const { svg } = buildMapSvg(bayBBox, fixture.elements, [], crowded, brand);
-
-  const labels = [...svg.matchAll(/<text x="([\d.-]+)" y="([\d.-]+)" text-anchor="(\w+)"[^>]*>([^<]+)<\/text>/g)].map(
-    (m) => {
-      const x = Number(m[1]);
-      const width = m[4]!.length * 34 * 0.58;
-      return {
-        left: m[3] === "end" ? x - width : x,
-        right: m[3] === "end" ? x : x + width,
-        y: Number(m[2]),
-        name: m[4]!,
-      };
-    },
+test("the camera starts wide and arrives over the item at street zoom", () => {
+  const wide = wideFraming(BBOX, SPREAD_POINTS);
+  const target = { lng: -70.4, lat: -23.65 };
+  const atStart = cameraAt(mapStart(0), wide, [target]);
+  assert(
+    Math.abs(atStart.zoom - wide.zoom) < 1e-9,
+    `at the map scene's first frame the zoom must be the wide framing's, got ${atStart.zoom} vs ${wide.zoom}`,
   );
-
-  for (let i = 0; i < labels.length; i += 1) {
-    for (let j = i + 1; j < labels.length; j += 1) {
-      const a = labels[i]!;
-      const b = labels[j]!;
-      const overlapping = a.left < b.right && a.right > b.left && Math.abs(a.y - b.y) < 40;
-      assert(!overlapping, `"${a.name}" and "${b.name}" overlap on the map`);
-    }
-  }
+  const arrived = cameraAt(mapStart(0) + CAMERA_MOVE_SECONDS, wide, [target]);
+  assert(
+    arrived.center[0] === target.lng && arrived.center[1] === target.lat,
+    `after the move the camera must sit on the item, got ${JSON.stringify(arrived.center)}`,
+  );
+  assert(arrived.zoom === CLOSE_ZOOM, `after the move the zoom must be CLOSE_ZOOM, got ${arrived.zoom}`);
 });
 
 console.log("\nosm-cache — the network is not a dependency of every run");
@@ -513,13 +439,27 @@ test("a valid recipe parses, including the block scalar and the flow list", () =
   assert(recipe.version === 1, "expected version 1");
   assert(Array.isArray(recipe.map.bbox) && recipe.map.bbox.length === 4, "expected a four-number bbox");
   assert(
-    Array.isArray(recipe.map.reference_types) && recipe.map.reference_types.length === 2,
-    "expected two reference types",
-  );
-  assert(
     typeof recipe.curation?.guidance === "string" && recipe.curation.guidance.includes("data"),
     "expected the block scalar to be captured",
   );
+});
+
+test("a recipe with reference_types still loads — deprecated, not rejected", () => {
+  // Existing profiles declare them for the retired SVG renderer. Breaking
+  // every recipe over a key the engine now merely ignores would make an
+  // engine upgrade a profile migration.
+  const recipe = loadReelRecipe(withRecipe(VALID));
+  assert(
+    Array.isArray(recipe.map.reference_types) && recipe.map.reference_types.length === 2,
+    "the deprecated key must still parse for compatibility",
+  );
+});
+
+test("a recipe without reference_types loads — only the bbox is required", () => {
+  const stripped = VALID.replace("  reference_types:\n    - mall\n    - hospital\n", "");
+  const recipe = loadReelRecipe(withRecipe(stripped));
+  assert(recipe.map.reference_types === undefined, "reference_types must be optional");
+  assert(Array.isArray(recipe.map.bbox), "the bbox must still be read");
 });
 
 test("a missing recipe names the contract to read", () => {
@@ -578,16 +518,66 @@ test("an unknown nested key is caught too", () => {
   );
 });
 
-test("curation.count outside 3..6 fails, explaining why the range exists", () => {
+test("curation.count outside 2..6 fails, explaining why the range exists", () => {
   throws(
     () => loadReelRecipe(withRecipe(VALID.replace("count: 4", "count: 12"))),
-    /between 3 and 6/,
+    /between 2 and 6/,
     "12 items would run far past a reel's attention span",
   );
   throws(
     () => loadReelRecipe(withRecipe(VALID.replace("count: 4", "count: 1"))),
-    /between 3 and 6/,
+    /between 2 and 6/,
     "1 item does not read as a tour",
+  );
+});
+
+test("a two-item week loads — a thin source is an outcome, not an error", () => {
+  // The floor was 3, and a week with two verifiable items had to be padded
+  // with an unverifiable one to render at all. That is the exact failure the
+  // verification stage exists to prevent, so the floor gave way instead.
+  const recipe = loadReelRecipe(withRecipe(VALID.replace("count: 4", "count: 2")));
+  assert(recipe.curation?.count === 2, "two items must be a legal week");
+});
+
+test("a recipe with no voice block still loads — narration is opt-in", () => {
+  const recipe = loadReelRecipe(withRecipe(VALID));
+  assert(recipe.voice === undefined, "a profile that never narrates declares nothing");
+});
+
+test("voice.voice_id is required once a voice block exists", () => {
+  throws(
+    () => loadReelRecipe(withRecipe(`${VALID}\nvoice:\n  model_id: eleven_multilingual_v2\n`)),
+    /voice_id must be a non-empty string/,
+    "the engine never picks a voice for a brand",
+  );
+  throws(
+    () => loadReelRecipe(withRecipe(`${VALID}\nvoice:\n  voice_id: "   "\n`)),
+    /voice_id must be a non-empty string/,
+    "blank is not a voice id",
+  );
+});
+
+test("a valid voice block parses", () => {
+  const recipe = loadReelRecipe(
+    withRecipe(`${VALID}\nvoice:\n  voice_id: abc123\n  stability: 0.4\n`),
+  );
+  assert(recipe.voice?.voice_id === "abc123", "the voice id reaches the engine");
+  assert(recipe.voice?.stability === 0.4, "tuning is carried through");
+});
+
+test("voice tuning outside 0..1 fails at load, not mid-render", () => {
+  throws(
+    () => loadReelRecipe(withRecipe(`${VALID}\nvoice:\n  voice_id: abc\n  stability: 4\n`)),
+    /between 0 and 1/,
+    "4 is not a valid stability",
+  );
+});
+
+test("an unknown key under voice is an error, like everywhere else", () => {
+  throws(
+    () => loadReelRecipe(withRecipe(`${VALID}\nvoice:\n  voice_id: abc\n  api_key: sk-leak\n`)),
+    /unknown key/,
+    "a credential in a profile file must not be read as configuration",
   );
 });
 

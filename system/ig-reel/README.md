@@ -1,14 +1,15 @@
 # system/ig-reel — motor de reels
 
 Renderiza un **reel vertical 1080x1920** (MP4) a partir de los ítems fechados
-de un perfil: portada, N ítems cada uno precedido por una transición de mapa
-que hace zoom sobre su ubicación, y cierre.
+de un perfil: portada, N ítems cada uno precedido por un vuelo de cámara sobre
+un mapa real hacia su ubicación, y cierre.
 
 Genérico, como `system/ig-carousel/`: **nada aquí nombra una marca, una ciudad
 ni una taxonomía**. Todo eso llega desde `profiles/<slug>/`.
 
 ```
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> [--date YYYY-MM-DD]
+                                           [--voice <script.txt>] [--music]
 ```
 
 Contrato de flujo: `system/recipes/reel-week.md`.
@@ -21,7 +22,7 @@ Contrato de datos de marca: `system/config/brand.schema.md`.
 | Archivo | Qué aporta |
 |---|---|
 | `brand.json` | Colores, tipografías, categorías y `copy.reel` + `gradients.cover` |
-| `recipes/reel-week.yaml` | Fuente, curaduría, y el bloque `map` (bbox + tipos de referencia) |
+| `recipes/reel-week.yaml` | Fuente, curaduría, `map.bbox`, y opcionalmente `voice:` y `music:` |
 | `reels/week-input.json` | Los ítems ya curados, con fecha, coordenada e imagen |
 | `assets/fonts/*.woff2` | Opcional: la fuente de logo, embebida para que preview y render coincidan |
 
@@ -30,175 +31,139 @@ marca.
 
 ---
 
-## Archivos
+## Arquitectura: Node orquesta, Remotion renderiza
+
+El video lo emite un subproyecto Remotion (`remotion/`) cuyo mapa son **tiles
+raster reales movidos por una cámara MapLibre**, no un SVG dibujado. La
+frontera entre ambos lados es el contrato `ReelProps`
+(`remotion/src/props.ts`): todo llega **resuelto** — colores como CSS, copy ya
+interpolado, imágenes en rutas servibles. La composición no conoce
+`brand.json`, recipes ni perfiles; `render-reel-week.ts` es el único que los
+lee y los aplana a ese shape. Todo el vocabulario de marca queda del lado Node.
 
 | Archivo | Rol |
 |---|---|
-| `types.ts` | Contrato de datos, tiempos de escena y `VerifiedReelItem` |
-| `geo.ts` | Proyección Mercator, validación de bbox, ubicación del mapa por ítem |
-| `osm.ts` | Overpass y Nominatim: costa, calles, referencias y geocodificación |
-| `map-svg.ts` | Dibuja el SVG del mapa con los colores del perfil |
+| `types.ts` | Contrato de datos del input y `VerifiedReelItem` |
+| `geo.ts` | Validación de bbox y encuadre wide de la cámara (`wideFraming`) |
+| `osm.ts` | Nominatim: geocodifica texto libre a coordenada, acotado al bbox |
+| `osm-cache.ts` | Caché en disco de esas llamadas |
 | `verify-items.ts` | El guard previo al render |
-| `composition.ts` | Genera el HTML+GSAP para HyperFrames |
 | `recipe.ts` | Carga y valida `recipes/reel-week.yaml` |
-| `render-reel-week.ts` | Entrypoint: orquesta todo y agrega la pista de audio |
-| `reel.test.ts` | Tests de los guards (`npm run check`) |
+| `voice.ts` | ElevenLabs: narración TTS y cama musical, ambas opt-in |
+| `render-reel-week.ts` | Entrypoint: geocodifica, verifica, arma props, renderiza y muxea |
+| `reel.test.ts` | Tests de guards, timeline y recipe |
+| `remotion/src/timeline.ts` | Tiempos de escena y matemática de cámara — funciones puras, testeadas |
+| `remotion/src/maplibre.ts` | MapLibre bajo el reloj de Remotion, estilo de tiles y atribución |
+| `remotion/src/Reel.tsx` | La composición: portada, escenas de mapa+ítem, cierre |
 
 ---
 
 ## Decisiones que no son obvias
 
-Cosas que costaron encontrar y conviene no re-descubrir a la mala.
-
-### El mapa se dibuja desde DATOS de OSM, nunca desde tiles
+### Los tiles son CARTO Voyager — y no pueden ser otros
 
 Es una restricción **legal**, no una preferencia técnica, y por eso vive en el
-motor y ningún perfil la puede apagar:
+motor y ningún perfil la puede tocar:
 
-- Los tiles de OSM prohíben el *bulk download*. Pre-renderizar un video es
-  exactamente eso.
+- Los tiles de openstreetmap.org prohíben el *pre-emptive fetching*.
+  Pre-renderizar un video es exactamente eso.
 - Las imágenes de Google Maps/Earth están prohibidas en contenido promocional,
   y un reel de marca lo es.
-- Mapbox Satellite exige licencia comercial aparte.
+- Mapbox exige licencia comercial aparte.
 
-Los **datos** OSM son ODbL: uso comercial permitido **con atribución**. De ahí
-el "© OpenStreetMap" que el composition rotula en cada escena de mapa. Esa
-atribución es obligatoria.
+Los basemaps de CARTO (Voyager raster, sin API key) son usables **con
+atribución**: de ahí el rótulo **"© OpenStreetMap contributors © CARTO"** que
+la composición imprime sobre cada escena de mapa. Es obligatorio y ningún
+campo de perfil lo apaga.
 
-### Una coordenada en el borde del bbox no se puede centrar
+### El mapa es un renderer vivo que Remotion trata como foto por frame
 
-Centrar un punto del borde deja medio lienzo fuera del mapa. Es geometría: no
-hay `MAP_SCALE` que lo arregle, porque el faltante crece con la escala que lo
-arreglaría. Por eso `isPlaceable()` lo trata como problema **del ítem** (se
-descarta con su razón, como cualquier otro no renderizable) y `placeItem()`
-mantiene el assert como última línea de defensa.
-
-El prototipo nunca lo pisó porque sus cuatro eventos estaban en el interior.
-
-### El mapa debe cubrir el lienzo
-
-A escala 0.55 el mapa no alcanzaba a cubrir 1080x1920 al centrarse cerca del
-borde, y asomaba el fondo como una franja clara. Está en 1.15, verificado por
-ítem. **No bajarlo sin correr los tests.**
-
-### El pin viaja dentro del contenedor que escala
-
-Si se ancla al centro del lienzo, el zoom lo desalinea respecto a la calle. Va
-en el mismo `transform-origin` que el mapa, con contra-escala `1/ZOOM` para no
-deformarse.
-
-### El mar se pinta por celdas, no como polígono cerrado
-
-Es la decisión que más costó, y las dos alternativas fallidas están en el
-código porque explican por qué:
-
-1. **Cerrar la costa contra el borde izquierdo.** Asume que el mar está al
-   oeste. Cierto para una costa, falso para la bahía siguiente.
-2. **Desplazar la costa por su normal hacia el mar** formando una banda. La
-   dirección es correcta (OSM dibuja la costa con tierra a la izquierda y mar
-   a la derecha), pero la banda se auto-interseca donde la costa curva, y
-   ninguna `fill-rule` recupera el interior. Pintó mar sobre el centro de una
-   ciudad.
-
-Un polígono obliga a responder *"¿dónde cierra la costa?"*, que no tiene
-respuesta estable cuando la costa entra y sale del cuadro varias veces. El
-muestreo pregunta por celda *"¿esto es agua?"*, que la normal del **segmento
-más cercano** contesta bien en todas partes.
-
-**El "más cercano" es lo esencial:** la convención de OSM solo vale
-localmente. Medido contra una way real, un punto de mar abierto y uno en los
-cerros caían del mismo lado, porque la costa curva entre medio. Cualquier
-método que elija el segmento antes de conocer el punto se equivoca en una
-bahía.
-
-Está fijado por `reel.test.ts` contra `fixtures/bay-coastline.json` — la costa
-real de una bahía, cacheada, para que el test no dependa de la red.
-
-### El agua toma el rol `wordmark`, no `accent`
-
-`accent` es el color del pin. Un mar pintado con él convierte el cuadro en una
-masa plana con el marcador perdido adentro: el pin tiene que ser lo único del
-mapa con ese color.
-
-### Las referencias se topan en 12, y se eligen por dispersión
-
-OSM devuelve decenas de features para una ciudad y dibujarlas todas sepulta el
-mapa bajo texto encimado — el pin deja de encontrarse, que es lo único que el
-mapa tiene que lograr. El prototipo lo evitaba con diez lugares elegidos a
-mano, que es justo el contenido por-ciudad que este motor no puede cargar; el
-tope reemplaza esa curaduría. La selección es por distancia mínima entre
-elegidos, no por el orden que devolvió Overpass: doce etiquetas apiladas en un
-barrio no orientan a nadie.
-
-### Mapas y ítems van en tracks distintos
-
-HyperFrames rechaza clips solapados en el mismo track, y el cross-fade
-necesita el solape. Mapas en track 1, ítems en track 2.
-
-### La pista de audio silenciosa no es opcional
-
-HyperFrames emite el MP4 sin audio, y **varios reproductores de macOS se
-quedan congelados en el primer frame con videos mudos**: el video *parece* roto
-aunque esté bien. El script agrega la pista con FFmpeg. No suena nada — queda
-libre para ponerle música en la plataforma.
-
-### Overpass se cae seguido, y por eso hay caché
-
-Devuelve HTML de error (o un 504) en vez de JSON cuando está saturado, así que
-parsear la respuesta **es** el chequeo de salud. El motor prueba dos endpoints
-en serie, nunca en paralelo — dos requests para una respuesta es la carga que
-vuelve inusable un servicio gratuito— y da una segunda pasada con espera,
-porque la saturación suele durar segundos.
-
-Pero la respuesta de fondo es no volver a preguntar: **toda llamada a Overpass
-y a Nominatim pasa por un caché en disco** (`osm-cache.ts` → `<repo>/.cache/`).
-El mapa no cambia entre corridas: el bbox lo declara el perfil y es estable.
+MapLibre anima solo si se lo deja; acá **no debe poseer ninguna animación**.
+La cámara se calcula desde `useCurrentFrame()` y se aplica con `jumpTo()`
+(nunca `flyTo()`), y cada frame bloquea en `delayRender()` hasta que los tiles
+de esa cámara cargaron. Parte del mismo contrato es cómo se invoca el render:
 
 ```
-1a corrida:  ~40s + lo que tarde Overpass (o falla si está caído)
-2a corrida:  ~40s, cero requests
+npx remotion render src/index.ts Reel out.mp4 --props=... --concurrency=1 --gl=swangle
 ```
 
-Detalles que importan:
+`--gl=swangle` (SwiftShader/ANGLE) es la vía segura para WebGL headless, y
+`--concurrency=1` porque Chromium headless no aloja varios contextos WebGL de
+forma confiable — y las instancias paralelas se pelean el caché de tiles sin
+ganar reloj.
 
-- **Se cachea la respuesta cruda, no el SVG.** El SVG es donde se cruzan la red
-  y los tokens de marca; cachear ahí ataría la clave al `brand.json` y a
-  constantes del motor, y una clave que depende de código es una clave que
-  nadie mantiene bien. La clave es la query literal, que ya deriva de todos los
-  inputs: si cambian los tags de un `reference_type`, la query cambia y el
-  caché falla solo.
-- **Vive en `<repo>/.cache/`, nunca en `profiles/<slug>/`.** Un perfil es una
-  declaración transportable; un caché es un derivado con vencimiento. Copiar la
-  carpeta de una marca a otra máquina debe llevarse la marca, no un snapshot de
-  OSM de hace ocho meses.
-- **TTL de 30 días** (180 para geocodificación: una dirección se mueve menos
-  que una calle). Un mapa congelado para siempre es un bug lento.
-- **Si la red falla y hay una entrada vencida, se usa y se avisa.** Caché caído
-  no es render caído.
-- **Siempre imprime de dónde salió el dato y qué edad tiene.** Un caché
-  silencioso es una trampa; uno que se anuncia es una herramienta — sin esa
-  línea la corrida deja de ser auditable desde su propia salida.
-- `--no-cache` fuerza datos frescos.
+### El encuadre wide sale de los ítems, no del bbox
 
-Está ignorado por git, que es también lo que lo mantiene fuera de
-`validate_commit_guardian.py --scan`: el scan recorre trackeados y no-ignorados,
-así que quitar esa línea del `.gitignore` haría que el auditor leyera nombres de
-calles cacheados como una fuga de marca.
+El bbox es territorio del **filtro**: en una ciudad costera su punto medio es
+mar abierto. `wideFraming()` encuadra sobre los ítems verificados. Y como la
+cámara puede centrar cualquier coordenada del bbox, "dónde cae el pin en el
+lienzo" dejó de ser problema del motor: las zonas y la cobertura del lienzo
+del renderer SVG anterior ya no existen (`map.zones` y `map.reference_types`
+se aceptan en el recipe por compatibilidad, con warning, y se ignoran).
 
-**El criterio de aceptación debe seguir cumpliéndose con el caché frío.** Si
-alguna vez pasa verde solo con caché caliente, el criterio se volvió mentira.
+### El staging es efímero a propósito
 
-Este patrón ya existía sin que nadie lo notara: `fixtures/bay-coastline.json`
-es exactamente esto — una respuesta de OSM guardada en disco para no depender
-de la red — hecho para los tests. El caché es ese fixture, ascendido a parte
-del motor.
+`staticFile()` de Remotion solo sirve desde el `public/` del propio proyecto,
+así que las imágenes y la fuente del perfil se copian a
+`remotion/public/staging/` mientras dura el render. La carpeta está ignorada
+por git y **se borra al terminar**: nada con forma de marca puede quedar bajo
+`system/` un segundo más de lo que el render lo necesita.
+
+### Geocodificación: acotada, secuencial y sin inventos
+
+Un ítem sin `lat`/`lng` se geocodifica con Nominatim, acotado al bbox y con
+`User-Agent` identificable. Secuencial y un request por ítem, como exige su
+política de uso. Lo que no geocodifica **se descarta con su razón** — nunca se
+cae al centro del bbox, porque un pin en el lugar equivocado se ve igual de
+correcto que uno bien puesto.
+
+Toda llamada pasa por un caché en disco (`osm-cache.ts` → `<repo>/.cache/`):
+re-correr la misma semana cuesta cero requests al servicio gratuito. Se cachea
+la **respuesta cruda, con la request literal como clave** — cambia el input y
+el caché falla solo. TTL de 180 días (una dirección se mueve poco), entrada
+vencida se usa con aviso si la red falla, siempre imprime de dónde salió el
+dato, `--no-cache` fuerza datos frescos. Vive en `<repo>/.cache/` y nunca en
+`profiles/<slug>/`: un perfil es una declaración transportable; un caché es un
+derivado con vencimiento.
+
+### El bbox se topa en 0.5° por lado
+
+Más ancho y el zoom wide→calle deja de leerse como llegar a alguna parte, y la
+geocodificación acotada a esa caja deja de acotar nada. Falla en load con la
+explicación, no a mitad de render.
+
+### La pista de audio no es opcional
+
+Remotion emite el MP4 sin audio, y **varios reproductores de macOS se quedan
+congelados en el primer frame con videos mudos**: el video *parece* roto
+aunque esté bien. El script muxea siempre una pista con FFmpeg — silenciosa si
+no se pidió nada, la narración con `--voice`, la cama con `--music`, o ambas.
+El video se copia sin re-encodear, y al final se verifica con ffprobe que la
+pista de audio dure lo que el video: un filter graph puede emitir un stream de
+audio casi vacío en vez de fallar.
+
+### Narración y música son opt-in, y su identidad es del perfil
+
+`--voice <script.txt>` narra un guion que se le entrega — el motor sabe
+*hablar*, nunca qué decir. Exige un bloque `voice:` en el recipe del perfil
+(`voice_id` mínimo): en qué voz habla una marca es decisión de perfil. La API
+key sale de `ELEVENLABS_API_KEY` en el entorno, jamás de un archivo del
+perfil. `--music` compone la cama desde `music.prompt` del recipe; con
+narración encima la cama suena entera durante `intro_seconds` y luego se
+atenúa a `gain_db`, y la voz se normaliza (loudnorm) antes de mezclar. Un
+guion más largo que el video falla con mensaje, no se corta a mitad de frase.
 
 ---
 
 ## Requisitos
 
-- **Node 22+**
-- **FFmpeg** — para la pista de audio silenciosa
-- Red, para Overpass y Nominatim (la primera vez que se genera un mapa)
+- **Node 22+** (el subproyecto instala sus dependencias solo en la primera corrida)
+- **FFmpeg** (con ffprobe) — para muxear y verificar el audio
+- Red durante el render: los tiles se bajan al renderizar; Nominatim solo si
+  hay ítems sin coordenada y el caché está frío
+- `ELEVENLABS_API_KEY` en el entorno, solo si se usa `--voice` o `--music`
 
-HyperFrames se baja solo vía `npx`.
+Preview interactivo: `cd system/ig-reel/remotion && npm run studio`. Abre con
+props ficticios y neutros ("Puerto Ejemplo", coordenadas cerca de 0,0) sin
+necesitar ningún perfil real en disco; un render real siempre pasa props
+completos vía `--props`.

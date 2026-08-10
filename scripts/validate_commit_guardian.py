@@ -11,7 +11,12 @@ PROFILES_DIR = ROOT / 'profiles'
 
 # Rutas que deben permanecer libres de literales de marca: el motor y los
 # orquestadores son genéricos por contrato (ver CLAUDE.md).
-GENERIC_PREFIXES = ('system/', '.claude/')
+# Las capas que deben ser genéricas: ninguna puede llevar literales de una
+# marca real. `app/` y `core/` entran porque `docs/ARQUITECTURA.md` promete
+# verificar las cuatro, y hasta ahora el validador cubría dos: la promesa
+# escrita y lo que el código comprobaba habían dejado de coincidir, que es la
+# forma exacta en que una garantía se convierte en una costumbre.
+GENERIC_PREFIXES = ('system/', '.claude/', 'app/', 'core/')
 
 # Solo los perfiles de ejemplo (marcas ficticias de onboarding) son
 # publicables. Un perfil real vive fuera del árbol del repo.
@@ -519,7 +524,7 @@ def scan_tree() -> int:
                 )
 
     tree_findings = [
-        ('brand literals under system/ or .claude/', leaks),
+        ('brand literals in the generic layers (%s)' % ', '.join(GENERIC_PREFIXES), leaks),
         ('real profile files tracked', check_private_profiles(tracked, tracked=True)),
         ('.gitignore negations', [
             f'.gitignore:{number}: {line.strip()}'
@@ -679,7 +684,7 @@ def main() -> int:
     leaks = check_brand_leaks(staged_files)
     if leaks:
         return fail(
-            'brand literals under system/ or .claude/ — parameterize them as '
+            'brand literals in the generic layers — parameterize them as '
             '<marca>/<ciudad>/<slug> (see CLAUDE.md):\n  ' + '\n  '.join(leaks)
         )
 

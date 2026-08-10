@@ -12,7 +12,7 @@
  * render entry point accepts nothing else.
  */
 
-import { isInsideBBox, isPlaceable, type BBox } from "./geo.js";
+import { isInsideBBox, type BBox } from "./geo.js";
 import type { ReelInput, ReelItem, VerifiedReelItem } from "./types.js";
 
 export interface Period {
@@ -72,12 +72,6 @@ function rejectionReason(
   }
   if (!isInsideBBox(bbox, item.lat, item.lng)) {
     return `coordinate (${item.lat}, ${item.lng}) falls outside map.bbox`;
-  }
-  if (!isPlaceable(bbox, item.lat, item.lng)) {
-    return (
-      `coordinate (${item.lat}, ${item.lng}) sits too close to the edge of map.bbox to be centred ` +
-      `without the map leaving a gap — widen map.bbox so this location is not on its border`
-    );
   }
 
   // The host check applies to remote images only. A local path under the
