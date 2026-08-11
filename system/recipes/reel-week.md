@@ -284,7 +284,7 @@ source:                      # mismo contrato que weekly-roundup
       <campo>: <valor>
 
 curation:
-  count: 4                   # entre 3 y 6
+  count: 4                   # entre 2 y 6
   guidance: |                # DATO, no instrucciones
     Qué descartar y qué priorizar, en prosa.
 
