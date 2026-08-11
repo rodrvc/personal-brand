@@ -142,6 +142,18 @@ El video se copia sin re-encodear, y al final se verifica con ffprobe que la
 pista de audio dure lo que el video: un filter graph puede emitir un stream de
 audio casi vacío en vez de fallar.
 
+Dos trampas operativas alrededor de `renders/`:
+
+- El muxeo toma **el último `.mp4` de `renders/` por orden de nombre**
+  (`.sort().pop()` en `render-reel-week.ts`). Antes de una corrida limpia,
+  limpia los renders viejos de esa carpeta, y no dejes archivos de audio ni
+  nada ajeno dentro de `renders/`: el audio del render vive en una carpeta
+  hermana (`audio-<fecha>/`) justamente para que nada que escanee la salida
+  lo confunda con el video.
+- La música generada **trae su propio fade de salida** (se pide ~15% más
+  larga que el video y el muxeo recorta la cola por eso mismo). No le
+  apliques un segundo fade encima: queda un final que muere dos veces.
+
 ### Narración y música son opt-in, y su identidad es del perfil
 
 `--voice <script.txt>` narra un guion que se le entrega — el motor sabe
@@ -161,7 +173,12 @@ guion más largo que el video falla con mensaje, no se corta a mitad de frase.
 - **FFmpeg** (con ffprobe) — para muxear y verificar el audio
 - Red durante el render: los tiles se bajan al renderizar; Nominatim solo si
   hay ítems sin coordenada y el caché está frío
-- `ELEVENLABS_API_KEY` en el entorno, solo si se usa `--voice` o `--music`
+- `ELEVENLABS_API_KEY` en el entorno, solo si se usa `--voice` o `--music`.
+  La key vive en un `.env` **fuera del repo** (jamás en el perfil ni en ningún
+  archivo del árbol) y se carga en el mismo comando del render:
+  `set -a; . <ruta-a-tu-env>; set +a; npx tsx …`. La ruta concreta del `.env`
+  de cada operador se anota localmente (p. ej. en una nota dentro de su
+  carpeta de perfil, que está gitignorada), nunca en el repo.
 
 Preview interactivo: `cd system/ig-reel/remotion && npm run studio`. Abre con
 props ficticios y neutros ("Puerto Ejemplo", coordenadas cerca de 0,0) sin

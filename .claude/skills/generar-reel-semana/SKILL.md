@@ -19,7 +19,7 @@ perfil resuelto. Cuatro capas, y esta skill es la última:
 
 | Capa | Qué aporta |
 |---|---|
-| `system/ig-reel/` | motor de render (HyperFrames + GSAP → MP4), sin literales de marca |
+| `system/ig-reel/` | motor de render (Remotion + MapLibre GL, tiles CARTO con atribución obligatoria → MP4), sin literales de marca |
 | `system/recipes/reel-week.md` | el flujo: etapas, orden, inputs exigidos, enums cerrados |
 | el perfil resuelto | tokens, config y el recipe que llena los huecos |
 | esta skill | resuelve el perfil y ejecuta el recipe |
@@ -80,7 +80,8 @@ Si el perfil **no tiene** `recipes/reel-week.yaml`: no improvises los huecos ni
 los copies de otro perfil. Dilo, y ofrece crearlo con el usuario usando
 `system/recipes/reel-week.md` como lista de lo que hay que llenar. Lo que casi
 siempre falta y hay que preguntar es el bloque `map`: el **bbox** de la ciudad
-y qué **tipos** de referencia quiere (`mall`, `hospital`, `stadium`…).
+(máx. 0.5° por lado). `map.zones` y `map.reference_types` son del renderer
+anterior: se aceptan con warning y se ignoran — no los pidas ni los inventes.
 
 Si al `brand.json` le falta `copy.reel` o `gradients.cover`, el motor **falla al
 cargar nombrando la clave exacta**. No lo parchees desde acá: agrégalas al
@@ -115,28 +116,28 @@ que no puedan divergir.
 
 ## Cuántos ítems, y por qué el motor te va a decir que no
 
-`curation.count` va entre **3 y 6**, y el motor lo rechaza fuera de ese rango.
+`curation.count` va entre **2 y 6**, y el motor lo rechaza fuera de ese rango.
 No es estética: cada ítem suma 5 segundos, y el video se pasa del largo que un
 reel sostiene. Con 4 ítems dura ~24s.
 
 ## Sobre la red: no la pelees
 
-El motor consulta OpenStreetMap (Overpass) para dibujar el mapa, y ese servicio
-público **se cae seguido** — devuelve 504 o HTML de error en vez de JSON.
+El mapa se dibuja con **tiles CARTO descargados durante el render**; la única
+consulta geográfica es **Nominatim**, y solo para los ítems que llegan sin
+coordenada. Ambas cosas fallan distinto y ninguna se pelea:
 
-Todo pasa por un caché en disco (`<repo>/.cache/`), así que una segunda corrida
-de la misma semana no hace ni un request. Pero la primera sí depende de que
-Overpass responda.
-
-Si falla:
-
-- **No entres en un bucle de reintentos ciegos.** El motor ya reintenta con
-  espera y prueba dos endpoints.
-- Si hay una entrada de caché vencida, el motor la usa y lo anuncia. Eso no es
-  un error: es la degradación anunciada funcionando.
-- Si no hay nada, dile al usuario que Overpass está caído y que se reintenta
-  más tarde. Es un servicio ajeno, no un bug del repo.
-- `--no-cache` fuerza datos frescos. Úsalo solo si el usuario lo pide.
+- **Nominatim** pasa por un caché en disco (`<repo>/.cache/`, TTL 180 días):
+  re-correr la misma semana cuesta cero requests. Si está caído y no hay
+  caché, dile al usuario que se reintenta más tarde — es un servicio ajeno,
+  no un bug del repo. Una entrada vencida se usa con aviso si la red falla:
+  eso es la degradación anunciada funcionando, no un error.
+- **Tiles que no llegan** no cuelgan el render: cada frame espera sus tiles
+  con un timeout de 1.2s y sigue. Una red mala se paga en tiempo de render
+  (y en algún tile gris), nunca en un proceso colgado.
+- **No entres en un bucle de reintentos ciegos.** Si algo falla, el mensaje
+  del motor dice qué; repórtalo tal cual.
+- `--no-cache` fuerza datos frescos de Nominatim. Úsalo solo si el usuario
+  lo pide.
 
 ## Reglas del flujo (no las anula ningún perfil)
 
