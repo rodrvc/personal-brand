@@ -11,7 +11,7 @@ import { Composition } from 'remotion';
 
 import { Reel } from './Reel';
 import type { ReelProps } from './props';
-import { CANVAS_HEIGHT, CANVAS_WIDTH, FPS, totalFrames } from './timeline';
+import { CANVAS_HEIGHT, CANVAS_WIDTH, FPS, scenesFor, totalFrames, totalFramesOf } from './timeline';
 import { MAP_ATTRIBUTION } from './maplibre';
 
 const defaultProps: ReelProps = {
@@ -83,7 +83,9 @@ export const RemotionRoot: React.FC = () => (
     durationInFrames={totalFrames(defaultProps.items.length)}
     defaultProps={defaultProps}
     calculateMetadata={({ props }) => ({
-      durationInFrames: totalFrames(props.items.length),
+      // Scenes, when the Node side derived them from a storyboard; the fixed
+      // rhythm otherwise — the same frame count as before scenes existed.
+      durationInFrames: totalFramesOf(scenesFor(props.items.length, props.scenes)),
     })}
   />
 );

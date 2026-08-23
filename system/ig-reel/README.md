@@ -9,6 +9,7 @@ ni una taxonomía**. Todo eso llega desde `profiles/<slug>/`.
 
 ```
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> [--date YYYY-MM-DD]
+                                           [--storyboard [ruta]] [--audio-only]
                                            [--voice <script.txt>] [--music]
 ```
 
@@ -24,6 +25,7 @@ Contrato de datos de marca: `system/config/brand.schema.md`.
 | `brand.json` | Colores, tipografías, categorías y `copy.reel` + `gradients.cover` |
 | `recipes/reel-week.yaml` | Fuente, curaduría, `map.bbox`, y opcionalmente `voice:` y `music:` |
 | `reels/week-input.json` | Los ítems ya curados, con fecha, coordenada e imagen |
+| `reels/<fecha>/storyboard.yaml` | Opcional: la narración por tarjeta (ver "Storyboard: audio primero") |
 | `assets/fonts/*.woff2` | Opcional: la fuente de logo, embebida para que preview y render coincidan |
 
 El mismo `brand.json` que consume el carrusel. No hay un segundo archivo de
@@ -50,9 +52,10 @@ lee y los aplana a ese shape. Todo el vocabulario de marca queda del lado Node.
 | `verify-items.ts` | El guard previo al render |
 | `recipe.ts` | Carga y valida `recipes/reel-week.yaml` |
 | `voice.ts` | ElevenLabs: narración TTS y cama musical, ambas opt-in |
+| `storyboard.ts` | Carga y valida el storyboard, sintetiza por tarjeta con caché, deriva la timeline |
 | `render-reel-week.ts` | Entrypoint: geocodifica, verifica, arma props, renderiza y muxea |
 | `reel.test.ts` | Tests de guards, timeline y recipe |
-| `remotion/src/timeline.ts` | Tiempos de escena y matemática de cámara — funciones puras, testeadas |
+| `remotion/src/timeline.ts` | Escenas (fijas o derivadas del audio) y matemática de cámara — funciones puras, testeadas |
 | `remotion/src/maplibre.ts` | MapLibre bajo el reloj de Remotion, estilo de tiles y atribución |
 | `remotion/src/Reel.tsx` | La composición: portada, escenas de mapa+ítem, cierre |
 
@@ -165,6 +168,107 @@ narración encima la cama suena entera durante `intro_seconds` y luego se
 atenúa a `gain_db`, y la voz se normaliza (loudnorm) antes de mezclar. Un
 guion más largo que el video falla con mensaje, no se corta a mitad de frase.
 
+### Storyboard: audio primero
+
+**El problema que resuelve.** Con `--voice` el guion es un solo texto → un
+solo MP3 → se pone encima de un video cuyas escenas duran lo que dicen las
+constantes de `timeline.ts`. Nada une la frase N con la escena N, así que la
+voz se desfasa siempre: el narrador habla del tercer plan mientras la cámara
+todavía vuela al segundo.
+
+**La solución.** Un storyboard por tarjetas: cada escena es una tarjeta, y la
+tarjeta lleva su narración. El motor sintetiza **un MP3 por tarjeta**, lo
+mide con ffprobe y deriva la duración de cada escena de su propio audio:
+"audio primero, video después". La estructura se respeta por construcción —
+una escena no puede terminar antes de que acabe su frase porque la escena
+dura lo que dura la frase.
+
+**Dónde vive.** `profiles/<slug>/reels/<YYYY-MM-DD>/storyboard.yaml`; la
+fecha es el lunes del período, la misma que sale de `--date`. Es dato del
+perfil (gitignorado con él); el ejemplo ficticio está en
+`profiles/example/reels/<fecha>/storyboard.yaml`. Si el archivo existe para
+ese período, el render lo usa solo; `--storyboard <ruta>` apunta a otro.
+`--voice` y storyboard son excluyentes: uno fija los tiempos de las escenas y
+el otro pone un guion encima de los tiempos fijos; pasar los dos es error.
+
+**Contrato:**
+
+```yaml
+storyboard: reel
+version: 1
+voice:            # opcional: override parcial del bloque voice: del recipe
+  speed: 1.05
+cards:
+  - id: cover     # slug único
+    visual: cover # enum cerrado: cover | item | closing
+    narration: "lo que dice el narrador en esta tarjeta"
+  - id: item-1
+    visual: item
+    item: 0       # índice en reels/week-input.json; obligatorio y único por item
+    narration: "..."
+    min_seconds: 5.0   # opcional: piso de la escena (nunca bajo el mínimo del motor)
+  - id: closing
+    visual: closing
+    narration: ""      # vacío = tarjeta muda (0s de voz, la escena dura su mínimo)
+```
+
+Falla **al cargar**, nombrando la tarjeta: `storyboard`/`version` exactos,
+ids únicos, `visual` en el enum, exactamente una `cover` al inicio y una
+`closing` al final, entre 2 y 6 `item`, cada `item` con un índice válido y
+distinto, claves desconocidas, `narration` ausente (vacía sí se permite).
+**El orden de las escenas lo fija el storyboard**, no `week-input.json`: el
+reel muestra los ítems en el orden de las tarjetas `item`.
+
+**Presupuesto de palabras** (constantes del motor, no del perfil): cover
+4–15, item 8–30, closing 4–15. Fuera de rango falla con el conteo real
+(`card item-2: 41 words, max 30 for visual=item`). Es lo que mantiene una
+escena derivada dentro del largo que el formato sostiene.
+
+Validar sin red, sin key y sin ffmpeg — imprime siempre la tabla
+id / visual / palabras:
+
+```
+npx tsx system/ig-reel/storyboard.ts --check profiles/<slug>/reels/<fecha>/storyboard.yaml \
+                                     --items profiles/<slug>/reels/week-input.json
+```
+
+**Síntesis por tarjeta y caché por contenido.** Cada tarjeta se sintetiza a
+`profiles/<slug>/reels/<fecha>/audio/<card-id>.mp3` con la voz efectiva
+(recipe + override). Al lado queda un sidecar `<card-id>.json` con el sha256
+de (texto normalizado + voice config efectiva + model_id) y la duración
+medida. Si el hash coincide y el MP3 existe, **no se llama a la API**: editar
+una tarjeta re-sintetiza solo esa; cambiar la voz re-sintetiza todas.
+
+**La timeline derivada.** Por tipo de tarjeta, con `RESPIRO = 0.4s`
+(`BREATH_SECONDS`, el silencio tras la frase para que el corte no caiga en la
+última sílaba):
+
+| Tarjeta | Duración |
+|---|---|
+| cover | `max(2.2, voz + respiro)` |
+| item | `max(1.8 + 3.2, voz + respiro, min_seconds)` — el vuelo de mapa sigue fijo en 1.8s (cámara 1.2s); el tiempo extra va al hold de la tarjeta de ítem, nunca al vuelo; la narración arranca con el vuelo |
+| closing | `max(2.0, voz + respiro)` |
+
+Solape/cross-fade igual que antes. Con `--music`, `intro_seconds` desplaza
+la narración de la portada **dentro de la portada** (la portada crece para
+contenerla), así cada tarjeta posterior sigue arrancando exacto con su
+escena. La timeline se escribe en `profiles/<slug>/reels/<fecha>/timeline.json`
+(por tarjeta: id, visual, item, palabras, segundos de voz, inicio, duración;
+y el total) y se imprime legible en consola.
+
+**`--audio-only`** se detiene ahí: sintetiza, imprime la tabla, abre la
+carpeta de audio con `open` y no renderiza. Es el paso para *escuchar* las
+tarjetas antes de pagar el render. Sin el flag, el render recibe las escenas
+ya resueltas (`ReelProps.scenes`), y la pista de narración se arma
+concatenando los MP3 con `adelay` al inicio de cada tarjeta; luego el mux es
+el mismo de siempre (loudnorm, cama, verificación con ffprobe). El guard
+"narración más larga que el video" no aplica con storyboard: el video se
+ajusta a la voz. Sigue vigente para `--voice`.
+
+**Sin storyboard no cambia nada.** `ReelProps.scenes` es opcional; si no
+viene, la composición calcula las escenas con los tiempos fijos y el output
+es idéntico al anterior, frame a frame.
+
 ---
 
 ## Requisitos
@@ -174,11 +278,10 @@ guion más largo que el video falla con mensaje, no se corta a mitad de frase.
 - Red durante el render: los tiles se bajan al renderizar; Nominatim solo si
   hay ítems sin coordenada y el caché está frío
 - `ELEVENLABS_API_KEY` en el entorno, solo si se usa `--voice` o `--music`.
-  La key vive en un `.env` **fuera del repo** (jamás en el perfil ni en ningún
-  archivo del árbol) y se carga en el mismo comando del render:
-  `set -a; . <ruta-a-tu-env>; set +a; npx tsx …`. La ruta concreta del `.env`
-  de cada operador se anota localmente (p. ej. en una nota dentro de su
-  carpeta de perfil, que está gitignorada), nunca en el repo.
+  La key vive en `<repo>/.env` (gitignorado; hay `.env.example` en la raíz que
+  Orca copia a cada worktree vía `.worktreeinclude`). El motor la carga
+  automáticamente. Si la key ya está en el entorno (p. ej. exportada en el
+  shell), el entorno gana sobre el archivo.
 
 Preview interactivo: `cd system/ig-reel/remotion && npm run studio`. Abre con
 props ficticios y neutros ("Puerto Ejemplo", coordenadas cerca de 0,0) sin

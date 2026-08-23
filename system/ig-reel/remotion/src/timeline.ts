@@ -29,7 +29,8 @@ export const TIMING = {
  * stays visible past `TIMING.cover` so it overlaps the first map scene's
  * fade-in instead of cutting to it.
  */
-export const COVER_EXIT = TIMING.cover + 0.6;
+export const COVER_EXIT_TAIL = 0.6;
+export const COVER_EXIT = TIMING.cover + COVER_EXIT_TAIL;
 
 /**
  * Street-level zoom the camera arrives at over each item. City-independent:
@@ -90,6 +91,95 @@ export const lerp = (from: number, to: number, progress: number): number =>
 /** Ease-out quint — numerically close to cubic-bezier(0.22, 1, 0.36, 1). */
 export const easeOut = (value: number): number => 1 - (1 - clamp01(value)) ** 5;
 
+/**
+ * Pause left after a card's narration before the next scene starts, in
+ * seconds. A scene driven by its audio must not cut on the last syllable:
+ * the breath is what makes a derived duration read as edited rather than
+ * truncated. Engine-owned, like every other timing here.
+ */
+export const BREATH_SECONDS = 0.4;
+
+export type SceneKind = 'cover' | 'item' | 'closing';
+
+/**
+ * What a scene needs before its timing can be derived. Produced on the Node
+ * side from the storyboard (narration measured with ffprobe) or by
+ * `defaultScenes()` when there is no storyboard.
+ */
+export interface SceneSpec {
+  kind: SceneKind;
+  /** Index into `ReelProps.items`. Required for `item`, absent otherwise. */
+  itemIndex?: number;
+  /** Measured length of this scene's narration, in seconds. 0 / absent = mute. */
+  narrationSeconds?: number;
+  /** Profile-requested floor for the scene; never below the engine minimum. */
+  minSeconds?: number;
+}
+
+/** A scene with its place on the timeline resolved, in seconds. */
+export interface Scene extends SceneSpec {
+  start: number;
+  duration: number;
+  /** `start + duration`: where the next scene begins. */
+  end: number;
+}
+
+/** The engine's floor for each scene kind — the fixed rhythm of a reel without a storyboard. */
+export const minSceneSeconds = (kind: SceneKind): number =>
+  kind === 'cover' ? TIMING.cover : kind === 'closing' ? TIMING.closing : TIMING.map + TIMING.item;
+
+/**
+ * How long a scene lasts: the engine floor, or the narration plus a breath,
+ * or the requested floor — whichever is longest. An item's extra time goes to
+ * the card hold, never to the camera move (see `CAMERA_MOVE_SECONDS`).
+ */
+export const sceneDuration = (spec: SceneSpec): number =>
+  Math.max(
+    minSceneSeconds(spec.kind),
+    (spec.narrationSeconds ?? 0) > 0 ? (spec.narrationSeconds ?? 0) + BREATH_SECONDS : 0,
+    spec.minSeconds ?? 0,
+  );
+
+/** The scene list a reel gets with no storyboard: every scene at its floor. */
+export const defaultScenes = (count: number): SceneSpec[] => [
+  { kind: 'cover' },
+  ...Array.from({ length: count }, (_, itemIndex): SceneSpec => ({ kind: 'item', itemIndex })),
+  { kind: 'closing' },
+];
+
+/** Lays the scenes end to end: each starts where the previous one ends. */
+export function resolveScenes(specs: readonly SceneSpec[]): Scene[] {
+  let cursor = 0;
+  return specs.map((spec) => {
+    const duration = sceneDuration(spec);
+    const scene: Scene = { ...spec, start: cursor, duration, end: cursor + duration };
+    cursor += duration;
+    return scene;
+  });
+}
+
+/** The scenes a reel runs: the ones it was handed, or the fixed default rhythm. */
+export const scenesFor = (count: number, scenes?: readonly Scene[]): readonly Scene[] =>
+  scenes && scenes.length > 0 ? scenes : resolveScenes(defaultScenes(count));
+
+export const itemScenes = (scenes: readonly Scene[]): Scene[] =>
+  scenes.filter((scene) => scene.kind === 'item');
+
+export const coverScene = (scenes: readonly Scene[]): Scene | undefined =>
+  scenes.find((scene) => scene.kind === 'cover');
+
+export const closingScene = (scenes: readonly Scene[]): Scene | undefined =>
+  scenes.find((scene) => scene.kind === 'closing');
+
+export const totalSecondsOf = (scenes: readonly Scene[]): number =>
+  scenes.length === 0 ? 0 : scenes[scenes.length - 1]!.end;
+
+export const totalFramesOf = (scenes: readonly Scene[]): number =>
+  Math.round(totalSecondsOf(scenes) * FPS);
+
+// --- the fixed-rhythm shortcuts: what every reel ran before storyboards ---
+// Kept as the default and as the oracle the tests compare the scene list to.
+
 export const mapStart = (index: number): number =>
   TIMING.cover + index * (TIMING.map + TIMING.item);
 
@@ -102,12 +192,16 @@ export const totalSeconds = (count: number): number => closingStart(count) + TIM
 
 export const totalFrames = (count: number): number => Math.round(totalSeconds(count) * FPS);
 
-/** Which item's map the camera is flying towards at this moment. */
-export const activeItemIndex = (seconds: number, count: number): number => {
-  for (let i = count - 1; i >= 0; i -= 1) {
-    if (seconds >= mapStart(i)) return i;
+/**
+ * Which item's map the camera is flying towards at this moment — the index
+ * into `ReelProps.items` of the item scene that started most recently.
+ */
+export const activeItemIndex = (seconds: number, count: number, scenes?: readonly Scene[]): number => {
+  const items = itemScenes(scenesFor(count, scenes));
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (seconds >= items[i]!.start) return items[i]!.itemIndex ?? i;
   }
-  return 0;
+  return items[0]?.itemIndex ?? 0;
 };
 
 /**
@@ -124,13 +218,25 @@ export function cameraAt(
   seconds: number,
   wide: WideFraming,
   targets: CameraTarget[],
+  scenes?: readonly Scene[],
 ): Camera {
   if (targets.length === 0) {
     throw new Error('ReelProps.items is empty — nothing to render');
   }
-  const active = activeItemIndex(seconds, targets.length);
-  const target = targets[active]!;
-  const progress = easeOut((seconds - mapStart(active)) / CAMERA_MOVE_SECONDS);
+  const resolved = scenesFor(targets.length, scenes);
+  const items = itemScenes(resolved);
+  let activeScene = items[0]!;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (seconds >= items[i]!.start) {
+      activeScene = items[i]!;
+      break;
+    }
+  }
+  const target = targets[activeScene.itemIndex ?? 0];
+  if (!target) {
+    throw new Error(`Scene points at item ${activeScene.itemIndex} but there are ${targets.length} items`);
+  }
+  const progress = easeOut((seconds - activeScene.start) / CAMERA_MOVE_SECONDS);
   const [lonSpan, latSpan] = wide.span;
 
   return {

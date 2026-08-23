@@ -197,7 +197,7 @@ ninguna taxonomía.
 
 #### Los tiempos son del motor, no del perfil
 
-| Tramo | Duración |
+| Tramo | Duración mínima |
 |---|---|
 | Portada | 2.2s |
 | Transición de mapa (por ítem) | 1.8s |
@@ -206,21 +206,68 @@ ninguna taxonomía.
 
 Con solape de 0.35s entre escenas para el cross-fade. Un perfil **no** los
 declara: son ritmo de edición ya validado contra el formato, no identidad de
-marca. Si algún día se parametrizan, van con rangos acotados, no libres.
+marca. Sin storyboard (etapa 7b) son los tiempos exactos; con storyboard son
+el **piso**, y cada escena crece hasta contener su propia narración más un
+respiro de 0.4s. El vuelo de mapa no crece nunca: el tiempo extra va al hold
+de la tarjeta de ítem.
+
+### 7b. Escribir y validar el storyboard (narración por tarjeta)
+
+Opcional, y **la única forma de narrar sin desfase**. Si el reel lleva voz,
+esta etapa reemplaza al guion único de `--voice`: se escribe
+`<perfil>/reels/<fecha>/storyboard.yaml` (la fecha es el lunes del período,
+la que imprime la etapa 3) con una tarjeta por escena y la narración de cada
+una. Contrato completo en `system/ig-reel/README.md` → "Storyboard: audio
+primero"; ejemplo ficticio en `profiles/example/reels/<fecha>/storyboard.yaml`.
+
+Reglas del motor, falla en load nombrando la tarjeta:
+
+- `storyboard: reel`, `version: 1`; claves desconocidas → error.
+- Exactamente una tarjeta `cover` al inicio y una `closing` al final; entre
+  2 y 6 tarjetas `item`, cada una con un `item` (índice en
+  `week-input.json`) válido y distinto. **El orden de las tarjetas `item` es
+  el orden del reel.**
+- `narration` obligatoria (vacía = tarjeta muda). **Presupuesto de palabras**
+  del motor: cover 4–15, item 8–30, closing 4–15.
+- `voice:` opcional: override parcial del bloque `voice:` del recipe (mismos
+  campos, mismas cotas). El recipe sigue necesitando `voice_id`.
+
+Validar sin red ni key, y leer la tabla id / visual / palabras:
+
+```
+npx tsx system/ig-reel/storyboard.ts --check <perfil>/reels/<fecha>/storyboard.yaml \
+                                     --items <perfil>/reels/week-input.json
+```
+
+Después, **escuchar antes de renderizar**:
+
+```
+npx tsx system/ig-reel/<render.script>.ts --profile <slug> --date <fecha> --audio-only
+```
+
+Sintetiza un MP3 por tarjeta (caché por contenido: editar una tarjeta
+re-sintetiza solo esa), mide cada uno, escribe
+`<perfil>/reels/<fecha>/timeline.json` e imprime la timeline derivada (voz vs
+escena, inicio de cada tarjeta, total). Si una tarjeta suena mal, se corrige
+la narración y se repite; nada se renderiza hasta que el audio convence.
 
 ### 8. Renderizar
 
 ```
 npx tsx system/ig-reel/<render.script>.ts --profile <slug> [--date YYYY-MM-DD]
+                                          [--storyboard [ruta]] [--audio-only]
                                           [--voice <script.txt>] [--music]
 ```
 
 El script aplana marca + recipe + ítems verificados en los props del
 subproyecto Remotion (`system/ig-reel/remotion/`), renderiza con
 `--concurrency=1 --gl=swangle`, y **muxea siempre una pista de audio** (ver
-abajo). `--voice` narra un guion entregado (exige el bloque `voice:` del
-recipe) y `--music` agrega la cama descrita en `music:`; sin flags el reel
-sale con pista silenciosa. Lee la carpeta de salida
+abajo). Si existe el storyboard de la etapa 7b (o se pasa `--storyboard`),
+las escenas duran lo que su audio y la narración se arma tarjeta a tarjeta;
+`--voice` es el modo legado (un guion sobre los tiempos fijos) y es
+**excluyente** con el storyboard. Ambos exigen el bloque `voice:` del recipe.
+`--music` agrega la cama descrita en `music:`; sin flags el reel sale con
+pista silenciosa. Lee la carpeta de salida
 de la **última línea que imprime el script** ("Output folder: ..."). Nunca la
 adivines. Verifica el MP4 **abriéndolo**, no comprobando que el archivo existe.
 

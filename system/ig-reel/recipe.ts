@@ -81,8 +81,12 @@ export interface ReelRecipe {
 
 type Node = Record<string, unknown>;
 
-/** Parses the documented YAML subset into plain objects. */
-function parseYaml(text: string, path: string): Node {
+/**
+ * Parses the documented YAML subset into plain objects. Shared with the
+ * storyboard loader, which adds one shape to the recipe's: a block list of
+ * maps (`- id: x` followed by further keys at the same indent).
+ */
+export function parseYaml(text: string, path: string): Node {
   const root: Node = {};
   // Each frame owns the container at one indentation level.
   const stack: { indent: number; node: Node | unknown[] }[] = [{ indent: -1, node: root }];
@@ -103,7 +107,20 @@ function parseYaml(text: string, path: string): Node {
       if (!Array.isArray(parent)) {
         throw new Error(`${path}: list item at line ${i + 1} has no list to belong to.`);
       }
-      parent.push(scalar(content.slice(2).trim()));
+      const entry = content.slice(2).trim();
+      // `- key: value` opens a map inside the list; the keys that follow at
+      // the indent of `key` belong to it. The colon must be followed by a
+      // space (or end the line) so a bare URL stays a scalar.
+      const mapHead = /^([\w.-]+):(?:\s+(.*))?$/.exec(entry);
+      if (mapHead) {
+        const node: Node = {};
+        parent.push(node);
+        stack.push({ indent, node });
+        const [, key, rest] = mapHead;
+        node[key!] = scalar(rest ?? "");
+        continue;
+      }
+      parent.push(scalar(entry));
       continue;
     }
 
@@ -150,12 +167,14 @@ function parseYaml(text: string, path: string): Node {
 }
 
 function scalar(raw: string): unknown {
+  // A quoted string is taken whole: a `#` inside it is text, not a comment.
+  const quoted = /^(["'])(.*)\1(?:\s+#.*)?$/.exec(raw.trim());
+  if (quoted) return quoted[2];
   const value = raw.replace(/\s+#.*$/, "").trim();
   if (value.startsWith("[") && value.endsWith("]")) {
     const inner = value.slice(1, -1).trim();
     return inner ? inner.split(",").map((part) => scalar(part.trim())) : [];
   }
-  if (/^["'].*["']$/.test(value)) return value.slice(1, -1);
   if (value === "true") return true;
   if (value === "false") return false;
   if (value !== "" && !Number.isNaN(Number(value))) return Number(value);

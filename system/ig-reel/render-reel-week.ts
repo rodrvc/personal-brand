@@ -3,6 +3,7 @@
  *
  * Usage:
  *   npx tsx system/ig-reel/render-reel-week.ts --profile <slug> [--date YYYY-MM-DD]
+ *                                              [--storyboard [path]] [--audio-only]
  *                                              [--voice <script.txt>] [--music]
  *
  * The profile slug is required and never inferred: rendering the wrong brand
@@ -15,8 +16,12 @@
  * under the Remotion project's `public/`, invoke the render, and then mux the
  * audio. Everything brand-shaped stays on this side of the boundary.
  *
- * `--voice` points at a plain-text script to narrate. `--music` adds the bed
- * described by the profile. Without either the reel is rendered silent.
+ * `--storyboard` narrates one card per scene and derives each scene's length
+ * from its own audio ("audio first" — see storyboard.ts). It is the default
+ * whenever `profiles/<slug>/reels/<date>/storyboard.yaml` exists. `--voice`
+ * is the legacy single-script narration laid over the fixed rhythm; the two
+ * are exclusive. `--music` adds the bed described by the profile. Without any
+ * of them the reel is rendered silent, exactly as before storyboards existed.
  */
 
 import { execFileSync } from "node:child_process";
@@ -42,14 +47,27 @@ import {
 } from "../ig-carousel/brand-schema.js";
 import { resolveOutputBaseDir, resolveOutputSubfolder, resolveProfileDir } from "../ig-carousel/profile.js";
 import { validateBBox, wideFraming } from "./geo.js";
+import { loadDotEnv } from "./env.js";
 import { geocode } from "./osm.js";
 import { loadReelRecipe } from "./recipe.js";
 import type { ReelProps } from "./remotion/src/props.js";
+import {
+  buildTimeline,
+  defaultStoryboardPath,
+  effectiveVoice,
+  formatStoryboardTable,
+  formatTimelineTable,
+  loadStoryboard,
+  synthesiseCards,
+  type CardAudio,
+  type ReelTimeline,
+} from "./storyboard.js";
 import type { ReelInput } from "./types.js";
 import { verifyOrThrow, type Period } from "./verify-items.js";
 import { composeMusic, durationOf, synthesise } from "./voice.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(__dirname, "..", "..");
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -69,6 +87,11 @@ function weekOf(reference: Date): Period {
 }
 
 async function main(): Promise<void> {
+  const loaded = loadDotEnv(repoRoot);
+  if (loaded.length > 0) {
+    console.log(`env: loaded ${loaded.length} var(s) from .env`);
+  }
+
   const profile = flag("profile");
   if (!profile) {
     throw new Error("Missing --profile <slug>. The engine never guesses which brand to render.");
@@ -87,19 +110,43 @@ async function main(): Promise<void> {
 
   const scriptPath = flag("voice");
   const wantsMusic = process.argv.includes("--music");
-  // How long the bed plays alone before the narration comes in — what gives an
-  // opening fanfare room to land. Only meaningful when there is both a bed and
-  // a voice; 0 puts the narration on the first frame, as before.
-  const introSeconds = wantsMusic && scriptPath ? (recipe.music?.intro_seconds ?? 0) : 0;
-  const introMs = Math.round(introSeconds * 1000);
-  /** Length of the fade from full bed to ducked bed. */
-  const duckSeconds = 0.6;
+  const audioOnly = process.argv.includes("--audio-only");
   const dateFlag = flag("date");
   const reference = dateFlag ? new Date(`${dateFlag}T12:00:00`) : new Date();
   if (Number.isNaN(reference.getTime())) {
     throw new Error(`--date must be YYYY-MM-DD, got: ${dateFlag}`);
   }
   const period = weekOf(reference);
+
+  // The storyboard is on whenever the flag is passed or the profile's file
+  // for this period exists. It is exclusive with --voice: one of them decides
+  // the scene lengths, and a reel cannot follow two clocks.
+  const storyboardFlag = process.argv.indexOf("--storyboard");
+  const storyboardArg = storyboardFlag === -1 ? undefined : process.argv[storyboardFlag + 1];
+  const explicitStoryboard = storyboardArg && !storyboardArg.startsWith("--") ? resolve(storyboardArg) : undefined;
+  const storyboardPath =
+    explicitStoryboard
+    ?? (storyboardFlag !== -1 || existsSync(defaultStoryboardPath(profileDir, period.start))
+      ? defaultStoryboardPath(profileDir, period.start)
+      : undefined);
+  if (storyboardPath && scriptPath) {
+    throw new Error(
+      `--voice and the storyboard are exclusive: ${storyboardPath} would derive the scene lengths ` +
+        "from its cards, and --voice lays one script over the fixed rhythm. Drop --voice, " +
+        "or move the storyboard aside to render the legacy way.",
+    );
+  }
+  if (audioOnly && !storyboardPath) {
+    throw new Error("--audio-only needs a storyboard: it stops after the per-card narration and timeline.");
+  }
+
+  // How long the bed plays alone before the narration comes in — what gives an
+  // opening fanfare room to land. Only meaningful when there is both a bed and
+  // a voice; 0 puts the narration on the first frame, as before.
+  const narrated = Boolean(scriptPath || storyboardPath);
+  const introSeconds = wantsMusic && narrated ? (recipe.music?.intro_seconds ?? 0) : 0;
+  /** Length of the fade from full bed to ducked bed. */
+  const duckSeconds = 0.6;
 
   const inputPath = join(profileDir, "reels", "week-input.json");
   const input = JSON.parse(readFileSync(inputPath, "utf-8")) as ReelInput;
@@ -123,8 +170,66 @@ async function main(): Promise<void> {
   }
 
   console.log(`Verifying items against ${period.start}..${period.end}`);
-  const items = verifyOrThrow({ input, inputPath, bbox, period });
-  console.log(`  ${items.length} item(s) verified`);
+  const verified = verifyOrThrow({ input, inputPath, bbox, period });
+  console.log(`  ${verified.length} item(s) verified`);
+  let items = verified;
+
+  // --- storyboard: audio first, video after ---
+  // One MP3 per card (cached by content), measured, and a timeline derived
+  // from those lengths. The scene order follows the cards, not the input.
+  let timeline: ReelTimeline | undefined;
+  let cardAudio: CardAudio[] = [];
+  if (storyboardPath) {
+    if (!recipe.voice) {
+      throw new Error(
+        "A storyboard needs a `voice:` block in the profile's recipes/reel-week.yaml " +
+          "(voice_id at minimum): which voice a brand speaks in is a profile decision.",
+      );
+    }
+    console.log(`Storyboard: ${storyboardPath}`);
+    const storyboard = loadStoryboard(storyboardPath, input.items.length);
+    console.log(formatStoryboardTable(storyboard));
+
+    // Each item card points at week-input.json; the item it names must have
+    // survived verification, and the reel shows them in card order.
+    const ordered = storyboard.cards
+      .filter((card) => card.visual === "item")
+      .map((card) => {
+        const source = input.items[card.item!]!;
+        const kept = verified.find((item) => item === source);
+        if (!kept) {
+          throw new Error(
+            `card ${card.id} points at item ${card.item} (${JSON.stringify(source.title)}), ` +
+              "which did not survive verification — see the reasons above. Fix the item or drop the card.",
+          );
+        }
+        return kept;
+      });
+    items = ordered;
+
+    const voice = effectiveVoice(recipe.voice, storyboard.voice);
+    const cardsAudioDir = join(dirname(storyboardPath), "audio");
+    console.log("Synthesising the narration, one card at a time…");
+    cardAudio = await synthesiseCards(storyboard, voice, cardsAudioDir, { report: console.log });
+
+    timeline = buildTimeline(storyboard, cardAudio, introSeconds);
+    const timelinePath = join(dirname(storyboardPath), "timeline.json");
+    writeFileSync(timelinePath, JSON.stringify({ cards: timeline.cards, total: timeline.total }, null, 2));
+    console.log("\nTimeline (derived from the audio):");
+    console.log(formatTimelineTable(timeline));
+    console.log(`  written to ${timelinePath}`);
+
+    if (audioOnly) {
+      console.log("\n--audio-only: stopping before the render. Listen to the cards, then render without the flag.");
+      try {
+        execFileSync("open", [cardsAudioDir], { stdio: "ignore" });
+      } catch {
+        // Not macOS, or no opener: the path was printed above.
+      }
+      console.log(`Output folder: ${resolve(cardsAudioDir)}`);
+      return;
+    }
+  }
 
   const outputDir = join(
     resolveOutputBaseDir(profileDir),
@@ -205,8 +310,9 @@ async function main(): Promise<void> {
     // owned: no profile field turns it off.
     attribution: "© OpenStreetMap contributors © CARTO",
     // Framed on the verified items, not on the bbox: the bbox is the filter's
-    // territory, and in a coastal city its midpoint is open water.
-    map: wideFraming(bbox, items.map(({ lat, lng }) => ({ lat, lng }))),
+    // territory, and in a coastal city its midpoint is open water. All the
+    // verified items, even when a storyboard shows a subset of them.
+    map: wideFraming(bbox, verified.map(({ lat, lng }) => ({ lat, lng }))),
     items: items.map((item, index) => {
       const style = categoryStyle(brand, item.category);
       return {
@@ -221,6 +327,8 @@ async function main(): Promise<void> {
         lat: item.lat,
       };
     }),
+    // Absent without a storyboard: the composition runs its fixed rhythm.
+    scenes: timeline?.scenes,
   };
 
   const propsPath = join(outputDir, "reel-props.json");
@@ -270,7 +378,42 @@ async function main(): Promise<void> {
   // Narration is opt-in and never inferred: the engine speaks a script it is
   // handed, and a reel with no --voice renders exactly as it did before.
   let voicePath: string | undefined;
-  if (scriptPath) {
+  // How far the mux delays the narration track. The legacy script is delayed
+  // by the music intro here; a storyboard track already carries the intro
+  // inside the cover (see buildTimeline), so it is placed at 0.
+  let voiceDelayMs = Math.round(introSeconds * 1000);
+  if (timeline) {
+    const spoken = timeline.cards
+      .map((card, index) => ({ card, audio: cardAudio[index]! }))
+      .filter(({ audio }) => audio.path);
+    if (spoken.length > 0) {
+      voicePath = join(audioDir, `narration-${period.start}.wav`);
+      voiceDelayMs = 0;
+      console.log("Laying the cards on the narration track…");
+      // Each card's MP3 is delayed to its scene start (plus the cover's intro
+      // offset) and the delayed copies are summed. Cards never overlap — each
+      // scene lasts at least its own narration — so the sum is a concat with
+      // silences, and `normalize=0` keeps the level of each card intact.
+      const inputs = spoken.flatMap(({ audio }) => ["-i", audio.path!]);
+      const delays = spoken
+        .map(({ card }, index) => {
+          const ms = Math.round((card.start + card.narrationOffset) * 1000);
+          return `[${index}:a]aresample=44100,aformat=channel_layouts=stereo,adelay=${ms}|${ms}[c${index}]`;
+        })
+        .join(";");
+      const labels = spoken.map((_, index) => `[c${index}]`).join("");
+      const graph =
+        spoken.length === 1
+          ? `${delays};[c0]anull[voz]`
+          : `${delays};${labels}amix=inputs=${spoken.length}:duration=longest:dropout_transition=0:normalize=0[voz]`;
+      execFileSync(
+        "ffmpeg",
+        ["-y", ...inputs, "-filter_complex", graph, "-map", "[voz]", "-c:a", "pcm_s16le", voicePath],
+        { stdio: ["ignore", "ignore", "inherit"] },
+      );
+      console.log(`  narration: ${durationOf(voicePath).toFixed(1)}s over ${timeline.total.toFixed(1)}s of video`);
+    }
+  } else if (scriptPath) {
     if (!recipe.voice) {
       throw new Error(
         "--voice needs a `voice:` block in the profile's recipes/reel-week.yaml " +
@@ -356,7 +499,7 @@ async function main(): Promise<void> {
       // `adelay` comes BEFORE `loudnorm`, not after. Reversed, the two-pass
       // normaliser emits timestamps the muxer cannot use and the output gets a
       // 0.04s audio stream — a silent video that still probes as having sound.
-      `[1:a]adelay=${introMs}|${introMs},loudnorm=I=-16:TP=-1.5:LRA=11,apad[voz];` +
+      `[1:a]adelay=${voiceDelayMs}|${voiceDelayMs},loudnorm=I=-16:TP=-1.5:LRA=11,apad[voz];` +
         // The duck is a cross-fade between the full-strength bed and a ducked
       // copy of itself, rather than a time-varying `volume` expression: nested
       // `if()` in `volume:eval=frame` produced a 0.04s audio stream instead of

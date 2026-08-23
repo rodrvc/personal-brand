@@ -23,18 +23,20 @@ import {
 import { MAP_ATTRIBUTION, useMapLibre } from './maplibre';
 import type { ReelProps, ReelPropsItem } from './props';
 import {
-  COVER_EXIT,
+  COVER_EXIT_TAIL,
   LABEL_IN_SECONDS,
   PIN_DROP_SECONDS,
   PIN_SETTLE_SECONDS,
   TIMING,
   cameraAt,
   clamp01,
-  closingStart,
-  itemStart,
+  closingScene,
+  coverScene,
+  itemScenes,
   lerp,
-  mapStart,
   opacityBetween,
+  scenesFor,
+  type Scene,
 } from './timeline';
 import './style.css';
 
@@ -73,9 +75,16 @@ const Pin: React.FC<{ progress: number; visible: boolean; accent: string }> = ({
   </div>
 );
 
-const Cover: React.FC<{ seconds: number; copy: ReelProps['copy'] }> = ({ seconds, copy }) => {
+const Cover: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy'] }> = ({
+  seconds,
+  scene,
+  copy,
+}) => {
+  // The rise runs over the engine's cover rhythm, not over a narration-
+  // stretched duration: a longer cover holds the settled frame, it does not
+  // slow the motion down.
   const rise = clamp01(seconds / TIMING.cover);
-  const textEnd = COVER_EXIT;
+  const textEnd = scene.end + COVER_EXIT_TAIL;
 
   return (
     <AbsoluteFill className="reelCover">
@@ -126,13 +135,15 @@ const Cover: React.FC<{ seconds: number; copy: ReelProps['copy'] }> = ({ seconds
 
 const MapScene: React.FC<{
   item: ReelPropsItem;
-  index: number;
+  scene: Scene;
   seconds: number;
   fps: number;
   accent: string;
   attribution: string;
-}> = ({ item, index, seconds, fps, accent, attribution }) => {
-  const start = mapStart(index);
+}> = ({ item, scene, seconds, fps, accent, attribution }) => {
+  // The camera move is fixed-length whatever the scene lasts: narration time
+  // goes to the item card's hold, never to the flight.
+  const start = scene.start;
   const pinProgress = spring({
     frame: Math.round((seconds - start - PIN_DROP_SECONDS) * fps),
     fps,
@@ -161,21 +172,25 @@ const MapScene: React.FC<{
   );
 };
 
-const EventSlide: React.FC<{ item: ReelPropsItem; index: number; seconds: number; wordmark: string }> = ({
-  item,
-  index,
-  seconds,
-  wordmark,
-}) => {
-  const start = itemStart(index);
-  const local = clamp01((seconds - start) / TIMING.item);
+const EventSlide: React.FC<{
+  item: ReelPropsItem;
+  index: number;
+  scene: Scene;
+  seconds: number;
+  wordmark: string;
+}> = ({ item, index, scene, seconds, wordmark }) => {
+  const start = scene.start + TIMING.map;
+  // The card holds for whatever the scene has left after the map: the engine
+  // minimum, or longer when the narration needs it.
+  const hold = scene.duration - TIMING.map;
+  const local = clamp01((seconds - start) / hold);
   // Ken Burns: alternate the drift direction per item so the cut feels edited.
   const imageScale = index % 2 === 0 ? lerp(1, 1.16, local) : lerp(1.16, 1, local);
 
   return (
     <AbsoluteFill
       className="reelEvent"
-      style={{ opacity: opacityBetween(seconds, start, start + TIMING.item + TIMING.overlap) }}
+      style={{ opacity: opacityBetween(seconds, start, start + hold + TIMING.overlap) }}
     >
       <div className="reelPosterZone">
         <Img
@@ -201,17 +216,18 @@ const EventSlide: React.FC<{ item: ReelPropsItem; index: number; seconds: number
   );
 };
 
-const Closing: React.FC<{ seconds: number; start: number; copy: ReelProps['copy'] }> = ({
+const Closing: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy'] }> = ({
   seconds,
-  start,
+  scene,
   copy,
 }) => {
+  const start = scene.start;
   const local = seconds - start;
 
   return (
     <AbsoluteFill
       className="reelClose"
-      style={{ opacity: opacityBetween(seconds, start, start + TIMING.closing) }}
+      style={{ opacity: opacityBetween(seconds, start, scene.end) }}
     >
       <div className="reelCloseWrap">
         <span className="reelCloseWord" style={{ opacity: opacityBetween(local, 0.1, 3, 0.6) }}>
@@ -257,9 +273,15 @@ export const Reel: React.FC<ReelProps> = (props) => {
   // empty or whitespace attribution falls back to the engine's MAP_ATTRIBUTION.
   const attribution = props.attribution.trim() || MAP_ATTRIBUTION;
 
+  // Without a storyboard this is the fixed rhythm — the same frames as before
+  // scenes existed. With one, every scene already carries its derived timing.
+  const scenes = useMemo(
+    () => scenesFor(props.items.length, props.scenes),
+    [props.items.length, props.scenes],
+  );
   const camera = useMemo(
-    () => cameraAt(seconds, props.map, props.items),
-    [seconds, props.map, props.items],
+    () => cameraAt(seconds, props.map, props.items, scenes),
+    [seconds, props.map, props.items, scenes],
   );
   const { containerRef, loaded } = useMapLibre(camera);
 
@@ -281,7 +303,9 @@ export const Reel: React.FC<ReelProps> = (props) => {
     '--font-logo': logoFont,
   } as React.CSSProperties;
 
-  const closing = closingStart(props.items.length);
+  const cover = coverScene(scenes);
+  const closing = closingScene(scenes);
+  const items = itemScenes(scenes);
 
   return (
     <AbsoluteFill className="reelScene" style={{ ...cssVars, background: 'var(--surface)' }}>
@@ -292,22 +316,34 @@ export const Reel: React.FC<ReelProps> = (props) => {
       <div ref={containerRef} className="reelMap" />
       <div className="reelMapWash" />
       {!loaded ? <div className="reelLoading">Loading map</div> : null}
-      {seconds < COVER_EXIT ? <Cover seconds={seconds} copy={props.copy} /> : null}
-      {props.items.map((item, index) => (
-        <React.Fragment key={`${item.title}-${index}`}>
-          <MapScene
-            item={item}
-            index={index}
-            seconds={seconds}
-            fps={fps}
-            accent={props.colors.accent}
-            attribution={attribution}
-          />
-          <EventSlide item={item} index={index} seconds={seconds} wordmark={props.copy.wordmark} />
-        </React.Fragment>
-      ))}
-      {seconds >= closing - TIMING.overlap ? (
-        <Closing seconds={seconds} start={closing} copy={props.copy} />
+      {cover && seconds < cover.end + COVER_EXIT_TAIL ? (
+        <Cover seconds={seconds} scene={cover} copy={props.copy} />
+      ) : null}
+      {items.map((scene, index) => {
+        const item = props.items[scene.itemIndex ?? index];
+        if (!item) return null;
+        return (
+          <React.Fragment key={`${item.title}-${index}`}>
+            <MapScene
+              item={item}
+              scene={scene}
+              seconds={seconds}
+              fps={fps}
+              accent={props.colors.accent}
+              attribution={attribution}
+            />
+            <EventSlide
+              item={item}
+              index={index}
+              scene={scene}
+              seconds={seconds}
+              wordmark={props.copy.wordmark}
+            />
+          </React.Fragment>
+        );
+      })}
+      {closing && seconds >= closing.start - TIMING.overlap ? (
+        <Closing seconds={seconds} scene={closing} copy={props.copy} />
       ) : null}
     </AbsoluteFill>
   );
