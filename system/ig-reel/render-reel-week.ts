@@ -603,7 +603,7 @@ async function main(): Promise<void> {
     rmSync(stagingDir, { recursive: true, force: true });
   }
 
-  const audioDir = join(outputDir, "..", `audio-${period.start}`);
+  const audioDir = join(outputDir, "audio");
   mkdirSync(audioDir, { recursive: true });
   const rendered = readdirSync(rendersDir)
     .filter((name) => name.endsWith(".mp4"))
@@ -805,6 +805,29 @@ async function main(): Promise<void> {
       `The muxed audio track is ${finalAudioSeconds}s against ${finalVideoSeconds.toFixed(1)}s of video. ` +
         "The filter graph dropped the audio; the reel would play silent.",
     );
+  }
+
+  // --- copy card audio files and storyboard/timeline snapshots to output ---
+  if (cardAudio.length > 0) {
+    const cardsDir = join(audioDir, "cards");
+    mkdirSync(cardsDir, { recursive: true });
+    const cardsAudioDir = join(dirname(storyboardPath!), "audio");
+    for (const audio of cardAudio) {
+      if (audio.path && existsSync(audio.path)) {
+        const fileName = basename(audio.path);
+        copyFileSync(audio.path, join(cardsDir, fileName));
+      }
+    }
+    console.log(`Copied ${cardAudio.length} card audio file(s) to ${cardsDir}`);
+  }
+
+  // Copy storyboard and timeline as snapshots of what was rendered
+  if (storyboardPath && existsSync(storyboardPath)) {
+    copyFileSync(storyboardPath, join(outputDir, "storyboard.yaml"));
+  }
+  const timelinePath = join(dirname(storyboardPath || ""), "timeline.json");
+  if (storyboardPath && existsSync(timelinePath)) {
+    copyFileSync(timelinePath, join(outputDir, "timeline.json"));
   }
 
   console.log(`\nReel: ${basename(finalPath)}`);

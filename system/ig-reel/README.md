@@ -149,10 +149,9 @@ Dos trampas operativas alrededor de `renders/`:
 
 - El muxeo toma **el último `.mp4` de `renders/` por orden de nombre**
   (`.sort().pop()` en `render-reel-week.ts`). Antes de una corrida limpia,
-  limpia los renders viejos de esa carpeta, y no dejes archivos de audio ni
-  nada ajeno dentro de `renders/`: el audio del render vive en una carpeta
-  hermana (`audio-<fecha>/`) justamente para que nada que escanee la salida
-  lo confunda con el video.
+  limpia los renders viejos de esa carpeta. El audio del render vive en una
+  carpeta hermana (`audio/`) dentro de la salida para evitar que herramientas
+  que escanean la carpeta confundan archivos de audio con el video.
 - La música generada **trae su propio fade de salida** (se pide ~15% más
   larga que el video y el muxeo recorta la cola por eso mismo). No le
   apliques un segundo fade encima: queda un final que muere dos veces.
@@ -333,6 +332,40 @@ npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --car
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --assemble
 # → muxea la pista de voz y música sobre la concatenación
 ```
+
+---
+
+## Qué queda en la carpeta de salida
+
+Al terminar el render, todos los artefactos quedan organizados en
+`profiles/<slug>/outputs/reels/<fecha>/` — la carpeta para llevar y editar a
+mano en otra herramienta:
+
+```
+reel-<fecha>.mp4        archivo final con audio (MP4, 1080x1920)
+storyboard.yaml         snapshot del storyboard que se renderizó (si existe)
+timeline.json           snapshot de la timeline usada (si existe)
+reel-props.json         props resueltos para la composición (Remotion)
+clips/
+  0-cover.mp4           clip mudo por tarjeta (stream copy, sin audio)
+  1-item-1.mp4
+  ... (uno por tarjeta del storyboard)
+  concat-list.txt       lista ffmpeg para el ensamblaje (generado)
+audio/
+  cards/                copia de cada MP3 sintetizado (tarjeta por tarjeta)
+    cover.mp3
+    item-1.mp3
+    ... (sin los sidecars .json del caché)
+  narration-<fecha>.wav|.mp3  pista de narración armada (si existe)
+  music-<fecha>.mp3     cama musical (si se pidió --music)
+renders/                intermedios mudos de Remotion (interno, no llevar)
+  reel-<fecha>.mp4      render monolítico sin audio
+```
+
+Los audios por tarjeta con su caché (`.mp3` + `.json`) siguen viviendo en
+`profiles/<slug>/reels/<fecha>/audio/` — eso es la fuente y el caché que
+alimenta el motor; la carpeta `audio/cards/` de la salida es una copia
+derivada.
 
 ---
 
