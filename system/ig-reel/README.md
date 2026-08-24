@@ -274,7 +274,7 @@ es idéntico al anterior, frame a frame.
 ## Clips por tarjeta y ensamblaje
 
 Un render monolítico renderiza todo de una sola vez. **Los clips** permiten
-rehacere una sola escena sin re-renderizar el resto. Internamente, un clip
+rehacer una sola escena sin re-renderizar el resto. Internamente, un clip
 **no es una composición separada**: es un rango de frames de la misma composición
 `Reel`, renderizado con los mismos props. Los píxeles son idénticos al render
 monolítico, y los crossfades entre escenas (un solape de `TIMING.overlap`
@@ -283,17 +283,34 @@ mezcla ambas, así que el corte cae limpio en él.
 
 **Dónde quedan los clips.** En `<salida>/clips/`, uno por tarjeta del
 storyboard. El nombre es `<índice>-<card-id>.mp4` (`0-cover.mp4`,
-`1-item-1.mp4`, …); el índice va en orden de escena y se rellena con ceros
-solo cuando hay 10 o más tarjetas, para que ordenen bien en disco. Requieren un storyboard: el ritmo fijo no tiene
-ids de tarjeta.
+`1-item-1.mp4`, …); el índice va en orden de escena y se rellena con ceros a
+la izquierda según cuántas tarjetas haya, para que ordenen bien en disco.
+Requieren un storyboard: el ritmo fijo no tiene ids de tarjeta.
+
+**Por qué el clip es mudo de verdad (`--muted`).** Sin el flag, Remotion
+escribe cada clip con su propia pista de audio silenciosa cuyo padding no
+coincide con el conteo de frames del video (medido: un video de 77 frames /
+2.5667s dentro de un contenedor cuyo `format=duration` reporta 2.624s, porque
+esa cifra es la del stream más largo — la pista de audio con relleno). Al
+concatenar clips que cada uno arrastra un padding de audio distinto, el
+resultado queda con frame rate variable: los frames correctos, mal
+repartidos en el tiempo (758 frames que debían durar 25.2667s terminaban
+estirados a 25.5s). `--muted` deja el clip con un solo stream, sin nada que
+desalinear.
 
 **Los tres modos de render:**
 
 - `--clips`: renderiza todas las tarjetas como clips y las ensambla en una sola
   (silenciosa). El ensamblaje concatena con `ffmpeg -c copy` (stream copy, sin
-  re-encodear) y verifica que el total tenga la duración esperada.
+  re-encodear) y verifica con ffprobe que el video resultante mida
+  `totalFrames/FPS` (±1 frame). Si el stream copy falla o el resultado no
+  calza en duración — la señal de un glitch en una frontera entre clips — cae
+  a un segundo intento con concat **re-encodeado** (`libx264 -crf 18`), a
+  costa de una generación de calidad solo en los cortes. En la práctica, con
+  clips mudos (`--muted`) el stream copy funciona directo: cada frame de
+  Remotion es keyframe, así que no hay frontera que desalinear.
 - `--card <id> [--card <id2> ...]`: renderiza solo esas tarjetas, sin ensamblar.
-  Útil para rehacerse una escena que no gustó — cada clip es mudo.
+  Útil para rehacer una escena que no gustó — cada clip es mudo.
 - `--assemble`: une los clips ya renderizados en `clips/`, muxea el audio
   (narración+música) sobre el resultado y verifica. Falla si falta un clip o si
   su duración no calza con la timeline.
@@ -303,14 +320,14 @@ un solo stream de video. La pista de narración (tarjeta a tarjeta, con delays) 
 la cama se aplican **después**, en el muxeo — igual que el render monolítico.
 Eso mantiene el video del mismo tamaño aunque se cambie el audio.
 
-**Ejemplo de flujo:** rehacerse la escena del tercer ítem (tarjeta `item-2`)
+**Ejemplo de flujo:** rehacer la escena del tercer ítem (tarjeta `item-2`)
 cuando el resultado no gustó:
 
 ```
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --card item-2
 # → renderiza solo ese clip
 
-# Verifica el clip en `outputs/…/clips/02-item-2.mp4`
+# Verifica el clip en `outputs/…/clips/2-item-2.mp4`
 
 # Luego, ensambla todos los clips (incluido el nuevo) con audio:
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --assemble
