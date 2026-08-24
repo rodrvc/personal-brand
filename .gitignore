@@ -37,6 +37,11 @@ system/ig-carousel/week-input.json
 # Rendered output of the template profiles (regenerated on demand).
 profiles/example/outputs/
 profiles/example-personal/outputs/
+# Derived by the reel's storyboard step (per-card MP3s, sidecars, timeline).
+profiles/example/reels/*/audio/
+profiles/example/reels/*/timeline.json
+profiles/example-personal/reels/*/audio/
+profiles/example-personal/reels/*/timeline.json
 
 # Planning notes for the reel/skills separation. Untracked on purpose: the
 # document argues about a *specific* brand's leak, so it names that brand,
@@ -69,3 +74,8 @@ docs/pi-local-card-*.md
 app/src/core/
 app/src-tauri/target/
 app/src-tauri/gen/
+
+# Local secrets (API keys). Never tracked; Orca copies it into each worktree via .worktreeinclude.
+.env
+.env.*
+!.env.example

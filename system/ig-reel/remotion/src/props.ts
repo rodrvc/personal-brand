@@ -25,6 +25,22 @@ export type ReelPropsItem = {
   lat: number;
 }
 
+/**
+ * A scene with its timing resolved on the Node side, in seconds. Mirrors
+ * `Scene` in `timeline.ts` (this file cannot import across the bundle
+ * boundary). `itemIndex` points into `items`, in the order the Node side
+ * already sorted them.
+ */
+export type ReelScene = {
+  kind: 'cover' | 'item' | 'closing';
+  itemIndex?: number;
+  narrationSeconds?: number;
+  minSeconds?: number;
+  start: number;
+  duration: number;
+  end: number;
+}
+
 export type ReelProps = {
   locale: string;
   colors: {
@@ -71,4 +87,11 @@ export type ReelProps = {
     span: [number, number];
   };
   items: ReelPropsItem[];
+  /**
+   * Optional scene list derived from a storyboard ("audio first"): each
+   * scene lasts at least its narration. Absent, the composition runs the
+   * fixed rhythm in `timeline.ts` — output identical to a reel without a
+   * storyboard.
+   */
+  scenes?: ReelScene[];
 }

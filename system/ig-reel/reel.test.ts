@@ -8,21 +8,42 @@
  * camera that never actually arrives over the item.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { loadDotEnv } from "./env.js";
 import { isInsideBBox, validateBBox, wideFraming, MAX_BBOX_SIDE_DEGREES } from "./geo.js";
 import { withCache } from "./osm-cache.js";
 import { loadReelRecipe } from "./recipe.js";
 import {
+  BREATH_SECONDS,
   CAMERA_MOVE_SECONDS,
   CLOSE_ZOOM,
+  TIMING,
+  activeItemIndex,
   cameraAt,
+  closingStart,
+  defaultScenes,
+  itemStart,
   mapStart,
+  resolveScenes,
   totalFrames,
+  totalFramesOf,
   totalSeconds,
+  totalSecondsOf,
 } from "./remotion/src/timeline.js";
+import {
+  WORD_BUDGET,
+  buildTimeline,
+  countWords,
+  effectiveVoice,
+  narrationCacheKey,
+  synthesiseCards,
+  validateStoryboard,
+  type Storyboard,
+} from "./storyboard.js";
+import { parseYaml } from "./recipe.js";
 import { verifyOrThrow } from "./verify-items.js";
 import type { ReelInput } from "./types.js";
 
@@ -54,6 +75,109 @@ function throws(run: () => unknown, expected: RegExp, message: string): void {
   }
   throw new Error(`${message} — nothing was thrown`);
 }
+
+console.log("\nenv — load .env file");
+
+test("missing .env file returns empty list and does not error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-missing-"));
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 0, "expected no keys loaded");
+});
+
+test("a .env with KEY=value is parsed and loaded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-simple-"));
+  writeFileSync(join(dir, ".env"), "TEST_KEY=test_value\n");
+  // Clear the key from environment first
+  delete process.env.TEST_KEY;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 1 && loaded[0] === "TEST_KEY", `expected ["TEST_KEY"], got ${JSON.stringify(loaded)}`);
+  assert(process.env.TEST_KEY === "test_value", `expected test_value, got ${process.env.TEST_KEY}`);
+  delete process.env.TEST_KEY;
+});
+
+test("double-quoted values have quotes stripped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-quotes-"));
+  writeFileSync(join(dir, ".env"), 'QUOTED="hello world"\n');
+  delete process.env.QUOTED;
+  loadDotEnv(dir);
+  assert(process.env.QUOTED === "hello world", `expected unquoted value, got ${process.env.QUOTED}`);
+  delete process.env.QUOTED;
+});
+
+test("single-quoted values have quotes stripped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-single-"));
+  writeFileSync(join(dir, ".env"), "SQUOTED='single quoted'\n");
+  delete process.env.SQUOTED;
+  loadDotEnv(dir);
+  assert(process.env.SQUOTED === "single quoted", `expected unquoted value, got ${process.env.SQUOTED}`);
+  delete process.env.SQUOTED;
+});
+
+test("export KEY=value syntax is recognized", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-export-"));
+  writeFileSync(join(dir, ".env"), "export EXPORTED=exported_value\n");
+  delete process.env.EXPORTED;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 1, `expected 1 key, got ${loaded.length}`);
+  assert(process.env.EXPORTED === "exported_value", `expected exported_value, got ${process.env.EXPORTED}`);
+  delete process.env.EXPORTED;
+});
+
+test("empty lines are ignored", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-empty-"));
+  writeFileSync(join(dir, ".env"), "\n\nKEY1=value1\n\n\nKEY2=value2\n\n");
+  delete process.env.KEY1;
+  delete process.env.KEY2;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 2, `expected 2 keys, got ${loaded.length}`);
+  delete process.env.KEY1;
+  delete process.env.KEY2;
+});
+
+test("lines starting with # are treated as comments", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-comment-"));
+  writeFileSync(join(dir, ".env"), "# This is a comment\nKEY=value\n# Another comment\n");
+  delete process.env.KEY;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 1 && loaded[0] === "KEY", `expected ["KEY"], got ${JSON.stringify(loaded)}`);
+  delete process.env.KEY;
+});
+
+test("environment variables already set are not overwritten", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-precedence-"));
+  writeFileSync(join(dir, ".env"), "PRECEDENCE=from_file\n");
+  process.env.PRECEDENCE = "from_env";
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 0, `expected no keys loaded (env wins), got ${loaded.length}`);
+  assert(process.env.PRECEDENCE === "from_env", "environment variable should not be overwritten");
+  delete process.env.PRECEDENCE;
+});
+
+test("multiple keys on separate lines are all loaded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-multi-"));
+  writeFileSync(join(dir, ".env"), "KEY1=value1\nKEY2=value2\nKEY3=value3\n");
+  delete process.env.KEY1;
+  delete process.env.KEY2;
+  delete process.env.KEY3;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 3, `expected 3 keys, got ${loaded.length}`);
+  assert(process.env.KEY1 === "value1", "KEY1 should be loaded");
+  assert(process.env.KEY2 === "value2", "KEY2 should be loaded");
+  assert(process.env.KEY3 === "value3", "KEY3 should be loaded");
+  delete process.env.KEY1;
+  delete process.env.KEY2;
+  delete process.env.KEY3;
+});
+
+test("whitespace around the = is trimmed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "env-whitespace-"));
+  writeFileSync(join(dir, ".env"), "  KEY  =  value_with_spaces  \n");
+  delete process.env.KEY;
+  const loaded = loadDotEnv(dir);
+  assert(loaded.length === 1, `expected 1 key, got ${loaded.length}`);
+  assert(process.env.KEY === "value_with_spaces", `expected "value_with_spaces", got "${process.env.KEY}"`);
+  delete process.env.KEY;
+});
 
 // A bbox roughly one hundredth of a degree, in the southern/western hemisphere
 // so the Mercator maths is exercised with negative values.
@@ -580,6 +704,245 @@ test("an unknown key under voice is an error, like everywhere else", () => {
     "a credential in a profile file must not be read as configuration",
   );
 });
+
+
+console.log("\nstoryboard — validation fails naming the card");
+
+const CARDS_OK = `storyboard: reel
+version: 1
+cards:
+  - id: cover
+    visual: cover
+    narration: "The plans for this week, all in one place."
+  - id: item-1
+    visual: item
+    item: 0
+    narration: "On Tuesday, live music on the waterfront — bring a jacket, it gets windy."
+  - id: item-2
+    visual: item
+    item: 1
+    narration: |
+      On Thursday the print fair takes over the square, with #1 prints
+      straight from the artists.
+    min_seconds: 6
+  - id: closing
+    visual: closing
+    narration: "Save this reel and see you there."
+`;
+
+function storyboardOf(text: string, itemCount = 3): Storyboard {
+  return validateStoryboard(parseYaml(text, "storyboard.yaml"), "storyboard.yaml", itemCount);
+}
+
+test("a valid storyboard parses: list of maps, quoted and block narrations", () => {
+  const sb = storyboardOf(CARDS_OK);
+  assert(sb.cards.length === 4, `expected 4 cards, got ${sb.cards.length}`);
+  assert(sb.cards[1]!.item === 0 && sb.cards[2]!.item === 1, "item indices must be carried");
+  assert(sb.cards[2]!.min_seconds === 6, "min_seconds must be carried");
+  assert(sb.cards[2]!.narration.includes("#1 prints"), "a # inside a block scalar is text");
+  assert(sb.cards[0]!.narration === "The plans for this week, all in one place.", "quoted narration is taken whole");
+});
+
+test("a # inside a quoted narration is text, not a comment", () => {
+  const sb = storyboardOf(CARDS_OK.replace('"Save this reel and see you there."', '"Save this reel, #1 plan, see you there."'));
+  assert(sb.cards[3]!.narration.includes("#1 plan"), `got ${JSON.stringify(sb.cards[3]!.narration)}`);
+});
+
+test("storyboard/version must be exact", () => {
+  throws(() => storyboardOf(CARDS_OK.replace("storyboard: reel", "storyboard: carousel")), /"storyboard" must be "reel"/, "kind");
+  throws(() => storyboardOf(CARDS_OK.replace("version: 1", "version: 2")), /this engine supports: 1/, "version");
+});
+
+test("duplicate ids are rejected, naming the card", () => {
+  throws(() => storyboardOf(CARDS_OK.replace("id: item-2", "id: item-1")), /card item-1: duplicate id/, "dup id");
+});
+
+test("an unknown visual is rejected", () => {
+  throws(() => storyboardOf(CARDS_OK.replace("visual: item\n    item: 1", "visual: map\n    item: 1")), /card item-2: "visual" must be one of cover \| item \| closing/, "visual enum");
+});
+
+test("exactly one cover first and one closing last", () => {
+  const noCover = CARDS_OK.replace("  - id: cover\n    visual: cover\n    narration: \"The plans for this week, all in one place.\"\n", "");
+  throws(() => storyboardOf(noCover), /card item-1: the first card must be visual=cover/, "missing cover");
+  const twoClosings = CARDS_OK.replace("    min_seconds: 6\n", "    min_seconds: 6\n  - id: closing-a\n    visual: closing\n    narration: \"And that is the week, friends.\"\n");
+  throws(() => storyboardOf(twoClosings), /only one closing card/, "two closings");
+});
+
+test("between 2 and 6 item cards", () => {
+  const one = CARDS_OK.replace("  - id: item-2\n    visual: item\n    item: 1\n    narration: |\n      On Thursday the print fair takes over the square, with #1 prints\n      straight from the artists.\n    min_seconds: 6\n", "");
+  throws(() => storyboardOf(one), /1 item card\(s\); a reel needs between 2 and 6/, "one item");
+});
+
+test("an item card must reference a valid, distinct index", () => {
+  throws(() => storyboardOf(CARDS_OK.replace("item: 1", "item: 7")), /card item-2: "item" must be an integer index .*\(0\.\.2\)/, "out of range");
+  throws(() => storyboardOf(CARDS_OK.replace("item: 1", "item: 0")), /card item-2: item 0 is already used by card item-1/, "duplicate item");
+  throws(() => storyboardOf(CARDS_OK.replace("    item: 1\n", "")), /card item-2: "item" must be an integer index/, "missing item");
+});
+
+test("unknown keys are errors, at the root and on a card", () => {
+  throws(() => storyboardOf(`${CARDS_OK}music: loud\n`), /unknown key "music"/, "root");
+  throws(() => storyboardOf(CARDS_OK.replace("    min_seconds: 6\n", "    min_seconds: 6\n    camera: fly\n")), /card item-2: unknown key "camera"/, "card");
+});
+
+test("narration must exist; empty string is a mute card", () => {
+  throws(() => storyboardOf(CARDS_OK.replace('    narration: "Save this reel and see you there."\n', "")), /card closing: "narration" must be a string/, "missing");
+  const mute = storyboardOf(CARDS_OK.replace('"Save this reel and see you there."', '""'));
+  assert(mute.cards[3]!.words === 0 && mute.cards[3]!.narration === "", "a mute card has 0 words");
+});
+
+console.log("\nstoryboard — word count and budget");
+
+test("countWords ignores punctuation-only tokens and counts accented words", () => {
+  assert(countWords("El miércoles, Iván — en Farolito.") === 5, `got ${countWords("El miércoles, Iván — en Farolito.")}`);
+  assert(countWords("   ") === 0, "blank is zero");
+});
+
+test("a card over budget fails with the real count and the cap", () => {
+  const long = Array.from({ length: 41 }, (_, i) => `word${i}`).join(" ");
+  throws(() => storyboardOf(CARDS_OK.replace("On Tuesday, live music on the waterfront — bring a jacket, it gets windy.", long)), /card item-1: 41 words, max 30 for visual=item/, "over");
+  throws(() => storyboardOf(CARDS_OK.replace("The plans for this week, all in one place.", "Hey there")), /card cover: 2 words, min 4 for visual=cover/, "under");
+  assert(WORD_BUDGET.item.max === 30 && WORD_BUDGET.cover.min === 4, "budget constants are the documented ones");
+});
+
+console.log("\ntimeline — derived from the audio, or the fixed rhythm without it");
+
+test("without a storyboard the scene list reproduces the fixed rhythm exactly", () => {
+  for (const count of [2, 3, 4, 6]) {
+    const scenes = resolveScenes(defaultScenes(count));
+    assert(Math.abs(totalSecondsOf(scenes) - totalSeconds(count)) < 1e-9, `total for ${count} items: ${totalSecondsOf(scenes)} vs ${totalSeconds(count)}`);
+    assert(totalFramesOf(scenes) === totalFrames(count), `frames for ${count}`);
+    const items = scenes.filter((s) => s.kind === "item");
+    items.forEach((s, i) => {
+      assert(Math.abs(s.start - mapStart(i)) < 1e-9, `map start ${i}`);
+      assert(Math.abs(s.start + TIMING.map - itemStart(i)) < 1e-9, `item start ${i}`);
+    });
+    assert(Math.abs(scenes[scenes.length - 1]!.start - closingStart(count)) < 1e-9, `closing start for ${count}`);
+  }
+});
+
+test("short narration falls back to the minimums; long narration extends and starts accumulate", () => {
+  const short = resolveScenes([
+    { kind: "cover", narrationSeconds: 1 },
+    { kind: "item", itemIndex: 0, narrationSeconds: 2 },
+    { kind: "item", itemIndex: 1, narrationSeconds: 4.2 },
+    { kind: "closing", narrationSeconds: 1 },
+  ]);
+  assert(short[0]!.duration === TIMING.cover, "a 1s cover narration keeps the 2.2s cover");
+  assert(short[1]!.duration === TIMING.map + TIMING.item, "a 2s item narration keeps the 5s item scene");
+  assert(short[2]!.duration === TIMING.map + TIMING.item, "4.2s + breath (4.6s) is still under the 5s floor");
+  assert(short[3]!.duration === TIMING.closing, "closing at floor");
+
+  const long = resolveScenes([
+    { kind: "cover", narrationSeconds: 3 },
+    { kind: "item", itemIndex: 0, narrationSeconds: 7 },
+    { kind: "item", itemIndex: 1, narrationSeconds: 2, minSeconds: 6.5 },
+    { kind: "closing", narrationSeconds: 2.5 },
+  ]);
+  assert(Math.abs(long[0]!.duration - (3 + BREATH_SECONDS)) < 1e-9, `cover grows to narration+breath, got ${long[0]!.duration}`);
+  assert(Math.abs(long[1]!.duration - (7 + BREATH_SECONDS)) < 1e-9, `item grows to narration+breath, got ${long[1]!.duration}`);
+  assert(long[2]!.duration === 6.5, `min_seconds raises the floor, got ${long[2]!.duration}`);
+  assert(Math.abs(long[3]!.duration - (2.5 + BREATH_SECONDS)) < 1e-9, "closing grows");
+  let cursor = 0;
+  for (const scene of long) {
+    assert(Math.abs(scene.start - cursor) < 1e-9, `scene ${scene.kind} starts at ${scene.start}, expected ${cursor}`);
+    cursor += scene.duration;
+  }
+  assert(Math.abs(totalSecondsOf(long) - cursor) < 1e-9, "total is the last end");
+});
+
+test("the camera follows the derived scenes: it leaves for item 2 when its scene starts", () => {
+  const wide = wideFraming(BBOX, SPREAD_POINTS);
+  const targets = [{ lng: -70.4, lat: -23.65 }, { lng: -70.42, lat: -23.7 }];
+  const scenes = resolveScenes([
+    { kind: "cover", narrationSeconds: 3 },
+    { kind: "item", itemIndex: 0, narrationSeconds: 8 },
+    { kind: "item", itemIndex: 1 },
+    { kind: "closing" },
+  ]);
+  const second = scenes[2]!;
+  assert(activeItemIndex(second.start - 0.01, 2, scenes) === 0, "just before item 2 the camera is still on item 1");
+  assert(activeItemIndex(second.start, 2, scenes) === 1, "item 2 becomes active at its start");
+  const atStart = cameraAt(second.start, wide, targets, scenes);
+  assert(Math.abs(atStart.zoom - wide.zoom) < 1e-9, "the flight to item 2 begins wide");
+  const arrived = cameraAt(second.start + CAMERA_MOVE_SECONDS, wide, targets, scenes);
+  assert(arrived.center[0] === targets[1]!.lng && arrived.zoom === CLOSE_ZOOM, "and lands on item 2 at street zoom");
+  // Without scenes, the legacy signature still answers the fixed rhythm.
+  assert(activeItemIndex(mapStart(1), 2) === 1, "legacy activeItemIndex unchanged");
+});
+
+test("buildTimeline maps cards to scenes, orders items by card, and folds the music intro into the cover", () => {
+  const sb = storyboardOf(CARDS_OK.replace("item: 0", "item: 2").replace("item: 1", "item: 0"));
+  const audio = [
+    { id: "cover", seconds: 1.2, source: "synthesised" as const },
+    { id: "item-1", seconds: 6.1, source: "synthesised" as const },
+    { id: "item-2", seconds: 3, source: "synthesised" as const },
+    { id: "closing", seconds: 0, source: "mute" as const },
+  ];
+  const tl = buildTimeline(sb, audio, 2.5);
+  assert(tl.cards[0]!.narrationOffset === 2.5 && Math.abs(tl.cards[0]!.duration - (2.5 + 1.2 + BREATH_SECONDS)) < 1e-9, `cover holds the intro: ${tl.cards[0]!.duration}`);
+  assert(Math.abs(tl.cards[1]!.duration - (6.1 + BREATH_SECONDS)) < 1e-9, "item-1 grows");
+  assert(tl.cards[2]!.duration === 6, "item-2 respects min_seconds 6 over 3s of narration");
+  assert(tl.cards[3]!.duration === TIMING.closing && tl.cards[3]!.narrationSeconds === 0, "mute closing at floor");
+  assert(tl.scenes[1]!.itemIndex === 0 && tl.scenes[2]!.itemIndex === 1, "scene itemIndex is the position among item cards, not the input index");
+  assert(tl.cards[1]!.item === 2 && tl.cards[2]!.item === 0, "timeline.json keeps the input reference");
+  assert(Math.abs(tl.total - tl.scenes[3]!.end) < 1e-9, "total is the closing's end");
+});
+
+console.log("\nstoryboard — the content cache");
+
+const VOICE = { voice_id: "v1", speed: 1.05, stability: 0.4 };
+
+test("same text and voice hash the same; whitespace reflow does not matter", () => {
+  assert(narrationCacheKey("Hola  mundo", VOICE) === narrationCacheKey("Hola\nmundo ", VOICE), "normalised text");
+});
+
+test("a changed text or a changed speed changes the key", () => {
+  const base = narrationCacheKey("Hola mundo", VOICE);
+  assert(narrationCacheKey("Hola mundo!", VOICE) !== base, "text");
+  assert(narrationCacheKey("Hola mundo", { ...VOICE, speed: 1.1 }) !== base, "speed");
+  assert(narrationCacheKey("Hola mundo", { ...VOICE, model_id: "other" }) !== base, "model");
+});
+
+test("effectiveVoice overlays only the keys the storyboard sets", () => {
+  const merged = effectiveVoice({ voice_id: "v1", stability: 0.4, speed: 1 }, { speed: 0.9 });
+  assert(merged.voice_id === "v1" && merged.stability === 0.4 && merged.speed === 0.9, JSON.stringify(merged));
+});
+
+await (async () => {
+  const asyncTest = async (name: string, run: () => Promise<void>): Promise<void> => {
+    try {
+      await run();
+      console.log(`  ok   ${name}`);
+      passed += 1;
+    } catch (error) {
+      console.error(`  FAIL ${name}\n       ${error instanceof Error ? error.message : String(error)}`);
+      failed += 1;
+    }
+  };
+
+  await asyncTest("synthesiseCards calls the API once per card, then serves from the sidecar; an edit re-synthesises only that card", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "reel-cards-"));
+    const calls: string[] = [];
+    const made = (): number => calls.length;
+    const synth = async (text: string, outPath: string): Promise<void> => {
+      calls.push(text);
+      writeFileSync(outPath, "mp3");
+    };
+    const probe = (): number => 1.5;
+    const sb = storyboardOf(CARDS_OK.replace('"Save this reel and see you there."', '""'));
+    const first = await synthesiseCards(sb, VOICE, dir, { synth, probe });
+    assert(made() === 3, `3 spoken cards → 3 calls, got ${made()}`);
+    assert(first[3]!.source === "mute" && first[3]!.seconds === 0 && !first[3]!.path, "mute card: no file");
+    const second = await synthesiseCards(sb, VOICE, dir, { synth, probe });
+    assert(made() === 3, `nothing re-synthesised on a re-run, got ${made()}`);
+    assert(second.every((c) => c.source !== "synthesised"), "all served from cache");
+    const edited = storyboardOf(CARDS_OK.replace("bring a jacket", "bring a coat").replace('"Save this reel and see you there."', '""'));
+    await synthesiseCards(edited, VOICE, dir, { synth, probe });
+    assert(made() === 4 && /bring a coat/.test(calls[3]!), `only the edited card is re-synthesised, got ${made()}`);
+    await synthesiseCards(edited, { ...VOICE, speed: 1.2 }, dir, { synth, probe });
+    assert(made() === 7, `a voice change re-synthesises every spoken card, got ${made()}`);
+  });
+})();
 
 console.log(`\n${passed}/${passed + failed} passed`);
 if (failed > 0) process.exit(1);

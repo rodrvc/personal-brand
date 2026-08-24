@@ -1,0 +1,36 @@
+# Template storyboard. Parameterises the "audio first" narration of
+# system/ig-reel: one card per scene, the narrator's words attached to the
+# card, and every scene lasts at least its own audio. Fictional, like the
+# rest of this profile — copy it into profiles/<slug>/reels/<date>/ and
+# replace every line.
+#
+# Word budget per visual (engine constants): cover 4-15, item 8-30,
+# closing 4-15. `item` is the index into ../week-input.json; the reel shows
+# the items in card order.
+storyboard: reel
+version: 1
+
+# Optional: partial override of the recipe's voice: block, same keys.
+# voice:
+#   speed: 1.05
+
+cards:
+  - id: cover
+    visual: cover
+    narration: "Three plans for the week, around the bay."
+  - id: item-1
+    visual: item
+    item: 0
+    narration: "On Tuesday, live music on the waterfront at Plaza Sotomayor — bring a jacket, the wind picks up."
+  - id: item-2
+    visual: item
+    item: 1
+    narration: "On Thursday the print fair fills Plaza Aníbal Pinto, with prints straight from the artists' hands."
+    min_seconds: 6
+  - id: item-3
+    visual: item
+    item: 2
+    narration: "And on Saturday, the neighbourhood final on Avenida Argentina — loud, local, and free."
+  - id: closing
+    visual: closing
+    narration: "Save this reel and see you there."

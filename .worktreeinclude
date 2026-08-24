@@ -1,0 +1,3 @@
+# Gitignored files Orca copies into every new worktree of this repo.
+# Literal paths only (no globs). The source must exist in the primary checkout.
+.env
