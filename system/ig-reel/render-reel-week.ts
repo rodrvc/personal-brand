@@ -46,10 +46,21 @@ import {
   withAlpha,
 } from "../ig-carousel/brand-schema.js";
 import { resolveOutputBaseDir, resolveOutputSubfolder, resolveProfileDir } from "../ig-carousel/profile.js";
+import {
+  assertRangesTileComposition,
+  clipFileName,
+  clipRangesFor,
+  concatListContents,
+  framesArg,
+  validateClipsForAssembly,
+  type ClipRange,
+  type ExistingClip,
+} from "./assemble.js";
 import { validateBBox, wideFraming } from "./geo.js";
 import { loadDotEnv } from "./env.js";
 import { geocode } from "./osm.js";
 import { loadReelRecipe } from "./recipe.js";
+import { FPS } from "./remotion/src/timeline.js";
 import type { ReelProps } from "./remotion/src/props.js";
 import {
   buildTimeline,
@@ -74,6 +85,18 @@ function flag(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+/** Every value of a repeatable flag, e.g. `--card a --card b` → `["a", "b"]`. */
+function repeatedFlag(name: string): string[] {
+  const values: string[] = [];
+  process.argv.forEach((arg, index) => {
+    if (arg === `--${name}`) {
+      const value = process.argv[index + 1];
+      if (value && !value.startsWith("--")) values.push(value);
+    }
+  });
+  return values;
+}
+
 /** Monday-to-Sunday week containing the reference date, in local time. */
 function weekOf(reference: Date): Period {
   const monday = new Date(reference);
@@ -84,6 +107,113 @@ function weekOf(reference: Date): Period {
   const iso = (date: Date): string =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   return { start: iso(monday), end: iso(sunday) };
+}
+
+/**
+ * Duration of a video's VIDEO stream, in seconds — not the container's
+ * `format=duration`. Remotion writes each clip with its own silent AAC audio
+ * track whose packet padding does not line up with the video's frame count
+ * (measured: a 77-frame/2.5667s video stream inside a container that
+ * `ffprobe -show_entries format=duration` reports as 2.624s, because that
+ * figure is the longest stream, and the padded silent audio track is it).
+ * Comparing a clip's container duration against the timeline therefore fails
+ * spuriously; comparing the video stream's duration does not.
+ */
+function videoDurationOf(path: string): number {
+  const out = execFileSync(
+    "ffprobe",
+    [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", path,
+    ],
+    { encoding: "utf8" },
+  );
+  const seconds = Number.parseFloat(out.trim());
+  if (!Number.isFinite(seconds)) {
+    throw new Error(`ffprobe returned no video stream duration for ${path}`);
+  }
+  return seconds;
+}
+
+/**
+ * Checks that a concatenated video's duration matches the timeline it was
+ * assembled from, within one frame. The existing ffprobe-based audio-length
+ * guard (further down) checks audio against video; this is the video-against-
+ * timeline check the clip path needs before that one ever runs — a bad concat
+ * should fail here, not surface later as a video/audio mismatch.
+ */
+function assertConcatDuration(path: string, expectedSeconds: number): void {
+  const actual = videoDurationOf(path);
+  const tolerance = 1 / 30; // one frame at the engine's fixed FPS
+  if (Math.abs(actual - expectedSeconds) > tolerance) {
+    throw new Error(
+      `Assembled video is ${actual.toFixed(3)}s, expected ${expectedSeconds.toFixed(3)}s from the timeline ` +
+        `(±${tolerance.toFixed(3)}s). The concat produced the wrong length — do not mux audio onto it.`,
+    );
+  }
+}
+
+/**
+ * Validates the clips on disk against `ranges`, concatenates them with the
+ * ffmpeg concat demuxer, and verifies the result's duration. Tries
+ * `-c copy` (no re-encode — the clips share the exact same codec/params, so
+ * this is normally lossless and fast); a boundary glitch would show up as
+ * either a failing ffmpeg process or a wrong total duration, either of which
+ * triggers a fallback to a re-encoded concat with the engine's fixed
+ * parameters, at the cost of a generation of quality on the seams only.
+ */
+function assembleClips(
+  ranges: readonly ClipRange[],
+  clipsDir: string,
+  rendersDir: string,
+  periodStart: string,
+  expectedSeconds: number,
+): void {
+  const existing: ExistingClip[] = ranges.map((range) => {
+    const path = join(clipsDir, clipFileName(range, ranges.length));
+    const exists = existsSync(path);
+    return {
+      cardId: range.cardId,
+      path,
+      exists,
+      measuredSeconds: exists ? videoDurationOf(path) : undefined,
+    };
+  });
+  validateClipsForAssembly(ranges, existing);
+
+  mkdirSync(rendersDir, { recursive: true });
+  const listPath = join(clipsDir, "concat-list.txt");
+  writeFileSync(listPath, concatListContents(existing.map((clip) => clip.path)));
+  const assembledPath = join(rendersDir, `reel-${periodStart}.mp4`);
+
+  console.log("Concatenating clips (stream copy, no re-encode)…");
+  try {
+    execFileSync(
+      "ffmpeg",
+      ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", assembledPath],
+      { stdio: ["ignore", "ignore", "inherit"] },
+    );
+    assertConcatDuration(assembledPath, expectedSeconds);
+  } catch (error) {
+    // `-c copy` can produce boundary glitches when a clip's keyframes do not
+    // line up with the cut — Remotion renders every frame as a keyframe by
+    // default, so in practice this path is a safety net, not the common case.
+    console.warn(
+      "  stream copy failed or produced a mismatched duration — falling back to a re-encoded concat:",
+      error instanceof Error ? error.message : String(error),
+    );
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y", "-f", "concat", "-safe", "0", "-i", listPath,
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        assembledPath,
+      ],
+      { stdio: ["ignore", "ignore", "inherit"] },
+    );
+    assertConcatDuration(assembledPath, expectedSeconds);
+  }
+  console.log(`  assembled: ${assembledPath}`);
 }
 
 async function main(): Promise<void> {
@@ -111,6 +241,19 @@ async function main(): Promise<void> {
   const scriptPath = flag("voice");
   const wantsMusic = process.argv.includes("--music");
   const audioOnly = process.argv.includes("--audio-only");
+  // Per-card render/assembly (see system/ig-reel/README.md → "Clips and
+  // assembly"). `--clips` renders every scene as its own silent clip and
+  // assembles them; `--card <id>` renders only the named cards, without
+  // assembling; `--assemble` only concatenates clips already on disk. All
+  // three require a storyboard: the default fixed rhythm has no card ids to
+  // name a clip after.
+  const wantsAllClips = process.argv.includes("--clips");
+  const requestedCardIds = repeatedFlag("card");
+  const assembleOnly = process.argv.includes("--assemble");
+  const clipModeCount = [wantsAllClips, requestedCardIds.length > 0, assembleOnly].filter(Boolean).length;
+  if (clipModeCount > 1) {
+    throw new Error("--clips, --card and --assemble are mutually exclusive — pick one.");
+  }
   const dateFlag = flag("date");
   const reference = dateFlag ? new Date(`${dateFlag}T12:00:00`) : new Date();
   if (Number.isNaN(reference.getTime())) {
@@ -138,6 +281,17 @@ async function main(): Promise<void> {
   }
   if (audioOnly && !storyboardPath) {
     throw new Error("--audio-only needs a storyboard: it stops after the per-card narration and timeline.");
+  }
+  if (clipModeCount > 0 && !storyboardPath) {
+    throw new Error(
+      "--clips, --card and --assemble all need a storyboard: the default fixed rhythm has no card ids " +
+        "to name a clip after. Pass --storyboard, or use one of the default period's storyboard.yaml.",
+    );
+  }
+  for (const cardId of requestedCardIds) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(cardId)) {
+      throw new Error(`--card ${cardId}: not a valid card id (lowercase letters, digits, dashes).`);
+    }
   }
 
   // How long the bed plays alone before the narration comes in — what gives an
@@ -179,6 +333,8 @@ async function main(): Promise<void> {
   // from those lengths. The scene order follows the cards, not the input.
   let timeline: ReelTimeline | undefined;
   let cardAudio: CardAudio[] = [];
+  /** Card ids in scene order — parallel to `timeline.scenes`. Only set with a storyboard. */
+  let cardIds: string[] | undefined;
   if (storyboardPath) {
     if (!recipe.voice) {
       throw new Error(
@@ -213,6 +369,12 @@ async function main(): Promise<void> {
     cardAudio = await synthesiseCards(storyboard, voice, cardsAudioDir, { report: console.log });
 
     timeline = buildTimeline(storyboard, cardAudio, introSeconds);
+    cardIds = storyboard.cards.map((card) => card.id);
+    for (const requested of requestedCardIds) {
+      if (!cardIds.includes(requested)) {
+        throw new Error(`--card ${requested}: no such card in ${storyboardPath}. Cards: ${cardIds.join(", ")}.`);
+      }
+    }
     const timelinePath = join(dirname(storyboardPath), "timeline.json");
     writeFileSync(timelinePath, JSON.stringify({ cards: timeline.cards, total: timeline.total }, null, 2));
     console.log("\nTimeline (derived from the audio):");
@@ -334,36 +496,112 @@ async function main(): Promise<void> {
   const propsPath = join(outputDir, "reel-props.json");
   writeFileSync(propsPath, JSON.stringify(props, null, 2));
 
-  // --- render ---
-  if (!existsSync(join(remotionDir, "node_modules"))) {
-    console.log("Installing the Remotion project's dependencies (first run)…");
-    execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: remotionDir, stdio: "inherit" });
-  }
-
+  // --- per-card clips: render, or assemble already-rendered ones ---
+  // A clip is not a separate composition — it is a frame range of this same
+  // `Reel` composition, rendered with the same props. That is what keeps the
+  // pixels identical to a monolithic render and preserves the cross-fades
+  // between scenes for free (see assemble.ts). This branch never falls
+  // through to the monolithic render below.
+  const clipsDir = join(outputDir, "clips");
   const rendersDir = join(outputDir, "renders");
-  mkdirSync(rendersDir, { recursive: true });
-  console.log("Rendering…");
-  execFileSync(
-    "npx",
-    [
-      "remotion",
-      "render",
-      "src/index.ts",
-      "Reel",
-      join(rendersDir, `reel-${period.start}.mp4`),
-      `--props=${propsPath}`,
-      // One browser at a time: each frame's MapLibre instance loads tiles, and
-      // parallel instances race the tile cache for no wall-clock gain.
-      "--concurrency=1",
-      // SwiftShader/ANGLE software GL — the headless-safe way to run WebGL.
-      "--gl=swangle",
-    ],
-    { cwd: remotionDir, stdio: "inherit" },
-  );
+  if (clipModeCount > 0) {
+    if (!timeline || !cardIds) {
+      throw new Error("internal error: clip mode requires a storyboard-derived timeline.");
+    }
+    const ranges = clipRangesFor(timeline.scenes, cardIds);
+    const totalFrames = Math.round(timeline.total * FPS);
+    assertRangesTileComposition(ranges, totalFrames);
 
-  // The staging folder has done its job; brand assets do not live under
-  // system/ a second longer than the render needs them.
-  rmSync(stagingDir, { recursive: true, force: true });
+    if (!assembleOnly) {
+      const wanted = wantsAllClips ? ranges : ranges.filter((range) => requestedCardIds.includes(range.cardId));
+      if (!existsSync(join(remotionDir, "node_modules"))) {
+        console.log("Installing the Remotion project's dependencies (first run)…");
+        execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: remotionDir, stdio: "inherit" });
+      }
+      mkdirSync(clipsDir, { recursive: true });
+      console.log(`Rendering ${wanted.length} clip(s)…`);
+      for (const range of wanted) {
+        const clipPath = join(clipsDir, clipFileName(range, ranges.length));
+        console.log(`  ${range.cardId}: frames ${framesArg(range)} → ${clipPath}`);
+        execFileSync(
+          "npx",
+          [
+            "remotion",
+            "render",
+            "src/index.ts",
+            "Reel",
+            clipPath,
+            `--props=${propsPath}`,
+            `--frames=${framesArg(range)}`,
+            // Same flags as the monolithic render, on purpose: identical
+            // codec/params across clips is what lets them concatenate with
+            // `-c copy` and no re-encode.
+            "--concurrency=1",
+            "--gl=swangle",
+            // A clip must be genuinely silent, not "silent audio track with
+            // its own padding": Remotion writes a per-render silent AAC track
+            // whose packet duration does not line up with the video's frame
+            // count (measured: a 77-frame/2.5667s video wrapped in a
+            // container ffprobe reports as 2.624s, because the padded audio
+            // track is the longest stream). Concatenating clips that each
+            // carry a mismatched audio track produces a variable-frame-rate
+            // result — 758 correct frames stretched to 25.5s instead of
+            // 25.2667s. `--muted` drops the track entirely so a clip's only
+            // stream is its video, and the concat has nothing to misalign.
+            "--muted",
+          ],
+          { cwd: remotionDir, stdio: "inherit" },
+        );
+      }
+      rmSync(stagingDir, { recursive: true, force: true });
+      console.log(`\n${wanted.length} clip(s) rendered under ${clipsDir}`);
+      if (!wantsAllClips) {
+        for (const range of wanted) {
+          console.log(`  ${range.cardId}: ${join(clipsDir, clipFileName(range, ranges.length))}`);
+        }
+        console.log(`Output folder: ${resolve(clipsDir)}`);
+        return;
+      }
+      console.log("Assembling…");
+    } else {
+      console.log(`Assembling ${ranges.length} clip(s) from ${clipsDir}…`);
+    }
+
+    assembleClips(ranges, clipsDir, rendersDir, period.start, timeline.total);
+    // Falls through to the shared audio mux below, exactly like the
+    // monolithic render — `rendered` just needs to resolve to the file
+    // assembleClips wrote.
+  } else {
+    // --- render (monolithic, default) ---
+    if (!existsSync(join(remotionDir, "node_modules"))) {
+      console.log("Installing the Remotion project's dependencies (first run)…");
+      execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: remotionDir, stdio: "inherit" });
+    }
+
+    mkdirSync(rendersDir, { recursive: true });
+    console.log("Rendering…");
+    execFileSync(
+      "npx",
+      [
+        "remotion",
+        "render",
+        "src/index.ts",
+        "Reel",
+        join(rendersDir, `reel-${period.start}.mp4`),
+        `--props=${propsPath}`,
+        // One browser at a time: each frame's MapLibre instance loads tiles, and
+        // parallel instances race the tile cache for no wall-clock gain.
+        "--concurrency=1",
+        // SwiftShader/ANGLE software GL — the headless-safe way to run WebGL.
+        "--gl=swangle",
+      ],
+      { cwd: remotionDir, stdio: "inherit" },
+    );
+
+    // The staging folder has done its job; brand assets do not live under
+    // system/ a second longer than the render needs them.
+    rmSync(stagingDir, { recursive: true, force: true });
+  }
 
   const audioDir = join(outputDir, "..", `audio-${period.start}`);
   mkdirSync(audioDir, { recursive: true });

@@ -12,6 +12,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  CLIP_DURATION_TOLERANCE_SECONDS,
+  assertRangesTileComposition,
+  clipFileName,
+  clipRangesFor,
+  concatListContents,
+  framesArg,
+  validateClipsForAssembly,
+  type ExistingClip,
+} from "./assemble.js";
 import { loadDotEnv } from "./env.js";
 import { isInsideBBox, validateBBox, wideFraming, MAX_BBOX_SIDE_DEGREES } from "./geo.js";
 import { withCache } from "./osm-cache.js";
@@ -20,6 +30,7 @@ import {
   BREATH_SECONDS,
   CAMERA_MOVE_SECONDS,
   CLOSE_ZOOM,
+  FPS,
   TIMING,
   activeItemIndex,
   cameraAt,
@@ -32,6 +43,7 @@ import {
   totalFramesOf,
   totalSeconds,
   totalSecondsOf,
+  type Scene,
 } from "./remotion/src/timeline.js";
 import {
   WORD_BUDGET,
@@ -303,6 +315,222 @@ test("the camera starts wide and arrives over the item at street zoom", () => {
     `after the move the camera must sit on the item, got ${JSON.stringify(arrived.center)}`,
   );
   assert(arrived.zoom === CLOSE_ZOOM, `after the move the zoom must be CLOSE_ZOOM, got ${arrived.zoom}`);
+});
+
+console.log("\nassemble — per-card clips that tile the composition exactly");
+
+// A small four-scene timeline (cover, two items, closing) with derived
+// durations, mirroring what buildTimeline() would hand the render step.
+function fourSceneTimeline(): { scenes: Scene[]; cardIds: string[] } {
+  const scenes = resolveScenes([
+    { kind: "cover", narrationSeconds: 1.6 },
+    { kind: "item", itemIndex: 0, narrationSeconds: 6.3 },
+    { kind: "item", itemIndex: 1, narrationSeconds: 4, minSeconds: 6 },
+    { kind: "closing", narrationSeconds: 2.4 },
+  ]);
+  return { scenes, cardIds: ["cover", "item-1", "item-2", "closing"] };
+}
+
+test("clip ranges cover the whole composition with no gaps or overlaps", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  assert(ranges.length === 4, `expected 4 ranges, got ${ranges.length}`);
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  assertRangesTileComposition(ranges, totalFramesExpected);
+});
+
+test("each clip's start frame is exactly its scene's start, rounded", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  ranges.forEach((range, index) => {
+    const expected = Math.round(scenes[index]!.start * FPS);
+    assert(
+      range.startFrame === expected,
+      `card ${range.cardId}: expected start frame ${expected}, got ${range.startFrame}`,
+    );
+  });
+});
+
+test("the last clip reaches the final frame of the composition", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  assert(
+    ranges[ranges.length - 1]!.endFrame === totalFramesExpected - 1,
+    `expected the last clip to end at frame ${totalFramesExpected - 1}, got ${ranges[ranges.length - 1]!.endFrame}`,
+  );
+});
+
+test("a mismatched card id / scene count is rejected before any range is computed", () => {
+  const { scenes } = fourSceneTimeline();
+  throws(
+    () => clipRangesFor(scenes, ["cover", "item-1"]),
+    /parallel lists/,
+    "expected a length-mismatch error",
+  );
+});
+
+test("an empty scene list is rejected rather than producing an empty video", () => {
+  throws(() => clipRangesFor([], []), /no scenes/, "expected an empty-timeline error");
+});
+
+test("framesArg formats the remotion --frames range", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  assert(framesArg(ranges[0]!) === `${ranges[0]!.startFrame}-${ranges[0]!.endFrame}`, "expected start-end");
+});
+
+test("clip file names sort in scene order with a zero-padded index", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const names = ranges.map((r) => clipFileName(r, ranges.length));
+  assert(
+    JSON.stringify(names) === JSON.stringify(["0-cover.mp4", "1-item-1.mp4", "2-item-2.mp4", "3-closing.mp4"]),
+    `unexpected file names: ${JSON.stringify(names)}`,
+  );
+  const sorted = [...names].sort();
+  assert(JSON.stringify(sorted) === JSON.stringify(names), "file names must sort into scene order");
+});
+
+test("assertRangesTileComposition catches a gap between two clips", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const withGap = ranges.map((r, i) => (i === 2 ? { ...r, startFrame: r.startFrame + 1 } : r));
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  throws(
+    () => assertRangesTileComposition(withGap, totalFramesExpected),
+    /item-2 starts at frame/,
+    "expected a gap to be caught",
+  );
+});
+
+test("assertRangesTileComposition catches an overlap between two clips", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const withOverlap = ranges.map((r, i) => (i === 1 ? { ...r, endFrame: r.endFrame + 1 } : r));
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  throws(
+    () => assertRangesTileComposition(withOverlap, totalFramesExpected),
+    /item-2 starts at frame/,
+    "expected an overlap to be caught",
+  );
+});
+
+test("assertRangesTileComposition catches a first clip that doesn't start at frame 0", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const shifted = ranges.map((r, i) => (i === 0 ? { ...r, startFrame: 1 } : r));
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  throws(
+    () => assertRangesTileComposition(shifted, totalFramesExpected),
+    /first clip starts at frame 1, expected 0/,
+    "expected a non-zero start to be caught",
+  );
+});
+
+test("assertRangesTileComposition catches a last clip that falls short of the total", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const short = ranges.map((r, i) => (i === ranges.length - 1 ? { ...r, endFrame: r.endFrame - 1 } : r));
+  const totalFramesExpected = Math.round(scenes[scenes.length - 1]!.end * FPS);
+  throws(
+    () => assertRangesTileComposition(short, totalFramesExpected),
+    /last clip ends at frame/,
+    "expected a short final clip to be caught",
+  );
+});
+
+console.log("\nassemble — validating clips already on disk before concatenating");
+
+function existingClip(cardId: string, path: string, seconds: number | undefined): ExistingClip {
+  return { cardId, path, exists: seconds !== undefined, measuredSeconds: seconds };
+}
+
+test("a full, correctly-sized set of clips validates without error", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.map((r) =>
+    existingClip(r.cardId, `/clips/${r.cardId}.mp4`, (r.endFrame - r.startFrame + 1) / FPS),
+  );
+  validateClipsForAssembly(ranges, clips); // must not throw
+});
+
+test("a missing clip fails naming its card id, not a generic message", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.map((r, i) =>
+    i === 2
+      ? existingClip(r.cardId, `/clips/${r.cardId}.mp4`, undefined)
+      : existingClip(r.cardId, `/clips/${r.cardId}.mp4`, (r.endFrame - r.startFrame + 1) / FPS),
+  );
+  throws(
+    () => validateClipsForAssembly(ranges, clips),
+    /card "item-2"/,
+    "expected the missing clip's card id to be named",
+  );
+});
+
+test("a clip whose duration doesn't match the current timeline fails naming its card id", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.map((r, i) =>
+    i === 1
+      ? existingClip(r.cardId, `/clips/${r.cardId}.mp4`, (r.endFrame - r.startFrame + 1) / FPS + 1)
+      : existingClip(r.cardId, `/clips/${r.cardId}.mp4`, (r.endFrame - r.startFrame + 1) / FPS),
+  );
+  throws(
+    () => validateClipsForAssembly(ranges, clips),
+    /card "item-1" is.*expects/s,
+    "expected the mismatched clip's card id and expectation to be named",
+  );
+});
+
+test("a duration within one frame of tolerance is accepted", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.map((r) =>
+    existingClip(
+      r.cardId,
+      `/clips/${r.cardId}.mp4`,
+      (r.endFrame - r.startFrame + 1) / FPS + CLIP_DURATION_TOLERANCE_SECONDS * 0.5,
+    ),
+  );
+  validateClipsForAssembly(ranges, clips); // must not throw
+});
+
+test("clips out of scene order are rejected rather than silently concatenated wrong", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.map((r) => existingClip(r.cardId, `/clips/${r.cardId}.mp4`, (r.endFrame - r.startFrame + 1) / FPS));
+  const shuffled = [clips[0]!, clips[2]!, clips[1]!, clips[3]!];
+  throws(
+    () => validateClipsForAssembly(ranges, shuffled),
+    /expected card "item-1" at position 1, got "item-2"/,
+    "expected the position and both card ids to be named",
+  );
+});
+
+test("a clip-count mismatch is rejected up front", () => {
+  const { scenes, cardIds } = fourSceneTimeline();
+  const ranges = clipRangesFor(scenes, cardIds);
+  const clips = ranges.slice(0, 2).map((r) => existingClip(r.cardId, `/clips/${r.cardId}.mp4`, 1));
+  throws(
+    () => validateClipsForAssembly(ranges, clips),
+    /2 clip\(s\) given for 4 scene\(s\)/,
+    "expected a count-mismatch error",
+  );
+});
+
+test("concatListContents produces one quoted `file` line per clip, in order", () => {
+  const contents = concatListContents(["/clips/0-cover.mp4", "/clips/1-item-1.mp4"]);
+  assert(
+    contents === "file '/clips/0-cover.mp4'\nfile '/clips/1-item-1.mp4'\n",
+    `unexpected concat list contents: ${JSON.stringify(contents)}`,
+  );
+});
+
+test("concatListContents rejects an empty clip list", () => {
+  throws(() => concatListContents([]), /no clips/, "expected an empty-list error");
 });
 
 console.log("\nosm-cache — the network is not a dependency of every run");

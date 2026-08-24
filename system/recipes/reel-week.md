@@ -271,6 +271,14 @@ pista silenciosa. Lee la carpeta de salida
 de la **última línea que imprime el script** ("Output folder: ..."). Nunca la
 adivines. Verifica el MP4 **abriéndolo**, no comprobando que el archivo existe.
 
+#### Modo clips por tarjeta (para rehacer una escena)
+
+`--clips` renderiza una escena (clip mudo) por tarjeta del storyboard y las
+ensambla. `--card <id>` renderiza solo esas tarjetas sin ensamblar, útil para
+rehacerse una sola que no gustó. `--assemble` reconstruye el video desde los
+clips ya en disco y muxea el audio. Todos necesitan storyboard y falla si
+falta un clip o su duración no calza con la timeline.
+
 **Enum cerrado — `render.script`:**
 
 | Valor | Script |
