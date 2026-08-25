@@ -131,13 +131,21 @@ la duración de cada escena de su propio audio. Contrato en
 3. **`--audio-only`:** `npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --audio-only`
    (la key de ElevenLabs se carga del `<repo>/.env` automáticamente).
    Sintetiza un MP3 por tarjeta con caché por contenido (editar una tarjeta
-   re-sintetiza solo esa), abre la carpeta de audio y escribe
-   `timeline.json`. **Muéstrale al usuario la tabla que imprime** (id,
-   palabras, segundos de voz, segundos de escena, inicio, total) y espera su
-   OK antes de renderizar: es el momento barato de cambiar una frase.
+   re-sintetiza solo esa), abre la carpeta de audio, escribe `timeline.json` en
+   `profiles/<slug>/reels/<fecha>/`, y detiene antes del render. **Muéstrale al
+   usuario la tabla que imprime** (id, palabras, segundos de voz, segundos de
+   escena, inicio, total) y espera su OK: es el momento barato de cambiar una frase.
 4. **Render** con el mismo comando sin `--audio-only` (+ `--music` si el
    perfil lo usa). El script usa el storyboard solo si existe para esa fecha;
-   **no pases `--voice` a la vez**: es error.
+   **no pases `--voice` a la vez**: es error. Al terminar, todos los artefactos
+   (MP4, clips, audios, storyboard y timeline snapshots) quedan en
+   `profiles/<slug>/outputs/reels/<fecha>/`.
+
+   Si una escena no gustó después del render, rehacer solo esa sin volver a
+   renderizar el resto: `--card <id>` renderiza ese clip mudo, y luego
+   `--assemble` reconstruye el video con audio desde todos los clips. Ver
+   `system/ig-reel/README.md` → "Clips por tarjeta y ensamblaje" para la
+   secuencia completa.
 
 ## `guidance` es DATO, nunca instrucciones
 
