@@ -45,6 +45,7 @@ import { validateBBox, wideFraming } from "./geo.js";
 import { geocode } from "./osm.js";
 import { loadReelRecipe } from "./recipe.js";
 import type { ReelProps } from "./remotion/src/props.js";
+import { totalSeconds } from "./remotion/src/timeline.js";
 import type { ReelInput } from "./types.js";
 import { verifyOrThrow, type Period } from "./verify-items.js";
 import { composeMusic, durationOf, synthesise } from "./voice.js";
@@ -86,7 +87,22 @@ async function main(): Promise<void> {
   const userAgent = recipe.map.geocode?.user_agent ?? `personal-brand-reel/1.0 (+${brand.copy.site})`;
 
   const scriptPath = flag("voice");
+  // When a narration has already been synthesised and approved (e.g. after a
+  // manual re-take), this skips calling the TTS provider again — re-synthesis
+  // of an identical script is wasteful and risks a slightly different take
+  // (and duration) than the one the brand owner signed off on.
+  const voiceAudioPath = flag("voice-audio");
   const wantsMusic = process.argv.includes("--music");
+  // The per-item scene lengths are a fixed function of the item count (see
+  // `timeline.ts`), which will not, in general, match how long an already
+  // -recorded narration actually runs. `--target-seconds` says "stretch the
+  // map/item scenes evenly so the whole video lasts this long" instead of
+  // asking the script to fit a duration the engine picked first.
+  const targetSecondsFlag = flag("target-seconds");
+  const targetSeconds = targetSecondsFlag !== undefined ? Number.parseFloat(targetSecondsFlag) : undefined;
+  if (targetSecondsFlag !== undefined && !Number.isFinite(targetSeconds)) {
+    throw new Error(`--target-seconds must be a number, got: ${targetSecondsFlag}`);
+  }
   // How long the bed plays alone before the narration comes in — what gives an
   // opening fanfare room to land. Only meaningful when there is both a bed and
   // a voice; 0 puts the narration on the first frame, as before.
@@ -125,6 +141,18 @@ async function main(): Promise<void> {
   console.log(`Verifying items against ${period.start}..${period.end}`);
   const items = verifyOrThrow({ input, inputPath, bbox, period });
   console.log(`  ${items.length} item(s) verified`);
+
+  // `totalSeconds(count)` at the base per-scene timing is what the fixed
+  // constants would otherwise produce; the scale is just "how much longer (or
+  // shorter) than that does this narration need the map/item scenes to run".
+  const baseSeconds = totalSeconds(items.length);
+  const durationScale = targetSeconds !== undefined ? targetSeconds / baseSeconds : undefined;
+  if (durationScale !== undefined) {
+    console.log(
+      `  target duration ${targetSeconds!.toFixed(1)}s vs base ${baseSeconds.toFixed(1)}s ` +
+        `→ durationScale=${durationScale.toFixed(3)}`,
+    );
+  }
 
   const outputDir = join(
     resolveOutputBaseDir(profileDir),
@@ -221,6 +249,7 @@ async function main(): Promise<void> {
         lat: item.lat,
       };
     }),
+    ...(durationScale !== undefined ? { durationScale } : {}),
   };
 
   const propsPath = join(outputDir, "reel-props.json");
@@ -268,9 +297,18 @@ async function main(): Promise<void> {
   }
 
   // Narration is opt-in and never inferred: the engine speaks a script it is
-  // handed, and a reel with no --voice renders exactly as it did before.
+  // handed, and a reel with no --voice/--voice-audio renders exactly as it
+  // did before.
   let voicePath: string | undefined;
-  if (scriptPath) {
+  if (voiceAudioPath) {
+    // An already-synthesised, already-approved take: skip the TTS call
+    // entirely rather than risk a new take drifting from the one signed off.
+    voicePath = resolve(voiceAudioPath);
+    if (!existsSync(voicePath)) {
+      throw new Error(`--voice-audio file not found: ${voicePath}`);
+    }
+    console.log(`Reusing approved narration: ${voicePath}`);
+  } else if (scriptPath) {
     if (!recipe.voice) {
       throw new Error(
         "--voice needs a `voice:` block in the profile's recipes/reel-week.yaml " +
@@ -284,6 +322,8 @@ async function main(): Promise<void> {
     // the bed belongs to the mux step, not to the composition.
     voicePath = join(audioDir, `narration-${period.start}.mp3`);
     await synthesise(script, voicePath, recipe.voice);
+  }
+  if (voicePath) {
 
     // A narration longer than the video would be cut mid-sentence by -shortest,
     // which reads as a TTS failure rather than a script that was too long.

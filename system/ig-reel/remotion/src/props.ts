@@ -71,4 +71,12 @@ export type ReelProps = {
     span: [number, number];
   };
   items: ReelPropsItem[];
+  /**
+   * Multiplies the per-item `map`/`item` scene lengths (see `timeline.ts`'s
+   * `scaledTiming`). Defaults to 1 — the fixed-per-item-count duration this
+   * engine always had. Set by `render-reel-week.ts` when a `--target-seconds`
+   * flag asks the video to match an already-recorded narration that runs
+   * longer or shorter than `totalSeconds(items.length)` at the base timing.
+   */
+  durationScale?: number;
 }

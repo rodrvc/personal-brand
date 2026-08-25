@@ -28,6 +28,7 @@ import {
   PIN_DROP_SECONDS,
   PIN_SETTLE_SECONDS,
   TIMING,
+  type Timing,
   cameraAt,
   clamp01,
   closingStart,
@@ -35,6 +36,7 @@ import {
   lerp,
   mapStart,
   opacityBetween,
+  scaledTiming,
 } from './timeline';
 import './style.css';
 
@@ -107,12 +109,14 @@ const Cover: React.FC<{ seconds: number; copy: ReelProps['copy'] }> = ({ seconds
             })})`,
           }}
         />
-        <span
-          className="reelCoverCount"
-          style={{ opacity: opacityBetween(seconds, 0.75, textEnd, 0.5) }}
-        >
-          {copy.coverCount}
-        </span>
+        {copy.coverCount.trim() ? (
+          <span
+            className="reelCoverCount"
+            style={{ opacity: opacityBetween(seconds, 0.75, textEnd, 0.5) }}
+          >
+            {copy.coverCount}
+          </span>
+        ) : null}
       </div>
       <span
         className="reelCoverWord"
@@ -131,8 +135,9 @@ const MapScene: React.FC<{
   fps: number;
   accent: string;
   attribution: string;
-}> = ({ item, index, seconds, fps, accent, attribution }) => {
-  const start = mapStart(index);
+  timing: Timing;
+}> = ({ item, index, seconds, fps, accent, attribution, timing }) => {
+  const start = mapStart(index, timing);
   const pinProgress = spring({
     frame: Math.round((seconds - start - PIN_DROP_SECONDS) * fps),
     fps,
@@ -144,7 +149,7 @@ const MapScene: React.FC<{
   return (
     <AbsoluteFill
       className="reelMapScene"
-      style={{ opacity: opacityBetween(seconds, start, start + TIMING.map + TIMING.overlap) }}
+      style={{ opacity: opacityBetween(seconds, start, start + timing.map + timing.overlap) }}
     >
       <Pin progress={clamp01(pinProgress)} visible={seconds >= start + PIN_DROP_SECONDS} accent={accent} />
       <div
@@ -161,21 +166,22 @@ const MapScene: React.FC<{
   );
 };
 
-const EventSlide: React.FC<{ item: ReelPropsItem; index: number; seconds: number; wordmark: string }> = ({
-  item,
-  index,
-  seconds,
-  wordmark,
-}) => {
-  const start = itemStart(index);
-  const local = clamp01((seconds - start) / TIMING.item);
+const EventSlide: React.FC<{
+  item: ReelPropsItem;
+  index: number;
+  seconds: number;
+  wordmark: string;
+  timing: Timing;
+}> = ({ item, index, seconds, wordmark, timing }) => {
+  const start = itemStart(index, timing);
+  const local = clamp01((seconds - start) / timing.item);
   // Ken Burns: alternate the drift direction per item so the cut feels edited.
   const imageScale = index % 2 === 0 ? lerp(1, 1.16, local) : lerp(1.16, 1, local);
 
   return (
     <AbsoluteFill
       className="reelEvent"
-      style={{ opacity: opacityBetween(seconds, start, start + TIMING.item + TIMING.overlap) }}
+      style={{ opacity: opacityBetween(seconds, start, start + timing.item + timing.overlap) }}
     >
       <div className="reelPosterZone">
         <Img
@@ -257,9 +263,11 @@ export const Reel: React.FC<ReelProps> = (props) => {
   // empty or whitespace attribution falls back to the engine's MAP_ATTRIBUTION.
   const attribution = props.attribution.trim() || MAP_ATTRIBUTION;
 
+  const timing = useMemo(() => scaledTiming(props.durationScale ?? 1), [props.durationScale]);
+
   const camera = useMemo(
-    () => cameraAt(seconds, props.map, props.items),
-    [seconds, props.map, props.items],
+    () => cameraAt(seconds, props.map, props.items, timing),
+    [seconds, props.map, props.items, timing],
   );
   const { containerRef, loaded } = useMapLibre(camera);
 
@@ -281,7 +289,7 @@ export const Reel: React.FC<ReelProps> = (props) => {
     '--font-logo': logoFont,
   } as React.CSSProperties;
 
-  const closing = closingStart(props.items.length);
+  const closing = closingStart(props.items.length, timing);
 
   return (
     <AbsoluteFill className="reelScene" style={{ ...cssVars, background: 'var(--surface)' }}>
@@ -302,8 +310,15 @@ export const Reel: React.FC<ReelProps> = (props) => {
             fps={fps}
             accent={props.colors.accent}
             attribution={attribution}
+            timing={timing}
           />
-          <EventSlide item={item} index={index} seconds={seconds} wordmark={props.copy.wordmark} />
+          <EventSlide
+            item={item}
+            index={index}
+            seconds={seconds}
+            wordmark={props.copy.wordmark}
+            timing={timing}
+          />
         </React.Fragment>
       ))}
       {seconds >= closing - TIMING.overlap ? (
