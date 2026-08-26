@@ -195,7 +195,7 @@ el otro pone un guion encima de los tiempos fijos; pasar los dos es error.
 ```yaml
 storyboard: reel
 version: 1
-transitions: crossfade  # opcional: 'crossfade' (default) o 'cut' para cortes secos
+transitions: cut  # opcional: 'cut' (default) para cortes secos, o 'crossfade' para fades con solape
 voice:            # opcional: override parcial del bloque voice: del recipe
   speed: 1.05
 cards:
@@ -269,17 +269,18 @@ ajusta a la voz. Sigue vigente para `--voice`.
 viene, la composición calcula las escenas con los tiempos fijos y el output
 es idéntico al anterior, frame a frame.
 
-### Transiciones: crossfade o cut
+### Transiciones: cut o crossfade
 
-Por defecto, las escenas se solapan 0.35s para que el fade-in/out tenga espacio;
-la portada se extiende beyond su duración y el cierre arranca antes. Con 
-`transitions: cut` (en el storyboard) o `--cut` (flag CLI), cada escena aparece
-a opacidad completa en su inicio exacto y desaparece en su fin exacto — sin solape
-ni fade. Los rangos de frames de la timeline no cambian; solo se anulan los fades.
-
-Útil cuando la edición de transiciones ocurre **fuera del motor** — cada clip
+Por defecto, las escenas aparecen a opacidad completa en su inicio exacto y
+desaparecen en su fin exacto — sin solape ni fade (`transitions: cut`). Útil
+cuando la edición de transiciones ocurre **fuera del motor** — cada clip
 por tarjeta es independiente, y el editor agrega las propias transiciones en su
 app de edición de video.
+
+Con `transitions: crossfade` (en el storyboard) o `--crossfade` (flag CLI), las
+escenas se solapan 0.35s para que el fade-in/out tenga espacio; la portada se
+extiende beyond su duración y el cierre arranca antes. Los rangos de frames de
+la timeline no cambian; solo se aplican los fades.
 
 ---
 

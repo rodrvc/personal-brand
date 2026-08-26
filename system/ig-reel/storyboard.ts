@@ -71,7 +71,7 @@ export interface Storyboard {
   cards: StoryboardCard[];
   /** Partial override of the recipe's `voice:` block, same keys. */
   voice?: Partial<VoiceConfig>;
-  /** Transition mode: 'crossfade' (default) or 'cut' for sharp scene transitions. */
+  /** Transition mode: 'cut' (default) for sharp scene transitions, or 'crossfade' for overlapping fades. */
   transitions?: 'crossfade' | 'cut';
 }
 

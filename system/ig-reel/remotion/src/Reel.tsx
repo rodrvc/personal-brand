@@ -293,6 +293,9 @@ export const Reel: React.FC<ReelProps> = (props) => {
 
   const logoFont = props.logoFontFile ? `"ReelLogo", ${props.fonts.logo}` : props.fonts.logo;
 
+  // Fade factor: 0 for sharp cuts (default), 1 for crossfade with overlap
+  const fade = props.transitions === 'crossfade' ? 1 : 0;
+
   const cssVars = {
     '--accent': props.colors.accent,
     '--surface': props.colors.surface,
@@ -313,8 +316,6 @@ export const Reel: React.FC<ReelProps> = (props) => {
   const closing = closingScene(scenes);
   const items = itemScenes(scenes);
 
-  // Fade factor: 1 for normal crossfade, 0 for sharp cuts
-  const fade = props.transitions === 'cut' ? 0 : 1;
   // In cut mode, cover's exit tail is zeroed: it ends exactly at its scene end
   const coverExitTail = fade === 0 ? 0 : COVER_EXIT_TAIL;
   // In cut mode, closing starts exactly at its scene start, not before

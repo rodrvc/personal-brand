@@ -1175,11 +1175,11 @@ test("opacityBetween with fade 0 is a sharp step: 1 in [start, end), 0 elsewhere
   assert(opacityBetween(end + 0.1, start, end, 0) === 0, "opacity is 0 after end");
 });
 
-test("storyboard with valid transitions field accepts 'crossfade' or 'cut'", () => {
+test("storyboard with valid transitions field accepts 'cut' or 'crossfade'", () => {
   const yaml1 = `
 storyboard: reel
 version: 1
-transitions: crossfade
+transitions: cut
 cards:
   - id: c1
     visual: cover
@@ -1199,11 +1199,11 @@ cards:
     narration: "Thank you and goodbye."
 `;
   const result1 = validateStoryboard(parseYaml(yaml1, "test"), "test", 2);
-  assert(result1.transitions === "crossfade", `expected crossfade, got ${result1.transitions}`);
+  assert(result1.transitions === "cut", `expected cut, got ${result1.transitions}`);
 
-  const yaml2 = yaml1.replace("crossfade", "cut");
+  const yaml2 = yaml1.replace("cut", "crossfade");
   const result2 = validateStoryboard(parseYaml(yaml2, "test"), "test", 2);
-  assert(result2.transitions === "cut", `expected cut, got ${result2.transitions}`);
+  assert(result2.transitions === "crossfade", `expected crossfade, got ${result2.transitions}`);
 });
 
 test("storyboard with invalid transitions value rejects it", () => {
