@@ -254,6 +254,7 @@ export function cameraAt(
 
 /**
  * Fade-in/fade-out envelope for a scene, matching the prototype's overlaps.
+ * When `fade` is 0, returns a sharp step: 0 before start, 1 in [start, end), 0 at or after end.
  */
 export function opacityBetween(
   seconds: number,
@@ -261,6 +262,10 @@ export function opacityBetween(
   end: number,
   fade: number = TIMING.overlap,
 ): number {
+  if (fade === 0) {
+    // Sharp cut: full opacity in the open-closed interval [start, end)
+    return seconds >= start && seconds < end ? 1 : 0;
+  }
   const fadeIn = clamp01((seconds - start) / fade);
   const fadeOut = clamp01((end - seconds) / fade);
   return Math.min(fadeIn, fadeOut);

@@ -38,6 +38,7 @@ import {
   defaultScenes,
   itemStart,
   mapStart,
+  opacityBetween,
   resolveScenes,
   totalFrames,
   totalFramesOf,
@@ -1134,6 +1135,131 @@ test("a changed text or a changed speed changes the key", () => {
 test("effectiveVoice overlays only the keys the storyboard sets", () => {
   const merged = effectiveVoice({ voice_id: "v1", stability: 0.4, speed: 1 }, { speed: 0.9 });
   assert(merged.voice_id === "v1" && merged.stability === 0.4 && merged.speed === 0.9, JSON.stringify(merged));
+});
+
+console.log("\ntimeline — opacity envelope");
+
+test("opacityBetween with default fade is a smooth envelope", () => {
+  const start = 1;
+  const end = 3;
+  const fade = TIMING.overlap;
+  // Before start, opacity is 0
+  assert(opacityBetween(start - 0.1, start, end, fade) === 0, "opacity is 0 before start");
+  // Just after start, fading in
+  const justAfter = opacityBetween(start + fade * 0.5, start, end, fade);
+  assert(justAfter > 0 && justAfter < 1, `after start + fade*0.5, opacity is ${justAfter}, should be ramping up`);
+  // Far enough in that we're past the fade-in
+  const midFade = opacityBetween(start + fade * 1.5, start, end, fade);
+  assert(midFade === 1, "after the fade-in ramp, opacity is full");
+  // Just before end, fading out
+  const justBefore = opacityBetween(end - fade * 0.5, start, end, fade);
+  assert(justBefore > 0 && justBefore < 1, `before end - fade*0.5, opacity is ${justBefore}, should be ramping down`);
+  // After end, opacity is 0
+  assert(opacityBetween(end + 0.1, start, end, fade) === 0, "opacity is 0 after end");
+});
+
+test("opacityBetween with fade 0 is a sharp step: 1 in [start, end), 0 elsewhere", () => {
+  const start = 1;
+  const end = 3;
+  // Before start
+  assert(opacityBetween(start - 0.1, start, end, 0) === 0, "opacity is 0 before start");
+  // At start (inclusive)
+  assert(opacityBetween(start, start, end, 0) === 1, "opacity is 1 at start");
+  // In the middle
+  assert(opacityBetween(1.5, start, end, 0) === 1, "opacity is 1 in the middle");
+  // Just before end (exclusive boundary)
+  assert(opacityBetween(end - 1e-10, start, end, 0) === 1, "opacity is 1 just before end");
+  // At end (exclusive)
+  assert(opacityBetween(end, start, end, 0) === 0, "opacity is 0 at end");
+  // After end
+  assert(opacityBetween(end + 0.1, start, end, 0) === 0, "opacity is 0 after end");
+});
+
+test("storyboard with valid transitions field accepts 'cut' or 'crossfade'", () => {
+  const yaml1 = `
+storyboard: reel
+version: 1
+transitions: cut
+cards:
+  - id: c1
+    visual: cover
+    narration: "Welcome to the tour here today."
+  - id: c2
+    visual: item
+    item: 0
+    narration: "This is the first item we want to show everyone."
+    min_seconds: 4
+  - id: c3
+    visual: item
+    item: 1
+    narration: "This is the second item in our tour."
+    min_seconds: 4
+  - id: c4
+    visual: closing
+    narration: "Thank you and goodbye."
+`;
+  const result1 = validateStoryboard(parseYaml(yaml1, "test"), "test", 2);
+  assert(result1.transitions === "cut", `expected cut, got ${result1.transitions}`);
+
+  const yaml2 = yaml1.replace("cut", "crossfade");
+  const result2 = validateStoryboard(parseYaml(yaml2, "test"), "test", 2);
+  assert(result2.transitions === "crossfade", `expected crossfade, got ${result2.transitions}`);
+});
+
+test("storyboard with invalid transitions value rejects it", () => {
+  const yaml = `
+storyboard: reel
+version: 1
+transitions: dissolve
+cards:
+  - id: c1
+    visual: cover
+    narration: "Welcome to the tour here today."
+  - id: c2
+    visual: item
+    item: 0
+    narration: "This is the first item we want to show everyone."
+    min_seconds: 4
+  - id: c3
+    visual: item
+    item: 1
+    narration: "This is the second item in our tour."
+    min_seconds: 4
+  - id: c4
+    visual: closing
+    narration: "Thank you and goodbye."
+`;
+  throws(
+    () => validateStoryboard(parseYaml(yaml, "test"), "test", 2),
+    /transitions.*must be "crossfade" or "cut"/,
+    "invalid transitions value should fail",
+  );
+});
+
+test("storyboard without transitions field defaults to undefined (not an error)", () => {
+  const yaml = `
+storyboard: reel
+version: 1
+cards:
+  - id: c1
+    visual: cover
+    narration: "Welcome to the tour here today."
+  - id: c2
+    visual: item
+    item: 0
+    narration: "This is the first item we want to show everyone."
+    min_seconds: 4
+  - id: c3
+    visual: item
+    item: 1
+    narration: "This is the second item in our tour."
+    min_seconds: 4
+  - id: c4
+    visual: closing
+    narration: "Thank you and goodbye."
+`;
+  const result = validateStoryboard(parseYaml(yaml, "test"), "test", 2);
+  assert(result.transitions === undefined, `expected undefined, got ${result.transitions}`);
 });
 
 await (async () => {

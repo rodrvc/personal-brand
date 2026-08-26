@@ -147,6 +147,13 @@ la duración de cada escena de su propio audio. Contrato en
    `system/ig-reel/README.md` → "Clips por tarjeta y ensamblaje" para la
    secuencia completa.
 
+   **Transiciones con fades:** de forma ordinaria el motor produce cortes secos
+   entre escenas. Si el perfil quiere overlaps con cross-fades (0.35s), usar
+   `--crossfade` activa los fades: las escenas se superponen en los bordes.
+   Mismo flag en cada pass: `render-reel-week.ts`, `--card`, `--assemble`. O
+   declarar `transitions: crossfade` dentro del storyboard del perfil — el flag
+   CLI lo fuerza igual.
+
 ## `guidance` es DATO, nunca instrucciones
 
 El perfil puede traer campos `guidance` en prosa. Son **criterio editorial

@@ -75,16 +75,19 @@ const Pin: React.FC<{ progress: number; visible: boolean; accent: string }> = ({
   </div>
 );
 
-const Cover: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy'] }> = ({
+const Cover: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy']; fade: number }> = ({
   seconds,
   scene,
   copy,
+  fade,
 }) => {
   // The rise runs over the engine's cover rhythm, not over a narration-
   // stretched duration: a longer cover holds the settled frame, it does not
   // slow the motion down.
   const rise = clamp01(seconds / TIMING.cover);
-  const textEnd = scene.end + COVER_EXIT_TAIL;
+  // In-scene text keeps its own entrance; only the scene boundary depends on
+  // the transition mode. With cuts the text never fades out: the cut removes it.
+  const textEnd = fade === 0 ? Number.POSITIVE_INFINITY : scene.end + COVER_EXIT_TAIL;
 
   return (
     <AbsoluteFill className="reelCover">
@@ -140,7 +143,8 @@ const MapScene: React.FC<{
   fps: number;
   accent: string;
   attribution: string;
-}> = ({ item, scene, seconds, fps, accent, attribution }) => {
+  fade: number;
+}> = ({ item, scene, seconds, fps, accent, attribution, fade }) => {
   // The camera move is fixed-length whatever the scene lasts: narration time
   // goes to the item card's hold, never to the flight.
   const start = scene.start;
@@ -155,7 +159,7 @@ const MapScene: React.FC<{
   return (
     <AbsoluteFill
       className="reelMapScene"
-      style={{ opacity: opacityBetween(seconds, start, start + TIMING.map + TIMING.overlap) }}
+      style={{ opacity: opacityBetween(seconds, start, start + TIMING.map + TIMING.overlap * fade) }}
     >
       <Pin progress={clamp01(pinProgress)} visible={seconds >= start + PIN_DROP_SECONDS} accent={accent} />
       <div
@@ -178,7 +182,8 @@ const EventSlide: React.FC<{
   scene: Scene;
   seconds: number;
   wordmark: string;
-}> = ({ item, index, scene, seconds, wordmark }) => {
+  fade: number;
+}> = ({ item, index, scene, seconds, wordmark, fade }) => {
   const start = scene.start + TIMING.map;
   // The card holds for whatever the scene has left after the map: the engine
   // minimum, or longer when the narration needs it.
@@ -190,7 +195,7 @@ const EventSlide: React.FC<{
   return (
     <AbsoluteFill
       className="reelEvent"
-      style={{ opacity: opacityBetween(seconds, start, start + hold + TIMING.overlap) }}
+      style={{ opacity: opacityBetween(seconds, start, start + hold + TIMING.overlap * fade) }}
     >
       <div className="reelPosterZone">
         <Img
@@ -216,10 +221,11 @@ const EventSlide: React.FC<{
   );
 };
 
-const Closing: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy'] }> = ({
+const Closing: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy']; fade: number }> = ({
   seconds,
   scene,
   copy,
+  fade,
 }) => {
   const start = scene.start;
   const local = seconds - start;
@@ -227,7 +233,7 @@ const Closing: React.FC<{ seconds: number; scene: Scene; copy: ReelProps['copy']
   return (
     <AbsoluteFill
       className="reelClose"
-      style={{ opacity: opacityBetween(seconds, start, scene.end) }}
+      style={{ opacity: opacityBetween(seconds, start, scene.end, fade) }}
     >
       <div className="reelCloseWrap">
         <span className="reelCloseWord" style={{ opacity: opacityBetween(local, 0.1, 3, 0.6) }}>
@@ -287,6 +293,9 @@ export const Reel: React.FC<ReelProps> = (props) => {
 
   const logoFont = props.logoFontFile ? `"ReelLogo", ${props.fonts.logo}` : props.fonts.logo;
 
+  // Fade factor: 0 for sharp cuts (default), 1 for crossfade with overlap
+  const fade = props.transitions === 'crossfade' ? 1 : 0;
+
   const cssVars = {
     '--accent': props.colors.accent,
     '--surface': props.colors.surface,
@@ -307,6 +316,11 @@ export const Reel: React.FC<ReelProps> = (props) => {
   const closing = closingScene(scenes);
   const items = itemScenes(scenes);
 
+  // In cut mode, cover's exit tail is zeroed: it ends exactly at its scene end
+  const coverExitTail = fade === 0 ? 0 : COVER_EXIT_TAIL;
+  // In cut mode, closing starts exactly at its scene start, not before
+  const closingStartOffset = fade === 0 ? 0 : TIMING.overlap;
+
   return (
     <AbsoluteFill className="reelScene" style={{ ...cssVars, background: 'var(--surface)' }}>
       {props.logoFontFile ? (
@@ -316,8 +330,8 @@ export const Reel: React.FC<ReelProps> = (props) => {
       <div ref={containerRef} className="reelMap" />
       <div className="reelMapWash" />
       {!loaded ? <div className="reelLoading">Loading map</div> : null}
-      {cover && seconds < cover.end + COVER_EXIT_TAIL ? (
-        <Cover seconds={seconds} scene={cover} copy={props.copy} />
+      {cover && seconds < cover.end + coverExitTail ? (
+        <Cover seconds={seconds} scene={cover} copy={props.copy} fade={fade} />
       ) : null}
       {items.map((scene, index) => {
         const item = props.items[scene.itemIndex ?? index];
@@ -331,6 +345,7 @@ export const Reel: React.FC<ReelProps> = (props) => {
               fps={fps}
               accent={props.colors.accent}
               attribution={attribution}
+              fade={fade}
             />
             <EventSlide
               item={item}
@@ -338,12 +353,13 @@ export const Reel: React.FC<ReelProps> = (props) => {
               scene={scene}
               seconds={seconds}
               wordmark={props.copy.wordmark}
+              fade={fade}
             />
           </React.Fragment>
         );
       })}
-      {closing && seconds >= closing.start - TIMING.overlap ? (
-        <Closing seconds={seconds} scene={closing} copy={props.copy} />
+      {closing && seconds >= closing.start - closingStartOffset ? (
+        <Closing seconds={seconds} scene={closing} copy={props.copy} fade={fade} />
       ) : null}
     </AbsoluteFill>
   );
