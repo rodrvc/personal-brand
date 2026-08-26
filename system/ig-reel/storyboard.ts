@@ -51,7 +51,7 @@ export const MIN_ITEM_CARDS = 2;
 export const MAX_ITEM_CARDS = 6;
 
 const CARD_KEYS = ["id", "visual", "item", "narration", "min_seconds"];
-const ROOT_KEYS = ["storyboard", "version", "voice", "cards"];
+const ROOT_KEYS = ["storyboard", "version", "voice", "cards", "transitions"];
 const VOICE_KEYS = ["voice_id", "model_id", "stability", "similarity_boost", "style", "speed", "use_speaker_boost"];
 
 export interface StoryboardCard {
@@ -71,6 +71,8 @@ export interface Storyboard {
   cards: StoryboardCard[];
   /** Partial override of the recipe's `voice:` block, same keys. */
   voice?: Partial<VoiceConfig>;
+  /** Transition mode: 'crossfade' (default) or 'cut' for sharp scene transitions. */
+  transitions?: 'crossfade' | 'cut';
 }
 
 /** Whitespace-separated tokens that contain at least one letter or digit. */
@@ -129,6 +131,14 @@ export function validateStoryboard(parsed: unknown, path: string, itemCount: num
       }
     }
     voice = node as Partial<VoiceConfig>;
+  }
+
+  let transitions: 'crossfade' | 'cut' | undefined;
+  if (root.transitions !== undefined) {
+    if (typeof root.transitions !== "string" || !["crossfade", "cut"].includes(root.transitions)) {
+      fail(path, `"transitions" must be "crossfade" or "cut", got ${JSON.stringify(root.transitions)}.`);
+    }
+    transitions = root.transitions as 'crossfade' | 'cut';
   }
 
   if (!Array.isArray(root.cards) || root.cards.length === 0) {
@@ -232,7 +242,7 @@ export function validateStoryboard(parsed: unknown, path: string, itemCount: num
     );
   }
 
-  return { cards, voice };
+  return { cards, voice, transitions };
 }
 
 /** Where a profile's storyboard for a period lives by default. */

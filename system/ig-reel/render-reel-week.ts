@@ -4,7 +4,7 @@
  * Usage:
  *   npx tsx system/ig-reel/render-reel-week.ts --profile <slug> [--date YYYY-MM-DD]
  *                                              [--storyboard [path]] [--audio-only]
- *                                              [--voice <script.txt>] [--music]
+ *                                              [--voice <script.txt>] [--music] [--cut]
  *
  * The profile slug is required and never inferred: rendering the wrong brand
  * silently is the expensive failure, and asking is cheap.
@@ -22,6 +22,7 @@
  * is the legacy single-script narration laid over the fixed rhythm; the two
  * are exclusive. `--music` adds the bed described by the profile. Without any
  * of them the reel is rendered silent, exactly as before storyboards existed.
+ * `--cut` renders with sharp scene transitions (no crossfades or overlaps).
  */
 
 import { execFileSync } from "node:child_process";
@@ -491,6 +492,8 @@ async function main(): Promise<void> {
     }),
     // Absent without a storyboard: the composition runs its fixed rhythm.
     scenes: timeline?.scenes,
+    // Transition mode: overridden by --cut flag, or sourced from storyboard
+    transitions: process.argv.includes("--cut") ? "cut" : timeline?.transitions,
   };
 
   const propsPath = join(outputDir, "reel-props.json");

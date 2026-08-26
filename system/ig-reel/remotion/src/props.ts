@@ -94,4 +94,10 @@ export type ReelProps = {
    * storyboard.
    */
   scenes?: ReelScene[];
+  /**
+   * Transition mode: 'crossfade' (default) for overlapping scene fades,
+   * or 'cut' for sharp transitions with no overlap. When 'cut', each scene
+   * appears at full opacity at its start and ends abruptly.
+   */
+  transitions?: 'crossfade' | 'cut';
 }
