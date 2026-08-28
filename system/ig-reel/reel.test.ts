@@ -28,6 +28,8 @@ import { withCache } from "./osm-cache.js";
 import { loadReelRecipe } from "./recipe.js";
 import {
   BREATH_SECONDS,
+  sceneDuration,
+  minSceneSeconds,
   CAMERA_MOVE_SECONDS,
   CLOSE_ZOOM,
   FPS,
@@ -41,6 +43,7 @@ import {
   opacityBetween,
   resolveScenes,
   totalFrames,
+  scenesFor,
   totalFramesOf,
   totalSeconds,
   totalSecondsOf,
@@ -1049,6 +1052,105 @@ test("without a storyboard the scene list reproduces the fixed rhythm exactly", 
   }
 });
 
+test("every scene boundary lands on a whole frame, so a clip never opens on the previous scene", () => {
+  // Narrations chosen so the natural durations are NOT frame-aligned:
+  // 4.24 + 0.4 = 4.64s = frame 139.2 — the boundary the old code produced.
+  const scenes = resolveScenes(
+    [
+      { kind: "cover", narrationSeconds: 2.48 },
+      { kind: "item", itemIndex: 0, narrationSeconds: 7.36 },
+      { kind: "item", itemIndex: 1, narrationSeconds: 4.24 },
+      { kind: "closing", narrationSeconds: 2 },
+    ],
+    false,
+  );
+  for (const scene of scenes) {
+    const startFrame = scene.start * FPS;
+    const endFrame = scene.end * FPS;
+    assert(Math.abs(startFrame - Math.round(startFrame)) < 1e-6, `start ${scene.start} is not a whole frame`);
+    assert(Math.abs(endFrame - Math.round(endFrame)) < 1e-6, `end ${scene.end} is not a whole frame`);
+  }
+  // And a scene never loses time to the snap: it only ever gains up to a frame.
+  assert(scenes[2]!.duration >= 4.24 + BREATH_SECONDS, "snapping rounds up, never down");
+  assert(scenes[2]!.duration < 4.24 + BREATH_SECONDS + 1 / FPS, "and by less than one frame");
+});
+
+test("without the map, an item scene drops the flight from its floor and keeps the card hold", () => {
+  // The floor of an item scene is map + card with the map, card alone without it.
+  assert(minSceneSeconds("item", true) === TIMING.map + TIMING.item, "floor with map");
+  assert(minSceneSeconds("item", false) === TIMING.item, "floor without map");
+  // Cover and closing are unaffected: they never had a map flight.
+  assert(minSceneSeconds("cover", false) === TIMING.cover, "cover floor is map-independent");
+  assert(minSceneSeconds("closing", false) === TIMING.closing, "closing floor is map-independent");
+
+  // A narration that outlasts both floors gives the same duration either way:
+  // the flight is not extra time, it is time taken from the same budget.
+  const spec = { kind: "item" as const, itemIndex: 0, narrationSeconds: 9 };
+  assert(sceneDuration(spec, true) === 9 + BREATH_SECONDS, "narration drives the duration with a map");
+  assert(sceneDuration(spec, false) === 9 + BREATH_SECONDS, "and without one");
+
+  // A short narration shortens the scene only when the flight is gone.
+  const brief = { kind: "item" as const, itemIndex: 0, narrationSeconds: 2 };
+  assert(sceneDuration(brief, true) === TIMING.map + TIMING.item, "short narration keeps the full floor");
+  assert(sceneDuration(brief, false) === TIMING.item, "…and drops to the card hold without the map");
+
+  // The whole reel gets shorter by exactly one flight per item.
+  const specs = defaultScenes(4);
+  const withMap = totalSecondsOf(resolveScenes(specs, true));
+  const without = totalSecondsOf(resolveScenes(specs, false));
+  assert(Math.abs(withMap - without - 4 * TIMING.map) < 1e-9, `4 flights removed: ${withMap} vs ${without}`);
+});
+
+test("without a storyboard, the declared duration drops the same flights the composition does", () => {
+  // Root.tsx declares durationInFrames from `scenesFor`, and the composition
+  // lays its scenes out with the same call. With a storyboard both defer to
+  // the derived scenes and cannot disagree — but WITHOUT one they each fall
+  // back to the fixed rhythm, and a `scenesFor` that does not hear about
+  // `showMap` declares one flight per item more than the composition draws:
+  // a tail of frames after the closing has already ended.
+  const count = 4;
+  const declared = totalFramesOf(scenesFor(count, undefined, false));
+  // What Root.tsx used to declare: the default `showMap`, because it never
+  // passed the flag. This pins the SIZE of that mistake, not the call site —
+  // `Root.tsx` is a Remotion entry point this suite cannot import, so a
+  // regression there is caught by review, not here. What the test guarantees
+  // is that the two rhythms genuinely differ, which is why the flag has to
+  // travel.
+  const forgetful = totalFramesOf(scenesFor(count, undefined));
+  assert(
+    forgetful - declared === Math.round(count * TIMING.map * FPS),
+    `forgetting the flag costs exactly ${count} flights: ${forgetful} vs ${declared}`,
+  );
+  // And with a storyboard both agree no matter what: the derived scenes win.
+  const derived = resolveScenes(defaultScenes(count), false);
+  assert(
+    totalFramesOf(scenesFor(count, derived, true)) === totalFramesOf(derived),
+    "derived scenes are used verbatim, whatever the flag says",
+  );
+});
+
+test("in cut mode the closing is already mounted on the first frame of its clip", () => {
+  // The closing scene starts at a whole frame, but the frame that lands on
+  // that boundary is derived from a rounded frame number, so `seconds` can
+  // come out a hair short of `start` — and a strict `seconds >= start` would
+  // mount nothing at all, opening the closing clip on the bare canvas.
+  // `Reel.tsx` buys half a frame of slack for exactly this; assert the shape
+  // of the problem so the constant is not "cleaned up" back into a black frame.
+  const scenes = resolveScenes([
+    { kind: "cover" },
+    { kind: "item", itemIndex: 0, narrationSeconds: 3.7 },
+    { kind: "closing" },
+  ]);
+  const closing = scenes.at(-1)!;
+  const frame = Math.round(closing.start * FPS);
+  // What the composition sees on the clip's first frame, one ulp short.
+  const seconds = (frame - 1e-9) / FPS;
+  assert(seconds < closing.start, "the boundary frame really can fall short of the scene start");
+  const cutOffset = 0.5 / FPS;
+  assert(seconds >= closing.start - cutOffset, "half a frame of slack covers it");
+  assert(cutOffset < 1 / FPS, "…without reaching back into the previous scene");
+});
+
 test("short narration falls back to the minimums; long narration extends and starts accumulate", () => {
   const short = resolveScenes([
     { kind: "cover", narrationSeconds: 1 },
@@ -1108,8 +1210,15 @@ test("buildTimeline maps cards to scenes, orders items by card, and folds the mu
     { id: "closing", seconds: 0, source: "mute" as const },
   ];
   const tl = buildTimeline(sb, audio, 2.5);
-  assert(tl.cards[0]!.narrationOffset === 2.5 && Math.abs(tl.cards[0]!.duration - (2.5 + 1.2 + BREATH_SECONDS)) < 1e-9, `cover holds the intro: ${tl.cards[0]!.duration}`);
-  assert(Math.abs(tl.cards[1]!.duration - (6.1 + BREATH_SECONDS)) < 1e-9, "item-1 grows");
+  // Durations are snapped UP to a whole frame, so each expectation is the
+  // ceiling of the natural length: a scene must end where a clip can be cut.
+  const onFrame = (seconds: number): number => Math.ceil(seconds * FPS) / FPS;
+  assert(
+    tl.cards[0]!.narrationOffset === 2.5
+      && Math.abs(tl.cards[0]!.duration - onFrame(2.5 + 1.2 + BREATH_SECONDS)) < 1e-9,
+    `cover holds the intro: ${tl.cards[0]!.duration}`,
+  );
+  assert(Math.abs(tl.cards[1]!.duration - onFrame(6.1 + BREATH_SECONDS)) < 1e-9, "item-1 grows");
   assert(tl.cards[2]!.duration === 6, "item-2 respects min_seconds 6 over 3s of narration");
   assert(tl.cards[3]!.duration === TIMING.closing && tl.cards[3]!.narrationSeconds === 0, "mute closing at floor");
   assert(tl.scenes[1]!.itemIndex === 0 && tl.scenes[2]!.itemIndex === 1, "scene itemIndex is the position among item cards, not the input index");
@@ -1173,6 +1282,21 @@ test("opacityBetween with fade 0 is a sharp step: 1 in [start, end), 0 elsewhere
   assert(opacityBetween(end, start, end, 0) === 0, "opacity is 0 at end");
   // After end
   assert(opacityBetween(end + 0.1, start, end, 0) === 0, "opacity is 0 after end");
+});
+
+test("cover_label overrides the profile's cover count, and is validated", () => {
+  const withLabel = storyboardOf(CARDS_OK.replace("version: 1", "version: 1\ncover_label: Jueves 27 de agosto"));
+  assert(withLabel.cover_label === "Jueves 27 de agosto", `cover_label read: ${withLabel.cover_label}`);
+  // Absent is the normal case: the profile's copy.reel.coverCount stands.
+  assert(storyboardOf(CARDS_OK).cover_label === undefined, "absent cover_label stays undefined");
+  // An empty label is a mistake, not "use the default": it would blank the line.
+  let threw = false;
+  try {
+    storyboardOf(CARDS_OK.replace("version: 1", 'version: 1\ncover_label: "  "'));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "a blank cover_label is rejected");
 });
 
 test("storyboard with valid transitions field accepts 'cut' or 'crossfade'", () => {

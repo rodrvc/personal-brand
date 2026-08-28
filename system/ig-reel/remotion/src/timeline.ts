@@ -124,18 +124,26 @@ export interface Scene extends SceneSpec {
   end: number;
 }
 
-/** The engine's floor for each scene kind — the fixed rhythm of a reel without a storyboard. */
-export const minSceneSeconds = (kind: SceneKind): number =>
-  kind === 'cover' ? TIMING.cover : kind === 'closing' ? TIMING.closing : TIMING.map + TIMING.item;
+/**
+ * The engine's floor for each scene kind — the fixed rhythm of a reel without
+ * a storyboard. With `showMap` false an item scene has no map flight to pay
+ * for, so its floor is the card hold alone.
+ */
+export const minSceneSeconds = (kind: SceneKind, showMap: boolean = true): number =>
+  kind === 'cover'
+    ? TIMING.cover
+    : kind === 'closing'
+      ? TIMING.closing
+      : (showMap ? TIMING.map : 0) + TIMING.item;
 
 /**
  * How long a scene lasts: the engine floor, or the narration plus a breath,
  * or the requested floor — whichever is longest. An item's extra time goes to
  * the card hold, never to the camera move (see `CAMERA_MOVE_SECONDS`).
  */
-export const sceneDuration = (spec: SceneSpec): number =>
+export const sceneDuration = (spec: SceneSpec, showMap: boolean = true): number =>
   Math.max(
-    minSceneSeconds(spec.kind),
+    minSceneSeconds(spec.kind, showMap),
     (spec.narrationSeconds ?? 0) > 0 ? (spec.narrationSeconds ?? 0) + BREATH_SECONDS : 0,
     spec.minSeconds ?? 0,
   );
@@ -147,11 +155,20 @@ export const defaultScenes = (count: number): SceneSpec[] => [
   { kind: 'closing' },
 ];
 
-/** Lays the scenes end to end: each starts where the previous one ends. */
-export function resolveScenes(specs: readonly SceneSpec[]): Scene[] {
+/**
+ * Lays the scenes end to end: each starts where the previous one ends.
+ *
+ * Every boundary is snapped to a whole frame. A scene lasting 4.64s would
+ * otherwise end at frame 710.4, and the clip cut there — clips are whole
+ * frames — would open on frame 710, which still belongs to the previous
+ * scene: the first frame of a clip would show the tail of the one before it.
+ * Snapping costs at most 1/30s per scene and makes a cut land exactly where
+ * the clip does.
+ */
+export function resolveScenes(specs: readonly SceneSpec[], showMap: boolean = true): Scene[] {
   let cursor = 0;
   return specs.map((spec) => {
-    const duration = sceneDuration(spec);
+    const duration = Math.ceil(sceneDuration(spec, showMap) * FPS) / FPS;
     const scene: Scene = { ...spec, start: cursor, duration, end: cursor + duration };
     cursor += duration;
     return scene;
@@ -159,8 +176,12 @@ export function resolveScenes(specs: readonly SceneSpec[]): Scene[] {
 }
 
 /** The scenes a reel runs: the ones it was handed, or the fixed default rhythm. */
-export const scenesFor = (count: number, scenes?: readonly Scene[]): readonly Scene[] =>
-  scenes && scenes.length > 0 ? scenes : resolveScenes(defaultScenes(count));
+export const scenesFor = (
+  count: number,
+  scenes?: readonly Scene[],
+  showMap: boolean = true,
+): readonly Scene[] =>
+  scenes && scenes.length > 0 ? scenes : resolveScenes(defaultScenes(count), showMap);
 
 export const itemScenes = (scenes: readonly Scene[]): Scene[] =>
   scenes.filter((scene) => scene.kind === 'item');

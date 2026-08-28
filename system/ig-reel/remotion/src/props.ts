@@ -100,4 +100,10 @@ export type ReelProps = {
    * appears at full opacity at its start and ends abruptly.
    */
   transitions?: 'crossfade' | 'cut';
+  /**
+   * Whether item scenes fly over a map before the card. Default true. When
+   * false the map flight is skipped entirely and each item scene is just its
+   * card — the mode for reels edited elsewhere, where the map adds nothing.
+   */
+  showMap?: boolean;
 }

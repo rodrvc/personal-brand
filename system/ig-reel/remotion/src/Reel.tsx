@@ -176,6 +176,14 @@ const MapScene: React.FC<{
   );
 };
 
+/**
+ * The colour behind every scene when there is no map. It is only ever seen on
+ * a cut, in the seam between one scene ending and the next beginning, so it is
+ * near-black on purpose: a light seam reads as a white flash between clips.
+ * Not a brand token — nothing about it is the brand's to choose.
+ */
+const SEAM_COLOR = '#0d0d0d';
+
 const EventSlide: React.FC<{
   item: ReelPropsItem;
   index: number;
@@ -183,11 +191,14 @@ const EventSlide: React.FC<{
   seconds: number;
   wordmark: string;
   fade: number;
-}> = ({ item, index, scene, seconds, wordmark, fade }) => {
-  const start = scene.start + TIMING.map;
+  showMap: boolean;
+}> = ({ item, index, scene, seconds, wordmark, fade, showMap }) => {
+  // Without a map flight the card owns the whole scene from its first frame.
+  const mapLead = showMap ? TIMING.map : 0;
+  const start = scene.start + mapLead;
   // The card holds for whatever the scene has left after the map: the engine
   // minimum, or longer when the narration needs it.
-  const hold = scene.duration - TIMING.map;
+  const hold = scene.duration - mapLead;
   const local = clamp01((seconds - start) / hold);
   // Ken Burns: alternate the drift direction per item so the cut feels edited.
   const imageScale = index % 2 === 0 ? lerp(1, 1.16, local) : lerp(1.16, 1, local);
@@ -281,9 +292,12 @@ export const Reel: React.FC<ReelProps> = (props) => {
 
   // Without a storyboard this is the fixed rhythm — the same frames as before
   // scenes existed. With one, every scene already carries its derived timing.
+  // A reel can run without its map flights: the item scenes are then just
+  // their cards, and the whole MapLibre layer stays off the frame.
+  const showMap = props.showMap !== false;
   const scenes = useMemo(
-    () => scenesFor(props.items.length, props.scenes),
-    [props.items.length, props.scenes],
+    () => scenesFor(props.items.length, props.scenes, showMap),
+    [props.items.length, props.scenes, showMap],
   );
   const camera = useMemo(
     () => cameraAt(seconds, props.map, props.items, scenes),
@@ -318,18 +332,43 @@ export const Reel: React.FC<ReelProps> = (props) => {
 
   // In cut mode, cover's exit tail is zeroed: it ends exactly at its scene end
   const coverExitTail = fade === 0 ? 0 : COVER_EXIT_TAIL;
-  // In cut mode, closing starts exactly at its scene start, not before
-  const closingStartOffset = fade === 0 ? 0 : TIMING.overlap;
+  // In cut mode the closing starts exactly at its scene start — but the
+  // frame that lands on that boundary is computed from a rounded frame
+  // number, so `seconds` can fall a hair short of `start` and mount nothing
+  // at all. Half a frame of slack makes the first frame of the closing clip
+  // draw the closing, instead of the bare canvas behind it.
+  const closingStartOffset = fade === 0 ? 0.5 / fps : TIMING.overlap;
 
   return (
-    <AbsoluteFill className="reelScene" style={{ ...cssVars, background: 'var(--surface)' }}>
+    <AbsoluteFill
+      className="reelScene"
+      style={{
+        ...cssVars,
+        // The canvas behind every scene. With a map it is never seen — the
+        // basemap covers it. Without one it IS the seam between scenes: on a
+        // cut, the frame where one scene has ended and the next has not yet
+        // begun shows this colour, and a light surface there reads as a white
+        // flash between clips. Dark keeps a cut looking like a cut.
+        background: showMap ? 'var(--surface)' : SEAM_COLOR,
+      }}
+    >
       {props.logoFontFile ? (
         <style>{`@font-face { font-family: "ReelLogo"; font-style: normal; font-weight: 400; src: url("${staticFile(props.logoFontFile)}") format("woff2"); }`}</style>
       ) : null}
-      <div className="reelBackground" />
-      <div ref={containerRef} className="reelMap" />
-      <div className="reelMapWash" />
-      {!loaded ? <div className="reelLoading">Loading map</div> : null}
+      {/* The plate the map is drawn on. Without a map it is the seam colour
+          between cut scenes, so it must match the canvas, not the light
+          brand surface — otherwise every cut flashes white. */}
+      <div
+        className="reelBackground"
+        style={showMap ? undefined : { background: SEAM_COLOR }}
+      />
+      <div
+        ref={containerRef}
+        className="reelMap"
+        style={showMap ? undefined : { visibility: 'hidden' }}
+      />
+      {showMap ? <div className="reelMapWash" /> : null}
+      {showMap && !loaded ? <div className="reelLoading">Loading map</div> : null}
       {cover && seconds < cover.end + coverExitTail ? (
         <Cover seconds={seconds} scene={cover} copy={props.copy} fade={fade} />
       ) : null}
@@ -338,15 +377,17 @@ export const Reel: React.FC<ReelProps> = (props) => {
         if (!item) return null;
         return (
           <React.Fragment key={`${item.title}-${index}`}>
-            <MapScene
-              item={item}
-              scene={scene}
-              seconds={seconds}
-              fps={fps}
-              accent={props.colors.accent}
-              attribution={attribution}
-              fade={fade}
-            />
+            {showMap ? (
+              <MapScene
+                item={item}
+                scene={scene}
+                seconds={seconds}
+                fps={fps}
+                accent={props.colors.accent}
+                attribution={attribution}
+                fade={fade}
+              />
+            ) : null}
             <EventSlide
               item={item}
               index={index}
@@ -354,6 +395,7 @@ export const Reel: React.FC<ReelProps> = (props) => {
               seconds={seconds}
               wordmark={props.copy.wordmark}
               fade={fade}
+              showMap={showMap}
             />
           </React.Fragment>
         );

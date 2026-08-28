@@ -242,6 +242,10 @@ async function main(): Promise<void> {
   const scriptPath = flag("voice");
   const wantsMusic = process.argv.includes("--music");
   const audioOnly = process.argv.includes("--audio-only");
+  // `--no-map` renders item scenes as their cards alone: no map flight, and
+  // the scene floor drops by TIMING.map. Declared here because the derived
+  // timeline must agree with what the composition will draw.
+  const showMap = !process.argv.includes("--no-map");
   // Per-card render/assembly (see system/ig-reel/README.md → "Clips and
   // assembly"). `--clips` renders every scene as its own silent clip and
   // assembles them; `--card <id>` renders only the named cards, without
@@ -334,6 +338,8 @@ async function main(): Promise<void> {
   // from those lengths. The scene order follows the cards, not the input.
   let timeline: ReelTimeline | undefined;
   let cardAudio: CardAudio[] = [];
+  /** Cover label the storyboard asked for, if any. Overrides the profile default. */
+  let storyboardCoverLabel: string | undefined;
   /** Card ids in scene order — parallel to `timeline.scenes`. Only set with a storyboard. */
   let cardIds: string[] | undefined;
   if (storyboardPath) {
@@ -345,6 +351,7 @@ async function main(): Promise<void> {
     }
     console.log(`Storyboard: ${storyboardPath}`);
     const storyboard = loadStoryboard(storyboardPath, input.items.length);
+    storyboardCoverLabel = storyboard.cover_label;
     console.log(formatStoryboardTable(storyboard));
 
     // Each item card points at week-input.json; the item it names must have
@@ -369,7 +376,7 @@ async function main(): Promise<void> {
     console.log("Synthesising the narration, one card at a time…");
     cardAudio = await synthesiseCards(storyboard, voice, cardsAudioDir, { report: console.log });
 
-    timeline = buildTimeline(storyboard, cardAudio, introSeconds);
+    timeline = buildTimeline(storyboard, cardAudio, introSeconds, showMap);
     cardIds = storyboard.cards.map((card) => card.id);
     for (const requested of requestedCardIds) {
       if (!cardIds.includes(requested)) {
@@ -464,7 +471,10 @@ async function main(): Promise<void> {
     copy: {
       coverTitle: interpolate(reelCopy.coverTitle, vars),
       coverSubtitle: interpolate(reelCopy.coverSubtitle, vars),
-      coverCount: interpolate(reelCopy.coverCount, vars),
+      // The storyboard's `cover_label` wins over the profile's default: the
+      // reel's motive (a week, a single day, one event) is a per-reel fact,
+      // not a brand token. Still interpolated, so {city}/{count} work in it.
+      coverCount: interpolate(storyboardCoverLabel ?? reelCopy.coverCount, vars),
       closingCta: interpolate(reelCopy.closingCta, vars),
       wordmark: brand.copy.wordmark,
       site: brand.copy.site,
@@ -494,6 +504,10 @@ async function main(): Promise<void> {
     scenes: timeline?.scenes,
     // Transition mode: overridden by --crossfade flag, or sourced from storyboard
     transitions: process.argv.includes("--crossfade") ? "crossfade" : timeline?.transitions,
+    // `--no-map` drops the map flights: the item scenes are their cards alone.
+    // The mode for reels whose transitions are edited elsewhere, where the
+    // establishing shot adds nothing.
+    showMap,
   };
 
   const propsPath = join(outputDir, "reel-props.json");
