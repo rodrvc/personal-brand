@@ -51,7 +51,7 @@ export const MIN_ITEM_CARDS = 2;
 export const MAX_ITEM_CARDS = 6;
 
 const CARD_KEYS = ["id", "visual", "item", "narration", "min_seconds"];
-const ROOT_KEYS = ["storyboard", "version", "voice", "cards", "transitions"];
+const ROOT_KEYS = ["storyboard", "version", "voice", "cards", "transitions", "cover_label"];
 const VOICE_KEYS = ["voice_id", "model_id", "stability", "similarity_boost", "style", "speed", "use_speaker_boost"];
 
 export interface StoryboardCard {
@@ -73,6 +73,13 @@ export interface Storyboard {
   voice?: Partial<VoiceConfig>;
   /** Transition mode: 'cut' (default) for sharp scene transitions, or 'crossfade' for overlapping fades. */
   transitions?: 'crossfade' | 'cut';
+  /**
+   * Overrides the cover's third line — the profile's `copy.reel.coverCount`.
+   * A reel is not always "N items of the week": it can be one day, or one
+   * event, and the cover has to say so. Lives here and not in `brand.json`
+   * because it changes per reel, while brand tokens do not.
+   */
+  cover_label?: string;
 }
 
 /** Whitespace-separated tokens that contain at least one letter or digit. */
@@ -131,6 +138,14 @@ export function validateStoryboard(parsed: unknown, path: string, itemCount: num
       }
     }
     voice = node as Partial<VoiceConfig>;
+  }
+
+  let coverLabel: string | undefined;
+  if (root.cover_label !== undefined) {
+    if (typeof root.cover_label !== "string" || root.cover_label.trim() === "") {
+      fail(path, `"cover_label" must be a non-empty string, got ${JSON.stringify(root.cover_label)}.`);
+    }
+    coverLabel = (root.cover_label as string).trim();
   }
 
   let transitions: 'crossfade' | 'cut' | undefined;
@@ -242,7 +257,7 @@ export function validateStoryboard(parsed: unknown, path: string, itemCount: num
     );
   }
 
-  return { cards, voice, transitions };
+  return { cards, voice, transitions, cover_label: coverLabel };
 }
 
 /** Where a profile's storyboard for a period lives by default. */
@@ -402,6 +417,7 @@ export function buildTimeline(
   storyboard: Storyboard,
   audio: readonly CardAudio[],
   introSeconds = 0,
+  showMap = true,
 ): ReelTimeline {
   const secondsOf = new Map(audio.map((entry) => [entry.id, entry.seconds]));
   let itemPosition = 0;
@@ -416,7 +432,7 @@ export function buildTimeline(
     if (card.visual === "item") spec.itemIndex = itemPosition++;
     return spec;
   });
-  const scenes = resolveScenes(specs);
+  const scenes = resolveScenes(specs, showMap);
   const cards = storyboard.cards.map((card, index): TimelineEntry => ({
     id: card.id,
     visual: card.visual,

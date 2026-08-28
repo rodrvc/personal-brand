@@ -269,6 +269,20 @@ ajusta a la voz. Sigue vigente para `--voice`.
 viene, la composición calcula las escenas con los tiempos fijos y el output
 es idéntico al anterior, frame a frame.
 
+### Sin mapa: `--no-map`
+
+De forma ordinaria cada escena de ítem es un vuelo de mapa (1.8s) y después
+la tarjeta del ítem. Con `--no-map` el vuelo no ocurre: la capa MapLibre no
+se monta, la escena empieza directamente en la tarjeta, y su piso baja de
+`TIMING.map + TIMING.item` a `TIMING.item`.
+
+Es el modo para un reel cuyo montaje ocurre **fuera del motor** — cuando el
+afiche del evento ya es el contenido y el plano de situación no aporta. La
+timeline derivada del storyboard lo tiene en cuenta, así que las duraciones
+que imprime son las que se renderizan; no es un recorte posterior.
+
+El flag va en cada pass: `render-reel-week.ts`, `--card`, `--assemble`.
+
 ### Transiciones: cut o crossfade
 
 Por defecto, las escenas aparecen a opacidad completa en su inicio exacto y

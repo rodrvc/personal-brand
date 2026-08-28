@@ -85,7 +85,13 @@ export const RemotionRoot: React.FC = () => (
     calculateMetadata={({ props }) => ({
       // Scenes, when the Node side derived them from a storyboard; the fixed
       // rhythm otherwise — the same frame count as before scenes existed.
-      durationInFrames: totalFramesOf(scenesFor(props.items.length, props.scenes)),
+      // `showMap` matters here too: without a storyboard there are no derived
+      // scenes to defer to, and the fixed rhythm has to drop the same flights
+      // the composition will. Miss it and the video is one flight per item
+      // too long — a tail of frames after the closing has ended.
+      durationInFrames: totalFramesOf(
+        scenesFor(props.items.length, props.scenes, props.showMap !== false),
+      ),
     })}
   />
 );
