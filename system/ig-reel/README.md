@@ -1,415 +1,420 @@
-# system/ig-reel — motor de reels
+# system/ig-reel — reel engine
 
-Renderiza un **reel vertical 1080x1920** (MP4) a partir de los ítems fechados
-de un perfil: portada, N ítems cada uno precedido por un vuelo de cámara sobre
-un mapa real hacia su ubicación, y cierre.
+Renders a **vertical 1080x1920 reel** (MP4) from dated items in a profile: a cover,
+N items each preceded by a camera flight over a real map to its location, and
+a closing.
 
-Genérico, como `system/ig-carousel/`: **nada aquí nombra una marca, una ciudad
-ni una taxonomía**. Todo eso llega desde `profiles/<slug>/`.
+Generic, like `system/ig-carousel/`: **nothing here names a brand, a city
+or a taxonomy**. All that comes from `profiles/<slug>/`.
 
 ```
 npx tsx system/ig-reel/render-reel-week.ts --profile <slug> [--date YYYY-MM-DD]
-                                           [--storyboard [ruta]] [--audio-only]
+                                           [--storyboard [path]] [--audio-only]
                                            [--voice <script.txt>] [--music]
 ```
 
-Contrato de flujo: `system/recipes/reel-week.md`.
-Contrato de datos de marca: `system/config/brand.schema.md`.
+Flow contract: `system/recipes/reel-week.md`.
+Brand data contract: `system/config/brand.schema.md`.
 
 ---
 
-## Qué necesita de un perfil
+## What it needs from a profile
 
-| Archivo | Qué aporta |
+| File | Contribution |
 |---|---|
-| `brand.json` | Colores, tipografías, categorías y `copy.reel` + `gradients.cover` |
-| `recipes/reel-week.yaml` | Fuente, curaduría, `map.bbox`, y opcionalmente `voice:` y `music:` |
-| `reels/week-input.json` | Los ítems ya curados, con fecha, coordenada e imagen |
-| `reels/<fecha>/storyboard.yaml` | Opcional: la narración por tarjeta (ver "Storyboard: audio primero") |
-| `assets/fonts/*.woff2` | Opcional: la fuente de logo, embebida para que preview y render coincidan |
+| `brand.json` | Colors, typefaces, categories and `copy.reel` + `gradients.cover` |
+| `recipes/reel-week.yaml` | Source, curation, `map.bbox`, and optionally `voice:` and `music:` |
+| `reels/week-input.json` | Already-curated items, with date, coordinate and image |
+| `reels/<date>/storyboard.yaml` | Optional: narration per card (see "Storyboard: audio first") |
+| `assets/fonts/*.woff2` | Optional: logo font, embedded so preview and render match |
 
-El mismo `brand.json` que consume el carrusel. No hay un segundo archivo de
-marca.
+Same `brand.json` consumed by the carousel. No separate brand file.
 
 ---
 
-## Arquitectura: Node orquesta, Remotion renderiza
+## Architecture: Node orchestrates, Remotion renders
 
-El video lo emite un subproyecto Remotion (`remotion/`) cuyo mapa son **tiles
-raster reales movidos por una cámara MapLibre**, no un SVG dibujado. La
-frontera entre ambos lados es el contrato `ReelProps`
-(`remotion/src/props.ts`): todo llega **resuelto** — colores como CSS, copy ya
-interpolado, imágenes en rutas servibles. La composición no conoce
-`brand.json`, recipes ni perfiles; `render-reel-week.ts` es el único que los
-lee y los aplana a ese shape. Todo el vocabulario de marca queda del lado Node.
+Video output comes from a Remotion subproject (`remotion/`) where the map is
+**real raster tiles moved by a MapLibre camera**, not a drawn SVG. The boundary
+between both sides is the `ReelProps` contract (`remotion/src/props.ts`): everything
+arrives **resolved** — colors as CSS, copy already interpolated, images at
+servable paths. The composition knows nothing of `brand.json`, recipes or
+profiles; `render-reel-week.ts` is the only one that reads them and flattens
+them to that shape. All brand vocabulary stays on the Node side.
 
-| Archivo | Rol |
+| File | Role |
 |---|---|
-| `types.ts` | Contrato de datos del input y `VerifiedReelItem` |
-| `geo.ts` | Validación de bbox y encuadre wide de la cámara (`wideFraming`) |
-| `osm.ts` | Nominatim: geocodifica texto libre a coordenada, acotado al bbox |
-| `osm-cache.ts` | Caché en disco de esas llamadas |
-| `verify-items.ts` | El guard previo al render |
-| `recipe.ts` | Carga y valida `recipes/reel-week.yaml` |
-| `voice.ts` | ElevenLabs: narración TTS y cama musical, ambas opt-in |
-| `storyboard.ts` | Carga y valida el storyboard, sintetiza por tarjeta con caché, deriva la timeline |
-| `render-reel-week.ts` | Entrypoint: geocodifica, verifica, arma props, renderiza y muxea |
-| `reel.test.ts` | Tests de guards, timeline y recipe |
-| `remotion/src/timeline.ts` | Escenas (fijas o derivadas del audio) y matemática de cámara — funciones puras, testeadas |
-| `remotion/src/maplibre.ts` | MapLibre bajo el reloj de Remotion, estilo de tiles y atribución |
-| `remotion/src/Reel.tsx` | La composición: portada, escenas de mapa+ítem, cierre |
+| `types.ts` | Input data contract and `VerifiedReelItem` |
+| `geo.ts` | Bounding-box validation and camera wide framing (`wideFraming`) |
+| `osm.ts` | Nominatim: geocodes free text to coordinate, bounded by bbox |
+| `osm-cache.ts` | On-disk cache of those calls |
+| `verify-items.ts` | Pre-render guard |
+| `recipe.ts` | Loads and validates `recipes/reel-week.yaml` |
+| `voice.ts` | ElevenLabs: TTS narration and music bed, both opt-in |
+| `storyboard.ts` | Loads and validates storyboard, synthesizes per card with cache, derives timeline |
+| `render-reel-week.ts` | Entrypoint: geocodes, verifies, builds props, renders and muxes |
+| `reel.test.ts` | Tests for guards, timeline and recipe |
+| `remotion/src/timeline.ts` | Scene timing (fixed or derived from audio) and camera math — pure functions, tested |
+| `remotion/src/maplibre.ts` | MapLibre under Remotion's clock, tile style and attribution |
+| `remotion/src/Reel.tsx` | The composition: cover, map+item scenes, closing |
 
 ---
 
-## Decisiones que no son obvias
+## Decisions that aren't obvious
 
-### Los tiles son CARTO Voyager — y no pueden ser otros
+### Tiles are CARTO Voyager — and cannot be anything else
 
-Es una restricción **legal**, no una preferencia técnica, y por eso vive en el
-motor y ningún perfil la puede tocar:
+This is a **legal** restriction, not a technical preference, and that's why it
+lives in the engine where no profile can touch it:
 
-- Los tiles de openstreetmap.org prohíben el *pre-emptive fetching*.
-  Pre-renderizar un video es exactamente eso.
-- Las imágenes de Google Maps/Earth están prohibidas en contenido promocional,
-  y un reel de marca lo es.
-- Mapbox exige licencia comercial aparte.
+- Tiles from openstreetmap.org prohibit *pre-emptive fetching*.
+  Pre-rendering a video is exactly that.
+- Google Maps/Earth imagery is prohibited in promotional content,
+  and a brand reel is promotional.
+- Mapbox requires a separate commercial license.
 
-Los basemaps de CARTO (Voyager raster, sin API key) son usables **con
-atribución**: de ahí el rótulo **"© OpenStreetMap contributors © CARTO"** que
-la composición imprime sobre cada escena de mapa. Es obligatorio y ningún
-campo de perfil lo apaga.
+CARTO basemaps (Voyager raster, no API key) are usable **with
+attribution**: hence the **"© OpenStreetMap contributors © CARTO"** label that
+the composition prints over each map scene. It's mandatory and no profile
+field disables it.
 
-### El mapa es un renderer vivo que Remotion trata como foto por frame
+### The map is a live renderer that Remotion treats as photo per frame
 
-MapLibre anima solo si se lo deja; acá **no debe poseer ninguna animación**.
-La cámara se calcula desde `useCurrentFrame()` y se aplica con `jumpTo()`
-(nunca `flyTo()`), y cada frame bloquea en `delayRender()` hasta que los tiles
-de esa cámara cargaron. Parte del mismo contrato es cómo se invoca el render:
+MapLibre animates only if told; here **it must have no animation**.
+The camera is calculated from `useCurrentFrame()` and applied with `jumpTo()`
+(never `flyTo()`), and each frame blocks in `delayRender()` until that
+camera's tiles have loaded. Part of the same contract is how render is invoked:
 
 ```
 npx remotion render src/index.ts Reel out.mp4 --props=... --concurrency=1 --gl=swangle
 ```
 
-`--gl=swangle` (SwiftShader/ANGLE) es la vía segura para WebGL headless, y
-`--concurrency=1` porque Chromium headless no aloja varios contextos WebGL de
-forma confiable — y las instancias paralelas se pelean el caché de tiles sin
-ganar reloj.
+`--gl=swangle` (SwiftShader/ANGLE) is the safe path for headless WebGL, and
+`--concurrency=1` because headless Chromium cannot reliably host multiple
+WebGL contexts — parallel instances fight over the tile cache without
+gaining speed.
 
-### El encuadre wide sale de los ítems, no del bbox
+### Wide framing comes from items, not from bbox
 
-El bbox es territorio del **filtro**: en una ciudad costera su punto medio es
-mar abierto. `wideFraming()` encuadra sobre los ítems verificados. Y como la
-cámara puede centrar cualquier coordenada del bbox, "dónde cae el pin en el
-lienzo" dejó de ser problema del motor: las zonas y la cobertura del lienzo
-del renderer SVG anterior ya no existen (`map.zones` y `map.reference_types`
-se aceptan en el recipe por compatibilidad, con warning, y se ignoran).
+The bbox is **filter** territory: in a coastal city its midpoint is open water.
+`wideFraming()` frames based on the verified items. Since the camera can center
+any coordinate within the bbox, "where the pin falls on screen" stopped being
+a problem for the engine: zones and canvas coverage from the previous SVG
+renderer no longer apply. (`map.zones` and `map.reference_types` are still
+accepted in the recipe for backward compatibility with a warning, but ignored).
 
-### El staging es efímero a propósito
+### Staging is ephemeral by design
 
-`staticFile()` de Remotion solo sirve desde el `public/` del propio proyecto,
-así que las imágenes y la fuente del perfil se copian a
-`remotion/public/staging/` mientras dura el render. La carpeta está ignorada
-por git y **se borra al terminar**: nada con forma de marca puede quedar bajo
-`system/` un segundo más de lo que el render lo necesita.
+Remotion's `staticFile()` only works from the project's own `public/`,
+so profile images and fonts are copied to `remotion/public/staging/` for the
+duration of the render. The folder is git-ignored and **cleaned up afterward**:
+nothing bearing a brand's identity can stay under `system/` any longer than
+the render requires.
 
-### Geocodificación: acotada, secuencial y sin inventos
+### Geocoding: scoped, sequential and no guesswork
 
-Un ítem sin `lat`/`lng` se geocodifica con Nominatim, acotado al bbox y con
-`User-Agent` identificable. Secuencial y un request por ítem, como exige su
-política de uso. Lo que no geocodifica **se descarta con su razón** — nunca se
-cae al centro del bbox, porque un pin en el lugar equivocado se ve igual de
-correcto que uno bien puesto.
+An item without `lat`/`lng` is geocoded with Nominatim, bounded by the bbox and
+with an identifiable `User-Agent`. Requests are sequential, one per item, as
+required by its usage policy. Items that don't geocode **are discarded with their
+reason** — the system never falls back to the bbox center, because a pin in the
+wrong place looks just as correct as one placed right.
 
-Toda llamada pasa por un caché en disco (`osm-cache.ts` → `<repo>/.cache/`):
-re-correr la misma semana cuesta cero requests al servicio gratuito. Se cachea
-la **respuesta cruda, con la request literal como clave** — cambia el input y
-el caché falla solo. TTL de 180 días (una dirección se mueve poco), entrada
-vencida se usa con aviso si la red falla, siempre imprime de dónde salió el
-dato, `--no-cache` fuerza datos frescos. Vive en `<repo>/.cache/` y nunca en
-`profiles/<slug>/`: un perfil es una declaración transportable; un caché es un
-derivado con vencimiento.
+Every call passes through an on-disk cache (`osm-cache.ts` → `<repo>/.cache/`):
+re-running the same week costs zero requests to the free service. The
+**raw response is cached using the literal request as the key** — change the
+input and the cache misses on its own. It has a 180-day TTL (addresses don't
+move often); expired entries are still used with a warning if the network
+fails. The system always prints where the data came from, and `--no-cache`
+forces fresh data. The cache lives in `<repo>/.cache/` and never in
+`profiles/<slug>/`: a profile is a portable declaration; a cache is a
+derived artifact with an expiration date.
 
-### El bbox se topa en 0.5° por lado
+### Bbox is capped at 0.5° on each side
 
-Más ancho y el zoom wide→calle deja de leerse como llegar a alguna parte, y la
-geocodificación acotada a esa caja deja de acotar nada. Falla en load con la
-explicación, no a mitad de render.
+Wider and the zoom from wide→street stops reading as "how to get there", and
+geocoding scoped to that box stops narrowing anything. It fails at
+load time with an explanation, not partway through the render.
 
-### La pista de audio no es opcional
+### The audio track is not optional
 
-Remotion emite el MP4 sin audio, y **varios reproductores de macOS se quedan
-congelados en el primer frame con videos mudos**: el video *parece* roto
-aunque esté bien. El script muxea siempre una pista con FFmpeg — silenciosa si
-no se pidió nada, la narración con `--voice`, la cama con `--music`, o ambas.
-El video se copia sin re-encodear, y al final se verifica con ffprobe que la
-pista de audio dure lo que el video: un filter graph puede emitir un stream de
-audio casi vacío en vez de fallar.
+Remotion outputs MP4 without audio, and **several macOS players freeze on the
+first frame when playing silent video**: the video *looks* broken even though
+it's fine. The script always muxes a track with FFmpeg — silent if nothing
+was requested, narration with `--voice`, the music bed with `--music`, or both.
+The video is copied without re-encoding, and at the end ffprobe verifies that
+the audio track lasts as long as the video: a filter graph can emit an
+almost-empty audio stream instead of failing.
 
-Dos trampas operativas alrededor de `renders/`:
+Two operational gotchas around `renders/`:
 
-- El muxeo toma **el último `.mp4` de `renders/` por orden de nombre**
-  (`.sort().pop()` en `render-reel-week.ts`). Antes de una corrida limpia,
-  limpia los renders viejos de esa carpeta. El audio del render vive en una
-  carpeta hermana (`audio/`) dentro de la salida para evitar que herramientas
-  que escanean la carpeta confundan archivos de audio con el video.
-- La música generada **trae su propio fade de salida** (se pide ~15% más
-  larga que el video y el muxeo recorta la cola por eso mismo). No le
-  apliques un segundo fade encima: queda un final que muere dos veces.
+- Muxing picks **the last `.mp4` in `renders/` by filename order**
+  (`.sort().pop()` in `render-reel-week.ts`). Before a fresh run, clear old
+  renders from that folder. Render audio is stored in a sibling folder
+  (`audio/`) within the output, preventing tools that scan the folder from
+  mistaking audio files for video.
+- Generated music **includes its own exit fade** (it's requested ~15% longer
+  than the video, and muxing trims the tail accordingly). Don't layer a second
+  fade on top: the ending will fade twice.
 
-### Narración y música son opt-in, y su identidad es del perfil
+### Narration and music are opt-in, and their voice belongs to the profile
 
-`--voice <script.txt>` narra un guion que se le entrega — el motor sabe
-*hablar*, nunca qué decir. Exige un bloque `voice:` en el recipe del perfil
-(`voice_id` mínimo): en qué voz habla una marca es decisión de perfil. La API
-key sale de `ELEVENLABS_API_KEY` en el entorno, jamás de un archivo del
-perfil. `--music` compone la cama desde `music.prompt` del recipe; con
-narración encima la cama suena entera durante `intro_seconds` y luego se
-atenúa a `gain_db`, y la voz se normaliza (loudnorm) antes de mezclar. Un
-guion más largo que el video falla con mensaje, no se corta a mitad de frase.
+`--voice <script.txt>` narrates a script you supply — the engine knows *how*
+to speak, never what to say. It requires a `voice:` block in the profile's
+recipe (`voice_id` at minimum): which voice a brand speaks in is a profile
+decision. The API key comes from `ELEVENLABS_API_KEY` in the environment,
+never from a profile file. `--music` composes the bed using `music.prompt`
+from the recipe; when narration is on top, the bed plays at full volume during
+`intro_seconds` then fades to `gain_db`, and the voice is normalized
+(loudnorm) before mixing. A script longer than the video fails with a message,
+not cut off mid-phrase.
 
-### Storyboard: audio primero
+### Storyboard: audio first
 
-**El problema que resuelve.** Con `--voice` el guion es un solo texto → un
-solo MP3 → se pone encima de un video cuyas escenas duran lo que dicen las
-constantes de `timeline.ts`. Nada une la frase N con la escena N, así que la
-voz se desfasa siempre: el narrador habla del tercer plan mientras la cámara
-todavía vuela al segundo.
+**The problem it solves.** With `--voice`, the script is one text → one
+MP3 → laid over a video whose scenes last as long as `timeline.ts` constants
+specify. Nothing ties phrase N to scene N, so the voiceover always drifts: the
+narrator talks about the third location while the camera is still flying to
+the second.
 
-**La solución.** Un storyboard por tarjetas: cada escena es una tarjeta, y la
-tarjeta lleva su narración. El motor sintetiza **un MP3 por tarjeta**, lo
-mide con ffprobe y deriva la duración de cada escena de su propio audio:
-"audio primero, video después". La estructura se respeta por construcción —
-una escena no puede terminar antes de que acabe su frase porque la escena
-dura lo que dura la frase.
+**The solution.** A storyboard organized by cards: each scene is a card, and
+the card carries its narration. The engine synthesizes **one MP3 per card**,
+measures it with ffprobe, and derives each scene's duration from its own audio:
+"audio first, video second". Structure is guaranteed by construction — a scene
+cannot finish before its narration ends because the scene's length matches the
+narration's duration.
 
-**Dónde vive.** `profiles/<slug>/reels/<YYYY-MM-DD>/storyboard.yaml`; la
-fecha es el lunes del período, la misma que sale de `--date`. Es dato del
-perfil (gitignorado con él); el ejemplo ficticio está en
-`profiles/example/reels/<fecha>/storyboard.yaml`. Si el archivo existe para
-ese período, el render lo usa solo; `--storyboard <ruta>` apunta a otro.
-`--voice` y storyboard son excluyentes: uno fija los tiempos de las escenas y
-el otro pone un guion encima de los tiempos fijos; pasar los dos es error.
+**Where it lives.** `profiles/<slug>/reels/<YYYY-MM-DD>/storyboard.yaml`;
+the date is the Monday of the period, the same one `--date` resolves to. It's
+profile data (git-ignored along with the profile); the example is at
+`profiles/example/reels/<date>/storyboard.yaml`. If the file exists for that
+period, render uses it; `--storyboard <path>` overrides to a different file.
+`--voice` and storyboard are mutually exclusive: one pins scene durations
+while the other lays a script on top of those durations; passing both is
+an error.
 
-**Contrato:**
+**Contract:**
 
 ```yaml
 storyboard: reel
 version: 1
-transitions: cut  # opcional: 'cut' (default) para cortes secos, o 'crossfade' para fades con solape
-voice:            # opcional: override parcial del bloque voice: del recipe
+transitions: cut  # optional: 'cut' (default) for sharp cuts, or 'crossfade' for fades with overlap
+voice:            # optional: partial override of the recipe's voice: block
   speed: 1.05
 cards:
-  - id: cover     # slug único
-    visual: cover # enum cerrado: cover | item | closing
-    narration: "lo que dice el narrador en esta tarjeta"
+  - id: cover     # unique slug
+    visual: cover # closed enum: cover | item | closing
+    narration: "what the narrator says in this card"
   - id: item-1
     visual: item
-    item: 0       # índice en reels/week-input.json; obligatorio y único por item
+    item: 0       # index in reels/week-input.json; required and unique per item
     narration: "..."
-    min_seconds: 5.0   # opcional: piso de la escena (nunca bajo el mínimo del motor)
+    min_seconds: 5.0   # optional: floor for the scene (never below engine minimum)
   - id: closing
     visual: closing
-    narration: ""      # vacío = tarjeta muda (0s de voz, la escena dura su mínimo)
+    narration: ""      # empty = silent card (0s of voice, scene lasts its minimum)
 ```
 
-Falla **al cargar**, nombrando la tarjeta: `storyboard`/`version` exactos,
-ids únicos, `visual` en el enum, exactamente una `cover` al inicio y una
-`closing` al final, entre 2 y 6 `item`, cada `item` con un índice válido y
-distinto, claves desconocidas, `narration` ausente (vacía sí se permite).
-**El orden de las escenas lo fija el storyboard**, no `week-input.json`: el
-reel muestra los ítems en el orden de las tarjetas `item`.
+Validation fails **at load** time, naming the problematic card. It checks for:
+exact `storyboard`/`version` fields, unique ids, `visual` values in the enum,
+exactly one `cover` at the start and one `closing` at the end, 2–6 `item`
+entries, each with a valid and distinct index, unknown keys, and missing
+`narration` (empty is allowed). **The storyboard defines the scene order**,
+not `week-input.json`: the reel displays items in the order specified by the
+`item` cards.
 
-**Presupuesto de palabras** (constantes del motor, no del perfil): cover
-4–15, item 8–30, closing 4–15. Fuera de rango falla con el conteo real
-(`card item-2: 41 words, max 30 for visual=item`). Es lo que mantiene una
-escena derivada dentro del largo que el formato sostiene.
+**Word budget** (these are engine constants, not something a profile sets):
+cover 4–15 words, item 8–30, closing 4–15. Text outside these ranges fails
+with the actual count reported (`card item-2: 41 words, max 30 for visual=item`).
+This ensures that a derived scene stays within the length that the format can
+sustain.
 
-Validar sin red, sin key y sin ffmpeg — imprime siempre la tabla
-id / visual / palabras:
+You can validate without network, without an API key, and without ffmpeg —
+it always prints the id / visual / word-count table:
 
 ```
-npx tsx system/ig-reel/storyboard.ts --check profiles/<slug>/reels/<fecha>/storyboard.yaml \
+npx tsx system/ig-reel/storyboard.ts --check profiles/<slug>/reels/<date>/storyboard.yaml \
                                      --items profiles/<slug>/reels/week-input.json
 ```
 
-**Síntesis por tarjeta y caché por contenido.** Cada tarjeta se sintetiza a
-`profiles/<slug>/reels/<fecha>/audio/<card-id>.mp3` con la voz efectiva
-(recipe + override). Al lado queda un sidecar `<card-id>.json` con el sha256
-de (texto normalizado + voice config efectiva + model_id) y la duración
-medida. Si el hash coincide y el MP3 existe, **no se llama a la API**: editar
-una tarjeta re-sintetiza solo esa; cambiar la voz re-sintetiza todas.
+**Per-card synthesis and content-based cache.** Each card is synthesized to
+`profiles/<slug>/reels/<date>/audio/<card-id>.mp3` using the effective voice
+(recipe + override). A sidecar `<card-id>.json` file sits alongside it, holding
+the sha256 hash of (normalized text + effective voice config + model_id) and
+the measured duration. If the hash matches and the MP3 exists, **the API is not
+called**: editing one card re-synthesizes only that card; changing the voice
+re-synthesizes all of them.
 
-**La timeline derivada.** Por tipo de tarjeta, con `RESPIRO = 0.4s`
-(`BREATH_SECONDS`, el silencio tras la frase para que el corte no caiga en la
-última sílaba):
+**The derived timeline.** By card type, with `RESPIRO = 0.4s`
+(`BREATH_SECONDS`, the silence after the phrase so the cut doesn't fall on the
+final syllable):
 
-| Tarjeta | Duración |
+| Card | Duration |
 |---|---|
-| cover | `max(2.2, voz + respiro)` |
-| item | `max(1.8 + 3.2, voz + respiro, min_seconds)` — el vuelo de mapa sigue fijo en 1.8s (cámara 1.2s); el tiempo extra va al hold de la tarjeta de ítem, nunca al vuelo; la narración arranca con el vuelo |
-| closing | `max(2.0, voz + respiro)` |
+| cover | `max(2.2, voice + breath)` |
+| item | `max(1.8 + 3.2, voice + breath, min_seconds)` — the map flight stays fixed at 1.8s (camera 1.2s); extra time goes into the item card hold, never into the flight; narration starts with the flight |
+| closing | `max(2.0, voice + breath)` |
 
-Solape/cross-fade igual que antes. Con `--music`, `intro_seconds` desplaza
-la narración de la portada **dentro de la portada** (la portada crece para
-contenerla), así cada tarjeta posterior sigue arrancando exacto con su
-escena. La timeline se escribe en `profiles/<slug>/reels/<fecha>/timeline.json`
-(por tarjeta: id, visual, item, palabras, segundos de voz, inicio, duración;
-y el total) y se imprime legible en consola.
+Overlapping/crossfading works as before. With `--music`, the `intro_seconds`
+parameter shifts the cover's narration **into the cover itself** (so the cover
+expands to contain it), ensuring each subsequent card still starts exactly when
+its scene begins. The timeline is written to `profiles/<slug>/reels/<date>/timeline.json`
+(per card: id, visual, item, word count, voice seconds, start, duration; plus
+total) and printed in readable form to the console.
 
-**`--audio-only`** se detiene ahí: sintetiza, imprime la tabla, abre la
-carpeta de audio con `open` y no renderiza. Es el paso para *escuchar* las
-tarjetas antes de pagar el render. Sin el flag, el render recibe las escenas
-ya resueltas (`ReelProps.scenes`), y la pista de narración se arma
-concatenando los MP3 con `adelay` al inicio de cada tarjeta; luego el mux es
-el mismo de siempre (loudnorm, cama, verificación con ffprobe). El guard
-"narración más larga que el video" no aplica con storyboard: el video se
-ajusta a la voz. Sigue vigente para `--voice`.
+**`--audio-only`** stops there: it synthesizes, prints the table, opens the
+audio folder with `open`, and skips rendering. This step lets you *hear* the
+cards before committing to a full render. Without the flag, render receives
+the already-resolved scenes (`ReelProps.scenes`), and the narration track is
+built by concatenating MP3s with `adelay` delays positioned at each card's
+start; then muxing follows the standard process (loudnorm, bed, ffprobe
+verification). The "narration longer than video" guard doesn't apply with
+storyboard: the video adjusts to fit the voice. It still applies for `--voice`
+alone.
 
-**Sin storyboard no cambia nada.** `ReelProps.scenes` es opcional; si no
-viene, la composición calcula las escenas con los tiempos fijos y el output
-es idéntico al anterior, frame a frame.
+**Without storyboard, nothing changes.** `ReelProps.scenes` is optional; if not
+provided, the composition calculates scenes with fixed times and produces output
+identical to before, frame for frame.
 
-### Sin mapa: `--no-map`
+### No map: `--no-map`
 
-De forma ordinaria cada escena de ítem es un vuelo de mapa (1.8s) y después
-la tarjeta del ítem. Con `--no-map` el vuelo no ocurre: la capa MapLibre no
-se monta, la escena empieza directamente en la tarjeta, y su piso baja de
-`TIMING.map + TIMING.item` a `TIMING.item`.
+Ordinarily each item scene is a map flight (1.8s) followed by the item's
+card. With `--no-map` the flight never happens: the MapLibre layer does not
+mount, the scene opens straight into the card, and its floor drops from
+`TIMING.map + TIMING.item` to `TIMING.item`.
 
-Es el modo para un reel cuyo montaje ocurre **fuera del motor** — cuando el
-afiche del evento ya es el contenido y el plano de situación no aporta. La
-timeline derivada del storyboard lo tiene en cuenta, así que las duraciones
-que imprime son las que se renderizan; no es un recorte posterior.
+This is the mode for a reel whose edit happens **outside the engine** — when
+the event's poster is already the content and an establishing shot adds
+nothing. The timeline derived from the storyboard accounts for this, so the
+durations it prints are what actually renders; it's not a trim applied after
+the fact.
 
-El flag va en cada pass: `render-reel-week.ts`, `--card`, `--assemble`.
+Include the flag on every pass: `render-reel-week.ts`, `--card`, `--assemble`.
 
-### Transiciones: cut o crossfade
+### Transitions: cut or crossfade
 
-Por defecto, las escenas aparecen a opacidad completa en su inicio exacto y
-desaparecen en su fin exacto — sin solape ni fade (`transitions: cut`). Útil
-cuando la edición de transiciones ocurre **fuera del motor** — cada clip
-por tarjeta es independiente, y el editor agrega las propias transiciones en su
-app de edición de video.
+By default scenes appear at full opacity at their exact start and disappear at
+their exact end — with no overlap or fade (`transitions: cut`). This is useful
+when transition editing happens **outside the engine** — each card clip stands
+alone, and the editor adds their own transitions in their video editing app.
 
-Con `transitions: crossfade` (en el storyboard) o `--crossfade` (flag CLI), las
-escenas se solapan 0.35s para que el fade-in/out tenga espacio; la portada se
-extiende beyond su duración y el cierre arranca antes. Los rangos de frames de
-la timeline no cambian; solo se aplican los fades.
-
----
-
-## Clips por tarjeta y ensamblaje
-
-Un render monolítico renderiza todo de una sola vez. **Los clips** permiten
-rehacer una sola escena sin re-renderizar el resto. Internamente, un clip
-**no es una composición separada**: es un rango de frames de la misma composición
-`Reel`, renderizado con los mismos props. Los píxeles son idénticos al render
-monolítico, y los crossfades entre escenas (un solape de `TIMING.overlap`
-segundos) se preservan de forma libre — el frame en el límite de la escena ya
-mezcla ambas, así que el corte cae limpio en él.
-
-**Dónde quedan los clips.** En `<salida>/clips/`, uno por tarjeta del
-storyboard. El nombre es `<índice>-<card-id>.mp4` (`0-cover.mp4`,
-`1-item-1.mp4`, …); el índice va en orden de escena y se rellena con ceros a
-la izquierda según cuántas tarjetas haya, para que ordenen bien en disco.
-Requieren un storyboard: el ritmo fijo no tiene ids de tarjeta.
-
-**Por qué el clip es mudo de verdad (`--muted`).** Sin el flag, Remotion
-escribe cada clip con su propia pista de audio silenciosa cuyo padding no
-coincide con el conteo de frames del video (medido: un video de 77 frames /
-2.5667s dentro de un contenedor cuyo `format=duration` reporta 2.624s, porque
-esa cifra es la del stream más largo — la pista de audio con relleno). Al
-concatenar clips que cada uno arrastra un padding de audio distinto, el
-resultado queda con frame rate variable: los frames correctos, mal
-repartidos en el tiempo (758 frames que debían durar 25.2667s terminaban
-estirados a 25.5s). `--muted` deja el clip con un solo stream, sin nada que
-desalinear.
-
-**Los tres modos de render:**
-
-- `--clips`: renderiza todas las tarjetas como clips y las ensambla en una sola
-  (silenciosa). El ensamblaje concatena con `ffmpeg -c copy` (stream copy, sin
-  re-encodear) y verifica con ffprobe que el video resultante mida
-  `totalFrames/FPS` (±1 frame). Si el stream copy falla o el resultado no
-  calza en duración — la señal de un glitch en una frontera entre clips — cae
-  a un segundo intento con concat **re-encodeado** (`libx264 -crf 18`), a
-  costa de una generación de calidad solo en los cortes. En la práctica, con
-  clips mudos (`--muted`) el stream copy funciona directo: cada frame de
-  Remotion es keyframe, así que no hay frontera que desalinear.
-- `--card <id> [--card <id2> ...]`: renderiza solo esas tarjetas, sin ensamblar.
-  Útil para rehacer una escena que no gustó — cada clip es mudo.
-- `--assemble`: une los clips ya renderizados en `clips/`, muxea el audio
-  (narración+música) sobre el resultado y verifica. Falla si falta un clip o si
-  su duración no calza con la timeline.
-
-**El audio es post-producción.** Los clips salen mudos (`--muted` en Remotion),
-un solo stream de video. La pista de narración (tarjeta a tarjeta, con delays) y
-la cama se aplican **después**, en el muxeo — igual que el render monolítico.
-Eso mantiene el video del mismo tamaño aunque se cambie el audio.
-
-**Ejemplo de flujo:** rehacer la escena del tercer ítem (tarjeta `item-2`)
-cuando el resultado no gustó:
-
-```
-npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --card item-2
-# → renderiza solo ese clip
-
-# Verifica el clip en `outputs/…/clips/2-item-2.mp4`
-
-# Luego, ensambla todos los clips (incluido el nuevo) con audio:
-npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <fecha> --assemble
-# → muxea la pista de voz y música sobre la concatenación
-```
+With `transitions: crossfade` (in storyboard) or `--crossfade` (CLI flag),
+scenes overlap by 0.35s to give the fade-in/out room it needs; the cover
+extends beyond its duration and the closing begins early. Timeline frame
+ranges don't change; only the fade effect is added.
 
 ---
 
-## Qué queda en la carpeta de salida
+## Per-card clips and assembly
 
-Al terminar el render, todos los artefactos quedan organizados en
-`profiles/<slug>/outputs/reels/<fecha>/` — la carpeta para llevar y editar a
-mano en otra herramienta:
+A monolithic render outputs everything at once. **Clips** let you re-render just
+one scene without re-rendering the rest. Internally, a clip **is not a separate
+composition**: it's a frame range from the same `Reel` composition, rendered
+with the same props. Pixel output is identical to the monolithic render, and
+crossfades between scenes (an overlap of `TIMING.overlap` seconds) are
+preserved for free — the frame at each scene boundary already mixes both
+clips, so the
+cut lands cleanly on it.
+
+**Where clips end up.** In `<output>/clips/`, one per storyboard card.
+The naming is `<index>-<card-id>.mp4` (`0-cover.mp4`, `1-item-1.mp4`, …);
+the index follows scene order and is zero-padded based on card count, so files
+sort nicely on disk. Clips require a storyboard: fixed timing has no card ids.
+
+**Why the clip must be truly mute (`--muted`).** Without the flag, Remotion
+writes each clip with its own silent audio track whose padding doesn't match
+the video frame count (example: a 77-frame video / 2.5667s sits inside a
+container whose `format=duration` reports 2.624s, because the longest stream —
+the padded audio track — determines the duration). Concatenating clips where
+each one drags a different amount of audio padding creates variable frame rate:
+the actual frames are correct but badly distributed in time (758 frames that
+should last 25.2667s end up stretched to 25.5s). `--muted` strips the clip
+down to one stream, with nothing left to misalign.
+
+**Three render modes:**
+
+- `--clips`: renders all cards as clips and assembles them into one
+  (silent) video. Assembly uses `ffmpeg -c copy` (stream copy, no re-encoding)
+  and verifies with ffprobe that the result measures `totalFrames/FPS` (±1
+  frame). If stream copy fails or the result doesn't match the expected
+  duration — indicating a glitch at a clip boundary — it falls back to a
+  second attempt with **re-encoded** concatenation (`libx264 -crf 18`), at the
+  cost of a generation of quality — and only at the cuts. In practice, with
+  muted clips (`--muted`), stream copy works immediately: every Remotion
+  frame is already a keyframe, so there is no boundary to misalign.
+- `--card <id> [--card <id2> ...]`: renders only those cards, skipping
+  assembly. Use it when re-rendering a scene that didn't work — each clip
+  comes out muted.
+- `--assemble`: joins the already-rendered clips in `clips/`, muxes the audio
+  (narration and music) over the result, and verifies it. It fails if a clip
+  is missing or if its duration doesn't match the timeline.
+
+**Audio is post-production.** Clips come out mute (`--muted` on Remotion),
+with one video stream only. The narration track (built card by card with
+appropriate delays) and the music bed are applied **afterward** during muxing —
+the same as in monolithic render. This keeps the video file the same size even
+when audio changes.
+
+**Example workflow:** re-render the third item scene (card `item-2`)
+when the result isn't satisfactory:
 
 ```
-reel-<fecha>.mp4        archivo final con audio (MP4, 1080x1920)
-storyboard.yaml         snapshot del storyboard que se renderizó (si existe)
-timeline.json           snapshot de la timeline usada (si existe)
-reel-props.json         props resueltos para la composición (Remotion)
+npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <date> --card item-2
+# → renders only that clip
+
+# Verify the clip in `outputs/…/clips/2-item-2.mp4`
+
+# Then assemble all clips (including the new one) with audio:
+npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <date> --assemble
+# → muxes voice and music tracks over the concatenation
+```
+
+---
+
+## What ends up in the output folder
+
+When the render finishes, all artifacts are organized in
+`profiles/<slug>/outputs/reels/<date>/` — the folder you take and edit
+by hand in another tool:
+
+```
+reel-<date>.mp4         final file with audio (MP4, 1080x1920)
+storyboard.yaml         snapshot of the storyboard that was rendered (if exists)
+timeline.json           snapshot of the timeline used (if exists)
+reel-props.json         resolved props for the composition (Remotion)
 clips/
-  0-cover.mp4           clip mudo por tarjeta (stream copy, sin audio)
+  0-cover.mp4           mute clip per card (stream copy, no audio)
   1-item-1.mp4
-  ... (uno por tarjeta del storyboard)
-  concat-list.txt       lista ffmpeg para el ensamblaje (generado)
+  ... (one per storyboard card)
+  concat-list.txt       ffmpeg list for assembly (generated)
 audio/
-  cards/                copia de cada MP3 sintetizado (tarjeta por tarjeta)
+  cards/                copy of each synthesized MP3 (card by card)
     cover.mp3
     item-1.mp3
-    ... (sin los sidecars .json del caché)
-  narration-<fecha>.wav|.mp3  pista de narración armada (si existe)
-  music-<fecha>.mp3     cama musical (si se pidió --music)
-renders/                intermedios mudos de Remotion (interno, no llevar)
-  reel-<fecha>.mp4      render monolítico sin audio
+    ... (without cache sidecars .json)
+  narration-<date>.wav|.mp3  built narration track (if exists)
+  music-<date>.mp3      music bed (if --music was used)
+renders/                mute intermediates from Remotion (internal, don't carry)
+  reel-<date>.mp4       monolithic render without audio
 ```
 
-Los audios por tarjeta con su caché (`.mp3` + `.json`) siguen viviendo en
-`profiles/<slug>/reels/<fecha>/audio/` — eso es la fuente y el caché que
-alimenta el motor; la carpeta `audio/cards/` de la salida es una copia
-derivada.
+Per-card audio files with cache (`.mp3` + `.json`) still live in
+`profiles/<slug>/reels/<date>/audio/` — that is the source and cache that
+feed the engine; the `audio/cards/` folder in the output is a derived copy.
 
 ---
 
-## Requisitos
+## Requirements
 
-- **Node 22+** (el subproyecto instala sus dependencias solo en la primera corrida)
-- **FFmpeg** (con ffprobe) — para muxear y verificar el audio
-- Red durante el render: los tiles se bajan al renderizar; Nominatim solo si
-  hay ítems sin coordenada y el caché está frío
-- `ELEVENLABS_API_KEY` en el entorno, solo si se usa `--voice` o `--music`.
-  La key vive en `<repo>/.env` (gitignorado; hay `.env.example` en la raíz que
-  Orca copia a cada worktree vía `.worktreeinclude`). El motor la carga
-  automáticamente. Si la key ya está en el entorno (p. ej. exportada en el
-  shell), el entorno gana sobre el archivo.
+- **Node 22+** (the subproject installs its dependencies on first run only)
+- **FFmpeg** (with ffprobe) — for muxing and verifying audio
+- Network access during render: tiles download as rendering proceeds; Nominatim
+  is called only if items lack coordinates and the cache is cold
+- `ELEVENLABS_API_KEY` in the environment, only if using `--voice` or `--music`.
+  The key lives in `<repo>/.env` (git-ignored; `.env.example` at the repo root
+  is copied to each worktree by Orca via `.worktreeinclude`). The engine loads
+  it automatically. If the key is already in your environment (e.g. exported
+  in the shell), the environment takes priority over the file.
 
-Preview interactivo: `cd system/ig-reel/remotion && npm run studio`. Abre con
-props ficticios y neutros ("Puerto Ejemplo", coordenadas cerca de 0,0) sin
-necesitar ningún perfil real en disco; un render real siempre pasa props
-completos vía `--props`.
+Interactive preview: `cd system/ig-reel/remotion && npm run studio`. It opens with
+fictional and neutral props ("Puerto Ejemplo", coordinates near 0,0) without requiring
+any real profile on disk; an actual render always passes full props via `--props`.
