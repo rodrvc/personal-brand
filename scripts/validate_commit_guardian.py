@@ -9,69 +9,69 @@ ROOT = Path(__file__).resolve().parent.parent
 
 PROFILES_DIR = ROOT / 'profiles'
 
-# Rutas que deben permanecer libres de literales de marca: el motor y los
-# orquestadores son genéricos por contrato (ver CLAUDE.md).
-# Las capas que deben ser genéricas: ninguna puede llevar literales de una
-# marca real. `app/` y `core/` entran porque `docs/ARQUITECTURA.md` promete
-# verificar las cuatro, y hasta ahora el validador cubría dos: la promesa
-# escrita y lo que el código comprobaba habían dejado de coincidir, que es la
-# forma exacta en que una garantía se convierte en una costumbre.
+# Paths that must remain free of brand literals: the engine and
+# orchestrators are generic by contract (see CLAUDE.md).
+# Layers that must be generic: none can carry literals of a real brand.
+# `app/` and `core/` are included because `docs/ARQUITECTURA.md` promises
+# to check all four, and historically the validator covered only two: the
+# written promise and what the code checked had diverged, which is exactly
+# how a guarantee becomes a habit (ignored).
 GENERIC_PREFIXES = ('system/', '.claude/', 'app/', 'core/')
 
-# Solo los perfiles de ejemplo (marcas ficticias de onboarding) son
-# publicables. Un perfil real vive fuera del árbol del repo.
+# Only example profiles (fictional onboarding brands) are publishable.
+# A real profile lives outside the repo tree.
 PUBLIC_PROFILE_PREFIX = 'profiles/example'
 
-# Términos manuales, que se SUMAN a los derivados de los perfiles en disco.
-# Sigue existiendo porque hay literales que no salen de ningún perfil: el
-# nombre de un repo privado, un producto interno, un alias antiguo.
+# Manual terms, which are ADDED to those derived from profiles on disk.
+# Still exists because there are literals that don't come from any profile:
+# a private repo name, an internal product, an old alias.
 BRAND_DENYLIST = ROOT / 'scripts' / 'brand-denylist.txt'
-# Gemelo local e ignorado por git: aquí van los términos que no pueden viajar
-# al repo público. Ver manual_terms().
+# Local twin ignored by git: where terms that cannot travel to the public
+# repo go. See manual_terms().
 BRAND_DENYLIST_LOCAL = ROOT / 'scripts' / 'brand-denylist.local.txt'
 
-# --- derivación automática desde los perfiles en disco -----------------------
+# --- automatic derivation from profiles on disk --------------------------------
 #
-# El fichero manual protegía contra la marca #1 y NO EXISTÍA para la marca #2
-# hasta que alguien recordara darla de alta. Un paso manual que nada obliga no
-# es una garantía; es un procedimiento recordado — el mismo modo de fallo que
-# dejó pasar la fuga original (la regla en prosa ya estaba escrita).
+# The manual file protected against brand #1 and DIDN'T EXIST for brand #2
+# until someone remembered to register it. A manual step that nothing enforces
+# is not a guarantee; it's a remembered procedure — the same failure mode that
+# let the original leak slip through (the rule was already written in prose).
 #
-# Así que los términos se leen de los perfiles REALES que hay en disco. Un
-# perfil real es una carpeta bajo profiles/ que no es `example*`: los `example*`
-# son marcas ficticias, publicables y trackeadas, y si aportaran términos el
-# gate se bloquearía a sí mismo con su propio contenido de onboarding.
+# So terms are read from the REAL profiles on disk. A real profile is a folder
+# under profiles/ that isn't `example*`: the `example*` are fictional brands,
+# publishable and tracked, and if they contributed terms the gate would block
+# itself with its own onboarding content.
 
-# Longitud mínima de un término derivado.
+# Minimum length of a derived term.
 #
-# 4 caracteres. Es el umbral más bajo que no genera falsos positivos masivos:
-# con 3 entran siglas y fragmentos ("AI", "cl", "Rol") que aparecen en prosa
-# genérica constantemente, y un `re.search` sin frontera de palabra los
-# encontraría dentro de otras palabras. Con 4 el término más corto plausible de
-# una marca real ("Nike", "Uber") sigue entrando. Un slug de 2-3 letras existe,
-# pero es exactamente el caso en que hay que declararlo a mano en
-# brand-denylist.txt con el contexto que lo hace único, no derivarlo a ciegas.
+# 4 characters. It's the lowest threshold that doesn't generate massive false
+# positives: at 3 you get acronyms and fragments ("AI", "cl", "Rol") that
+# appear constantly in generic prose, and a `re.search` without word boundary
+# would find them inside other words. At 4 the shortest plausible brand term
+# ("Nike", "Uber") still fits. A 2–3-letter slug exists, but that's exactly
+# when you must declare it by hand in brand-denylist.txt with the context
+# that makes it unique, not derive it blindly.
 MIN_TERM_LENGTH = 4
 
-# Aviso cuando la comprobación de PRs no pudo completarse (sin red, sin
-# remoto, o con commits que el clon no tiene). Lo rellena
-# `_commits_published_via_pr` y lo imprime el informe.
+# Note printed when PR checking couldn't complete (no network, no remote,
+# or commits the clone doesn't have). Filled by `_commits_published_via_pr`
+# and printed in the report.
 PR_CHECK_NOTE: str | None = None
 
-# Palabras demasiado comunes para bloquear por sí solas.
+# Words too common to block on their own.
 #
-# Mitigación de falsos positivos: si un perfil declara la ciudad "Santiago" o
-# un wordmark que es una palabra corriente ("Norte", "Plaza", "Studio"), el
-# término derivado bloquearía commits legítimos del motor — y peor, empujaría a
-# desactivar el gate. Estas se descartan de la derivación; si de verdad hay que
-# vigilarlas para una marca concreta, se declaran a mano en brand-denylist.txt,
-# que es donde un humano puede asumir el coste con contexto.
+# False-positive mitigation: if a profile declares a city "Santiago" or
+# a wordmark that's a common word ("Norte", "Plaza", "Studio"), the derived
+# term would block legitimate engine commits — and worse, push people to
+# disable the gate. These are excluded from derivation; if you really need
+# to watch them for a specific brand, declare them by hand in brand-denylist.txt,
+# where a human can assume the cost with context.
 GENERIC_WORDS = {
-    # ciudades/regiones frecuentes en documentación y ejemplos
+    # cities/regions frequent in documentation and examples
     'santiago', 'chile', 'madrid', 'barcelona', 'lima', 'bogota', 'bogotá',
     'mexico', 'méxico', 'buenos aires', 'london', 'berlin', 'paris',
     'new york', 'ciudad', 'city', 'region', 'región',
-    # palabras que un wordmark puede ser y el motor usa como vocabulario
+    # words a wordmark can be and the engine uses as vocabulary
     'brand', 'marca', 'studio', 'design', 'content', 'media', 'group',
     'digital', 'agency', 'personal', 'norte', 'sur', 'este', 'oeste',
     'plaza', 'centro', 'local', 'example', 'demo', 'test', 'default',
@@ -79,20 +79,19 @@ GENERIC_WORDS = {
     'semana', 'events', 'eventos', 'panoramas',
 }
 
-# Plataformas de terceros. Un perfil cuyo `copy.site` apunta aquí no está
-# declarando un dominio propio: está diciendo "mi presencia vive en la casa de
-# otro". Derivar "linkedin" de esa URL vigilaría el nombre de una plataforma
-# ajena — que el motor tiene todo el derecho a nombrar, porque renderiza para
-# ella (`core/src/linkedin.js` calcula dónde corta LinkedIn un post). El
-# dominio propio de una marca sí se deriva; el de la red social donde publica,
-# no.
+# Third-party platforms. A profile whose `copy.site` points here isn't
+# declaring an owned domain: it's saying "my presence lives in someone else's
+# house". Deriving "linkedin" from that URL would watch a foreign platform's
+# name — which the engine has every right to name, because it renders for it
+# (`core/src/linkedin.js` calculates where LinkedIn cuts a post). A brand's
+# owned domain is derived; the social network it publishes to, is not.
 THIRD_PARTY_HOSTS = {
     'linkedin.com', 'instagram.com', 'facebook.com', 'twitter.com', 'x.com',
     'threads.net', 'tiktok.com', 'youtube.com', 'github.com', 'medium.com',
     'substack.com', 'notion.so', 'behance.net', 'dribbble.com', 'bsky.app',
 }
 
-# TLDs que se recortan al derivar el nombre base de un dominio.
+# TLDs that are stripped when deriving the base name from a domain.
 KNOWN_TLDS = (
     '.com', '.cl', '.net', '.org', '.io', '.dev', '.app', '.co', '.ai',
     '.es', '.mx', '.ar', '.pe', '.me', '.xyz', '.cl.com',
@@ -100,11 +99,11 @@ KNOWN_TLDS = (
 
 HANDLE = re.compile(r'@([A-Za-z0-9._]{3,30})\b')
 
-# Nombres de campo del esquema de perfil. Escritos tras una arroba son la
-# cita del concepto ("el @handle de la marca"), nunca el handle real de
-# nadie. Solo suprimen la captura del extractor: si una marca se llamase
-# así de verdad, sigue derivándose por su slug, wordmark, dominio o
-# profile.name, y puede declararse a mano en el denylist.
+# Field names of the profile schema. Written after an at sign they are the
+# citation of the concept ("the brand's @handle"), never anyone's real
+# handle. They only suppress the extractor's capture: a brand actually
+# named one of these is still derived from its slug, wordmark, domain or
+# profile.name, and can be declared by hand in the denylist.
 SCHEMA_FIELD_NAMES = {
     'handle', 'handles', 'usuario', 'user', 'username', 'slug', 'wordmark',
     'site', 'hashtag', 'hashtags', 'nombre', 'name',
@@ -116,7 +115,7 @@ def _is_public_profile(name: str) -> bool:
 
 
 def real_profile_dirs() -> list[Path]:
-    """Perfiles reales en disco. Vacío en un clon recién hecho — no crashea."""
+    """Real profiles on disk. Empty on a fresh clone — doesn't crash."""
     if not PROFILES_DIR.is_dir():
         return []
     return sorted(
@@ -133,11 +132,11 @@ def _load_json(path: Path):
 
 
 def _yaml_scalar(text: str, key: str) -> list[str]:
-    """Extrae `key: valor` de un YAML sin dependencias externas.
+    """Extract `key: value` from YAML without external dependencies.
 
-    A propósito no se usa PyYAML: el gate corre en un pre-commit hook y no
-    puede depender de que el entorno tenga instalado un paquete. Si falta, la
-    derivación se degradaría a silencio — que es el fallo que esto elimina.
+    Deliberately not using PyYAML: the gate runs in a pre-commit hook and
+    can't depend on a package being installed. If missing, derivation would
+    degrade to silence — the failure this eliminates.
     """
     pattern = re.compile(rf'^\s*{re.escape(key)}\s*:\s*(.+?)\s*$', re.MULTILINE)
     out = []
@@ -149,7 +148,7 @@ def _yaml_scalar(text: str, key: str) -> list[str]:
 
 
 def _yaml_list(text: str, key: str) -> list[str]:
-    """Extrae los ítems `- x` del bloque de lista que sigue a `key:`."""
+    """Extract list items `- x` from the block following `key:`."""
     out = []
     lines = text.splitlines()
     for index, line in enumerate(lines):
@@ -170,26 +169,26 @@ def _yaml_list(text: str, key: str) -> list[str]:
 
 
 def _domain_terms(domain: str) -> list[str]:
-    """`ejemplo.cl` → el dominio completo y su nombre base.
+    """`example.cl` → the full domain and its base name.
 
-    El nombre base importa porque en prosa la marca aparece sin el TLD; el
-    dominio completo importa porque una URL de API lo lleva entero.
+    Base name matters because in prose the brand appears without the TLD; the
+    full domain matters because an API URL carries it whole.
     """
     domain = domain.strip().strip('/').lower()
     domain = re.sub(r'^[a-z]+://', '', domain).split('/')[0]
     if not domain or '.' not in domain:
         return [domain] if domain else []
-    # Una plataforma de terceros no aporta término: ni el host ni su nombre
-    # base son de la marca. Se comprueba el dominio registrable, para que
-    # `www.linkedin.com` y `open.substack.com` caigan igual que el desnudo.
+    # A third-party platform doesn't contribute a term: neither the host nor
+    # its base name belong to the brand. We check the registrable domain, so
+    # `www.linkedin.com` and `open.substack.com` are treated the same as naked.
     if domain in THIRD_PARTY_HOSTS or any(
         domain.endswith('.' + host) for host in THIRD_PARTY_HOSTS
     ):
         return []
     terms = [domain]
-    # Nombre base: la etiqueta anterior al TLD, no el subdominio. Para un TLD
-    # de dos niveles (`.cl.com`, `.co.uk`) hay que retroceder una etiqueta más,
-    # o el "nombre" sería el propio sufijo público.
+    # Base name: the label before the TLD, not the subdomain. For a two-level
+    # TLD (`.cl.com`, `.co.uk`) you need to go back one more label, or the
+    # "name" would be the public suffix itself.
     labels = domain.split('.')
     stripped = domain
     for tld in sorted(KNOWN_TLDS, key=len, reverse=True):
@@ -203,41 +202,40 @@ def _domain_terms(domain: str) -> list[str]:
 
 
 def _identifying_hashtag(tag: str) -> bool:
-    """¿Este hashtag nombra a la marca, o es vocabulario del rubro?
+    """Is this hashtag a brand identifier or generic category vocabulary?
 
-    `#Agentes` o `#Marketing` son el tema del que se habla, y el motor los usa
-    como palabras normales — vigilarlos convierte cada mención en una alarma.
-    Lo que sí identifica es un hashtag compuesto (`#PanoramasNorte`,
-    `#Estudio_X`): nadie lo escribe por casualidad. Heurística: se exige más de
-    un componente, detectado por CamelCase, dígito o separador.
+    `#Agents` or `#Marketing` are the topic being discussed, and the engine
+    uses them as regular words — watching them turns every mention into an alarm.
+    What does identify is a compound hashtag (`#PanoramasNorth`,
+    `#Studio_X`): nobody writes it by accident. Heuristic: requires more than
+    one component, detected by CamelCase, digit, or separator.
 
-    Límite conocido: un hashtag de UNA sola palabra en minúsculas (`#nike`)
-    se descarta, y nada avisa de ello. Hoy no abre un hueco porque un
-    hashtag así suele repetir el slug o el wordmark, que se derivan por su
-    cuenta. Una marca cuyo único rastro sea ese hashtag debe declararse a
-    mano en el denylist.
+    Known limitation: a single lowercase word hashtag (`#nike`) is filtered out
+    silently. Currently it's not a gap because such a hashtag usually repeats
+    the slug or wordmark, which are derived anyway. A brand whose only trace is
+    that hashtag must be declared by hand in the denylist.
     """
     body = tag.strip().lstrip('#')
     if not body:
         return False
     if any(ch.isdigit() or ch in '-_.' for ch in body):
         return True
-    # CamelCase: una mayúscula que no sea la inicial marca un segundo componente.
+    # CamelCase: an uppercase letter that isn't the first marks a second component.
     return any(ch.isupper() for ch in body[1:])
 
 
 def _commits_published_via_pr(shas: set[str]) -> set[str]:
-    """De `shas`, los que el remoto sirve aunque ninguna rama los contenga.
+    """From `shas`, those the remote serves even though no branch contains them.
 
-    Un pull request deja su commit en `refs/pull/N/head`, una ref oculta que
-    sobrevive a cerrar el PR y a borrar la rama, y que `git branch -r` nunca
-    ve. Se pregunta al remoto por esas refs y se comprueba la pertenencia
-    contra los objetos que ya estén en el clon.
+    A pull request leaves its commit in `refs/pull/N/head`, a hidden ref that
+    survives closing the PR and deleting the branch, which `git branch -r` never
+    sees. We query the remote for those refs and check membership against
+    objects already in the clone.
 
-    Silencioso y no bloqueante: sin red, sin remoto o sin permisos devuelve
-    un conjunto vacío. Un fallo de red no puede convertirse en un falso
-    "todo limpio" ruidoso ni en un error que impida commitear — pero el
-    informe avisa cuando la comprobación no se pudo hacer (ver PR_CHECK_NOTE).
+    Silent and non-blocking: without network, remote, or permissions returns
+    an empty set. Network failure can't become a noisy false "all clean" or
+    an error blocking commits — but the report warns when the check couldn't
+    run (see PR_CHECK_NOTE).
     """
     global PR_CHECK_NOTE
     if not shas:
@@ -248,10 +246,10 @@ def _commits_published_via_pr(shas: set[str]) -> set[str]:
             cwd=ROOT, capture_output=True, text=True, timeout=25,
         )
     except (subprocess.TimeoutExpired, OSError):
-        PR_CHECK_NOTE = 'no se pudo consultar el remoto (red o timeout)'
+        PR_CHECK_NOTE = 'could not query remote (network or timeout)'
         return set()
     if raw.returncode != 0:
-        PR_CHECK_NOTE = 'no se pudo consultar el remoto (sin acceso a origin)'
+        PR_CHECK_NOTE = 'could not query the remote (no access to origin)'
         return set()
 
     pr_heads = [ln.split()[0] for ln in raw.stdout.splitlines() if ln.strip()]
@@ -260,9 +258,9 @@ def _commits_published_via_pr(shas: set[str]) -> set[str]:
 
     found: set[str] = set()
     for sha in shas:
-        # `--contains` necesita el objeto en el clon. Si el PR trae historia
-        # que nunca se descargó, el head es desconocido y se salta: mejor no
-        # afirmar nada que afirmar de más.
+        # `--contains` needs the object in the clone. If the PR carries
+        # history that was never fetched, its head is unknown and gets
+        # skipped: better to say nothing than to overstate.
         for head in pr_heads:
             try:
                 r = subprocess.run(
@@ -276,18 +274,18 @@ def _commits_published_via_pr(shas: set[str]) -> set[str]:
                 break
     if not found and pr_heads:
         PR_CHECK_NOTE = (
-            f'{len(pr_heads)} PR(s) en el remoto; los commits que no estén '
-            'descargados no se pueden comprobar (git fetch origin '
-            '"refs/pull/*/head:refs/remotes/pr/*" para incluirlos)'
+            f'{len(pr_heads)} PR(s) on the remote; commits not fetched '
+            'into this clone cannot be checked (git fetch origin '
+            '"refs/pull/*/head:refs/remotes/pr/*" to include them)'
         )
     return found
 
 
 def derive_terms() -> dict[str, set[str]]:
-    """{término: {procedencia, …}} derivado de los perfiles reales en disco.
+    """{term: {origin, …}} derived from real profiles on disk.
 
-    Devuelve {} si no hay ningún perfil real (clon recién hecho): la derivación
-    aporta cero términos y el fichero manual sigue gobernando.
+    Returns {} if no real profile exists (fresh clone): derivation contributes
+    zero terms and the manual file continues to govern.
     """
     derived: dict[str, set[str]] = {}
 
@@ -349,9 +347,9 @@ def derive_terms() -> dict[str, set[str]]:
             if isinstance(data, dict):
                 add(data.get('city'), f'{where}carousels/{carousel.name} city')
 
-        # @handle: puede estar en cualquier texto del perfil (skills, spec,
-        # config). Se busca en los ficheros de texto, no en un campo fijo,
-        # porque el esquema no tiene un lugar declarado para él.
+        # @handle: can appear in any profile text (skills, spec, config).
+        # Searched in text files, not a fixed field, because the schema has no
+        # declared place for it.
         for path in sorted(profile.rglob('*')):
             if not path.is_file() or path.suffix not in {'.md', '.yaml', '.yml', '.json'}:
                 continue
@@ -361,13 +359,13 @@ def derive_terms() -> dict[str, set[str]]:
                 continue
             for handle in HANDLE.findall(text):
                 if '.' in handle or handle.lower() in GENERIC_WORDS:
-                    continue  # emails, versiones de fuentes, @400;600
+                    continue  # emails, font versions, @400;600
                 if handle.lower() in SCHEMA_FIELD_NAMES:
-                    # La prosa de un perfil (un spec, un handoff) nombra los
-                    # campos que la describen, y "@handle" citado como
-                    # concepto no es el handle de nadie. Tomarlo por uno hizo
-                    # vigilar la palabra "handle" y produjo 47 falsos
-                    # positivos contra `delayRender(handle)` y compañía.
+                    # A profile's own prose (a spec, a handoff) names the
+                    # fields that describe it, and "@handle" cited as a
+                    # concept is nobody's handle. Taking it for one made
+                    # "handle" a watched term and produced 47 false
+                    # positives against `delayRender(handle)` and friends.
                     continue
                 add(handle, f'{where}… (@handle)')
 
@@ -375,18 +373,18 @@ def derive_terms() -> dict[str, set[str]]:
 
 
 def manual_terms() -> dict[str, set[str]]:
-    """Términos declarados a mano, de los dos archivos manuales.
+    """Terms declared by hand, from both manual files.
 
-    Son dos y no uno por una razón que solo aparece al publicar: para prohibir
-    una palabra hay que escribirla, así que el denylist *es* la lista literal
-    de todo lo que se quiso ocultar. Publicarlo entrega exactamente eso — el
-    nombre de un repo privado ahí dentro llegó a decir "no debe aparecer en el
-    repo público" mientras estaba en el repo público.
+    Two and not one for a reason that only surfaces at publish time: to
+    forbid a word you must write it, so the denylist *is* the literal list
+    of everything intended to be hidden. Publishing it delivers exactly
+    that — a private repo name inside once said "must not appear in the
+    public repo" while living in the public repo.
 
-    Así que el trackeado (`brand-denylist.txt`) lleva solo lo publicable, y lo
-    sensible va al local (`brand-denylist.local.txt`), que está en .gitignore.
-    Las dos listas se suman, y una ausente no es error: un clon nuevo funciona
-    con la derivación desde `profiles/<slug>/` y con la lista pública.
+    So the tracked file (`brand-denylist.txt`) carries only what's publishable,
+    and sensitive terms go local (`brand-denylist.local.txt`), which is in
+    .gitignore. The two lists sum, and absence of either is not an error: a
+    fresh clone works with derivation from `profiles/<slug>/` and the public list.
     """
     out: dict[str, set[str]] = {}
     for path in (BRAND_DENYLIST, BRAND_DENYLIST_LOCAL):
@@ -401,11 +399,11 @@ def manual_terms() -> dict[str, set[str]]:
 
 
 def denylist_with_origins() -> dict[str, set[str]]:
-    """Manuales + derivados. Un término puede tener varias procedencias.
+    """Manual + derived. A term can have multiple origins.
 
-    Se colapsa por minúsculas porque la búsqueda es case-insensitive: mantener
-    "Marca" y "marca" como entradas separadas duplicaría cada hallazgo y
-    haría ilegible el informe de procedencias sin vigilar nada más.
+    Collapsed by lowercase because search is case-insensitive: keeping
+    "Brand" and "brand" as separate entries would duplicate every finding
+    and make the origin report unreadable without gaining anything.
     """
     combined: dict[str, set[str]] = {}
     index: dict[str, str] = {}
@@ -416,24 +414,24 @@ def denylist_with_origins() -> dict[str, set[str]]:
             combined.setdefault(canonical, set()).update(origins)
     return combined
 
-# `as VerifiedSlide` afirma la marca de verificación sin pasar por el guard.
-# TypeScript permite el cast en un solo paso porque VerifiedSlide es subtipo de
-# Slide, así que el compilador NO puede impedirlo — y no hace falta mala fe: es
-# lo que uno escribe cuando el compilador dice "Slide[] no es asignable a
-# VerifiedSlide[]". Solo verify-slides.ts tiene por qué acuñarla.
+# `as VerifiedSlide` asserts the verification mark without passing through the guard.
+# TypeScript allows the cast in one step because VerifiedSlide is a subtype of
+# Slide, so the compiler CAN'T prevent it — and bad faith isn't required: it's
+# what you write when the compiler says "Slide[] is not assignable to VerifiedSlide[]".
+# Only verify-slides.ts should mint it.
 VERIFIED_CAST = re.compile(r'\bas\s+(?:unknown\s+as\s+)?VerifiedSlide\b')
 VERIFIED_CAST_HOME = 'system/ig-carousel/verify-slides.ts'
-# El archivo de pruebas de tipos afirma el cast a propósito, para que el límite
-# quede asertado y no solo descrito. Un check que castigue documentar el problema
-# empuja a borrar la documentación, que es lo contrario de lo que se busca.
+# The types test file asserts the cast deliberately, so the boundary stays
+# asserted, not just described. A check that penalizes documenting the problem
+# pushes people to delete the documentation, the opposite of what we want.
 VERIFIED_CAST_DOCS = 'system/ig-carousel/render-batch.types.test.ts'
 
-# Una negación en .gitignore es como se colaron los perfiles reales al repo:
-# gana silenciosamente sobre cualquier regla escrita en prosa.
+# A negation in .gitignore is how real profiles snuck into the repo:
+# silently wins over any rule written in prose.
 #
-# `/?` porque `!/profiles/<marca>/` es gitignore válido con el mismo efecto, y
-# `(?![^/]*)` ancla la excepción al segmento completo: `!profiles/exampleEVIL/`
-# no es el perfil de ejemplo y no debe pasar por empezar igual.
+# `/?` because `!/profiles/<brand>/` is valid gitignore with the same effect, and
+# `(?![^/]*)` anchors the exception to the whole segment: `!profiles/exampleEVIL/`
+# isn't the example profile and shouldn't pass just by starting the same.
 GITIGNORE_NEGATION = re.compile(r'^\s*!\s*/?profiles/(?!example(?:-personal)?/)')
 
 
@@ -446,22 +444,22 @@ def denylist() -> list[str]:
 
 
 def staged_blob(path: str) -> str | None:
-    """Contenido tal como quedaría commiteado, no el del working tree."""
+    """Content as it would be committed, not from the working tree."""
     try:
         return subprocess.check_output(
             ['git', 'show', f':{path}'], cwd=ROOT, text=True, errors='replace',
-            stderr=subprocess.DEVNULL,  # un borrado es caso normal, no un error
+            stderr=subprocess.DEVNULL,  # a deletion is normal, not an error
         )
     except subprocess.CalledProcessError:
-        return None  # borrado del índice
+        return None  # deleted from index
 
 
 def check_brand_leaks(staged_files: list[str]) -> list[str]:
-    """Literales de marca en la capa genérica.
+    """Brand literals in the generic layer.
 
-    Determinista a propósito: el gate ya existía cuando ocurrieron las fugas
-    de este repo y no las detuvo, porque todo el juicio sobre qué era seguro
-    estaba delegado a la revisión de un agente. Esto no depende de criterio.
+    Deterministic on purpose: the gate existed when this repo's leaks happened
+    and didn't stop them, because all judgment about what was safe was delegated
+    to agent review. This doesn't depend on judgment.
     """
     origins = denylist_with_origins()
     if not origins:
@@ -480,31 +478,31 @@ def check_brand_leaks(staged_files: list[str]) -> list[str]:
         for number, line in enumerate(blob.splitlines(), 1):
             hit = pattern.search(line)
             if hit:
-                # Se nombra el término Y su procedencia: si no, un bloqueo por
-                # un término derivado es indistinguible de un bug del gate y
-                # nadie sabe qué archivo del perfil lo originó.
+                # Name both the term AND its origin: without this, a block on a
+                # derived term is indistinguishable from a gate bug and nobody
+                # knows which profile file spawned it.
                 leaks.append(
                     f'{path}:{number}: {line.strip()[:80]}\n'
-                    f'      ↳ término "{hit.group(0)}" — '
+                    f'      ↳ term "{hit.group(0)}" — '
                     f'{describe_origin(hit.group(0), origins)}'
                 )
     return leaks
 
 
 def describe_origin(matched: str, origins: dict[str, set[str]]) -> str:
-    """De dónde salió el término que hizo match (case-insensitive)."""
+    """Where the matched term came from (case-insensitive)."""
     for term, where in origins.items():
         if term.lower() == matched.lower():
             return '; '.join(sorted(where))
-    return 'procedencia desconocida'
+    return 'unknown origin'
 
 
 def check_private_profiles(staged_files: list[str], *, tracked: bool = False) -> list[str]:
-    """Archivos de un perfil real que entrarían al repo.
+    """Files from a real profile that would enter the repo.
 
-    Un borrado NO es violación: sacar un perfil real del árbol es exactamente
-    la operación que este check quiere favorecer. Sin esta distinción el gate
-    se bloquea a sí mismo justo cuando alguien hace lo correcto.
+    A deletion is NOT a violation: removing a real profile from the tree is
+    exactly the operation this check wants to encourage. Without this distinction
+    the gate blocks itself at the exact moment someone does the right thing.
     """
     candidates = [
         path for path in staged_files
@@ -512,17 +510,17 @@ def check_private_profiles(staged_files: list[str], *, tracked: bool = False) ->
         and not path.startswith(PUBLIC_PROFILE_PREFIX)
     ]
     if tracked:
-        # Modo --scan: la lista viene de `git ls-files -co`, así que incluye
-        # archivos nuevos que no están en el índice. Se comprueba en disco.
+        # Scan mode: the list comes from `git ls-files -co`, so it includes
+        # untracked files not in the index. Checked on disk.
         return [path for path in candidates if (ROOT / path).exists()]
     return [path for path in candidates if staged_blob(path) is not None]
 
 
 def check_verified_casts(staged_files: list[str]) -> list[str]:
-    """Casts que fabrican la marca de verificación fuera de su único dueño.
+    """Casts that fabricate the verification mark outside its sole owner.
 
-    El guard de pre-render es una garantía del compilador, y este es el hueco
-    que el compilador no puede cerrar solo. Un check textual sí puede.
+    The pre-render guard is a compiler guarantee, and this is the hole the
+    compiler can't close alone. A textual check can.
     """
     findings = []
     for path in staged_files:
@@ -532,8 +530,8 @@ def check_verified_casts(staged_files: list[str]) -> list[str]:
         if blob is None:
             continue
         for number, line in enumerate(blob.splitlines(), 1):
-            # Solo código: una línea de comentario que *menciona* el cast está
-            # explicando por qué existe el check, no fabricando la marca.
+            # Code only: a comment line that *mentions* the cast is explaining
+            # why the check exists, not fabricating the mark.
             if line.lstrip().startswith(('*', '//', '/*')):
                 continue
             if VERIFIED_CAST.search(line):
@@ -542,11 +540,10 @@ def check_verified_casts(staged_files: list[str]) -> list[str]:
 
 
 def check_gitignore_negations(staged_files: list[str]) -> list[str]:
-    """Ataca la causa raíz en su forma general.
+    """Attack the root cause in its general form.
 
-    Sin esto, un `!profiles/<marca>/` vuelve a hacer trackeable un perfil
-    real y los otros dos checks quedan sin efecto para los archivos que ese
-    perfil añada después.
+    Without this, a `!profiles/<brand>/` makes a real profile trackable again
+    and the other two checks lose effect for files that profile adds after.
     """
     if '.gitignore' not in staged_files:
         return []
@@ -560,15 +557,15 @@ def check_gitignore_negations(staged_files: list[str]) -> list[str]:
 
 # Asked of git rather than hardcoded as `ROOT/.git`, because in a linked
 # worktree `.git` is a *file* pointing at the real gitdir
-# (…/.git/worktrees/<name>), not a directory — so the hardcoded path could
-# never exist there and the gate rejected every commit made from a worktree,
-# no matter how it had been reviewed. post-commit already resolves it this
-# way; this keeps the two halves of the gate agreeing on one location.
+# (…/.git/worktrees/<name>), not a directory — so the hardcoded path would
+# never exist and the gate rejected every commit from a worktree, no matter
+# how well it had been reviewed. post-commit already resolves it this way;
+# this keeps both halves of the gate agreeing on one location.
 #
-# `--absolute-git-dir`, not `--git-dir`: the latter answers a bare relative
+# `--absolute-git-dir`, not `--git-dir`: the latter returns a bare relative
 # ".git" in an ordinary clone, which `Path` would then resolve against the
 # process's cwd instead of the repository — letting a stray `.git/` in some
-# subdirectory supply the approval. Anchoring it absolutely keeps the lookup
+# subdirectory supply approval. Anchoring it absolutely keeps the lookup
 # tied to this repository wherever the script is invoked from.
 APPROVAL = Path(git('rev-parse', '--absolute-git-dir')) / 'commit-guardian-approval.json'
 
@@ -579,24 +576,24 @@ def fail(message: str) -> int:
 
 
 def scan_tree() -> int:
-    """`--scan`: audita el árbol actual Y el historial local.
+    """`--scan`: audit the current tree AND local history.
 
-    El gate solo ve lo que se está commiteando. Esto responde las otras dos
-    preguntas, que son distintas y hay que reportar por separado:
+    The gate only sees what's being committed. This answers the other two
+    questions, which are distinct and must be reported separately:
 
-      1. ¿el árbol de HOY está limpio?  → lo que se publicaría al hacer push
-      2. ¿el HISTORIAL local está limpio? → un árbol limpio con commits sucios
-         detrás sigue publicando la marca si se pushea el historial completo
+      1. Is TODAY's tree clean? → what would be published on push
+      2. Is local HISTORY clean? → a clean tree with dirty commits behind
+         still publishes the brand if history is pushed wholesale
 
-    Auditar solo (1) es peor que no auditar: imprime "publicable" mientras
-    los commits siguen ahí.
+    Auditing only (1) is worse than not auditing: it prints "publishable"
+    while commits stay in place.
     """
     origins = denylist_with_origins()
     terms = sorted(origins, key=str.lower)
     if not terms:
         print(
-            'commit-gate: no hay términos que buscar — scripts/brand-denylist.txt '
-            'está vacío o ausente y no hay ningún perfil real en profiles/',
+            'commit-gate: no terms to search for — scripts/brand-denylist.txt '
+            'is empty or missing and no real profiles exist in profiles/',
             file=sys.stderr,
         )
         return 1
@@ -605,30 +602,29 @@ def scan_tree() -> int:
         re.IGNORECASE,
     )
 
-    # --- (0) de dónde sale cada término ---
-    # Se imprime ANTES de los hallazgos: sin esto, un bloqueo por un término
-    # derivado es opaco y el humano no puede decidir si es una fuga real o un
-    # falso positivo que hay que mitigar.
-    print('TÉRMINOS VIGILADOS (y de dónde salen)')
+    # --- (0) where each term comes from ---
+    # Printed BEFORE findings: without this, a block on a derived term is opaque
+    # and the human can't decide if it's a real leak or a false positive to mitigate.
+    print('WATCHED TERMS (and where they come from)')
     for term in terms:
         print(f'  {term}')
         for origin in sorted(origins[term]):
             print(f'      ← {origin}')
     profiles = real_profile_dirs()
     print(
-        f'  {len(terms)} término(s): derivados de {len(profiles)} perfil(es) real(es) '
-        f'en disco + los manuales de scripts/brand-denylist.txt'
+        f'  {len(terms)} term(s): derived from {len(profiles)} real profile(s) '
+        f'on disk + manual terms from scripts/brand-denylist.txt'
     )
     if not profiles:
-        print('  (ningún perfil real en profiles/ — solo gobiernan los términos manuales)')
+        print('  (no real profiles in profiles/ — only manual terms govern)')
     print()
 
-    # --- (1) árbol actual ---
-    # `-co --exclude-standard`: trackeados MÁS los nuevos sin trackear que no
-    # están ignorados. Con solo `ls-files` el scan no veía el trabajo en curso
-    # y reportaba "ok" con una fuga viva en disco — el mismo falso verde que
-    # este script existe para eliminar, un nivel más arriba. Los ignorados
-    # quedan fuera a propósito: ahí viven los perfiles reales.
+    # --- (1) current tree ---
+    # `-co --exclude-standard`: tracked PLUS untracked files not ignored.
+    # With just `ls-files` the scan didn't see work in progress and reported
+    # "ok" with a live leak on disk — the same false green this script exists
+    # to eliminate, one level up. Ignored files are intentionally outside: that's
+    # where real profiles live.
     tracked = sorted(filter(None, git('ls-files', '-co', '--exclude-standard').splitlines()))
     leaks = []
     for path in tracked:
@@ -643,7 +639,7 @@ def scan_tree() -> int:
             if hit:
                 leaks.append(
                     f'{path}:{number}: {line.strip()[:100]}\n'
-                    f'          ↳ término "{hit.group(0)}" — '
+                    f'          ↳ term "{hit.group(0)}" — '
                     f'{describe_origin(hit.group(0), origins)}'
                 )
 
@@ -658,19 +654,19 @@ def scan_tree() -> int:
         ] if (ROOT / '.gitignore').exists() else []),
     ]
 
-    print('ÁRBOL ACTUAL (lo que se publicaría al hacer push)')
+    print('CURRENT TREE (what would be published on push)')
     for title, items in tree_findings:
         print(f'  {"FAIL" if items else "ok  "}  {title} ({len(items)})')
         for item in items:
             print(f'          {item}')
     tree_total = sum(len(items) for _, items in tree_findings)
 
-    # --- (2) historial local ---
-    # `git log -S<term>` recorre todos los refs y encuentra los commits que
-    # introdujeron o quitaron el término. Un árbol limpio no dice nada sobre
-    # esto: los commits siguen ahí y un push los publica.
+    # --- (2) local history ---
+    # `git log -S<term>` traverses all refs and finds commits that introduced
+    # or removed the term. A clean tree says nothing about this: commits stay
+    # and a push publishes them.
     print()
-    print('HISTORIAL LOCAL (commits que contienen la marca)')
+    print('LOCAL HISTORY (commits that contain the brand)')
     history: dict[str, list[str]] = {}
     for term in terms:
         try:
@@ -689,75 +685,75 @@ def scan_tree() -> int:
                 pushed.add(sha)
         except subprocess.CalledProcessError:
             pass
-    # Una rama no es el único canal de publicación. Abrir un pull request
-    # deja el commit en `refs/pull/N/head` del remoto PARA SIEMPRE: cerrar el
-    # PR y borrar la rama no lo retira, y `git branch -r` no lo ve porque esa
-    # ref está oculta y no se replica en el clon. Esta laguna dejó pasar una
-    # fuga real: el árbol estaba limpio, ninguna rama contenía el commit, y el
-    # informe decía "NO hay fuga publicada" mientras el commit se servía
-    # anónimamente desde un PR cerrado. Se consulta al remoto, no al clon.
+# A branch isn't the only publication channel. Opening a pull request on
+    # GitHub leaves the commit in `refs/pull/N/head` on the remote FOREVER:
+    # closing the PR and deleting the branch doesn't remove it, and
+    # `git branch -r` doesn't see it because that ref is hidden and doesn't
+    # replicate to the clone. This gap let a real leak through: the tree was
+    # clean, no branch held the commit, and the report said "NO published leak"
+    # while the commit was served anonymously from a closed PR. We query the
     if history:
         via_pr = _commits_published_via_pr({line.split()[0] for line in history})
         pushed |= via_pr
 
     if history:
-        print(f'  FAIL  {len(history)} commit(s) contienen términos de la denylist')
+        print(f'  FAIL  {len(history)} commit(s) contain denylist terms')
         for line, hits in sorted(history.items()):
             sha = line.split()[0]
             if sha in via_pr:
-                mark = ' [PUBLICADO EN UN PULL REQUEST]'
+                mark = ' [PUBLISHED IN A PULL REQUEST]'
             elif sha in pushed:
-                mark = ' [YA EN UN REMOTO]'
+                mark = ' [ALREADY IN A REMOTE]'
             else:
                 mark = ''
             print(f'          {line[:80]}  ({", ".join(sorted(set(hits)))}){mark}')
         print()
         if pushed:
-            print(f'  {len(pushed)} de esos commits YA están en un remoto — eso sí es una fuga')
-            print('  consumada; borrarlos del árbol no los saca de ahí.')
+            print(f'  {len(pushed)} of those commits are ALREADY in a remote — that IS a leak,')
+            print('  and permanent; removing them from the tree won\'t remove them from there.')
             if via_pr:
                 print()
-                print(f'  {len(via_pr)} está(n) publicado(s) por un PULL REQUEST, no por una rama.')
-                print('  Cerrar el PR y borrar la rama NO los retira: viven en refs/pull/N/head')
-                print('  del remoto y se sirven anónimamente. No hay push ni reescritura de')
-                print('  historia que los borre — la ref es de solo lectura del lado servidor.')
-                print('  Vías reales: pedirlo a GitHub Support, o cambiar el repo a privado y')
-                print('  volverlo público. Si el repo tiene FORKS, los objetos se comparten con')
-                print('  ellos y hay que resolverlos primero o nada de lo anterior basta.')
+                print(f'  {len(via_pr)} are published via PULL REQUEST, not by a branch.')
+                print('  Closing the PR and deleting the branch doesn\'t remove them: they live in refs/pull/N/head')
+                print('  on the remote and are served anonymously. No push or history rewrite removes')
+                print('  them — the ref is read-only server-side.')
+                print('  Real options: request it from GitHub Support, or make the repo private')
+                print('  then public again. If the repo has FORKS, objects are shared with')
+                print('  them and must be resolved first or none of the above suffices.')
         else:
-            print('  Ninguno está en un remoto todavía: NO hay fuga publicada. Es higiene')
-            print('  previa. Publicar por squash sobre una base limpia evita arrastrarlos.')
+            print('  None are in a remote yet: NO published leak. This is hygiene before push.')
+            print('  Publishing via squash onto a clean base avoids dragging them along.')
         if PR_CHECK_NOTE:
             print()
-            print(f'  aviso: {PR_CHECK_NOTE}')
+            print(f'  note: {PR_CHECK_NOTE}')
     else:
-        print('  ok    ningún commit local contiene términos de la denylist')
+        print('  ok    no local commits contain denylist terms')
 
-    # --- alcance ---
+    # --- scope ---
     print()
-    print('ALCANCE DE ESTA AUDITORÍA — lo que NO cubre:')
-    print(f'  · Solo busca los {len(terms)} término(s) listados arriba. Los derivados')
-    print('    aparecen solos al poner un perfil en profiles/<slug>/ — dar de alta')
-    print('    una marca ya NO requiere editar el denylist a mano. Lo que la')
-    print('    derivación no ve sí hay que declararlo ahí: alias antiguos, nombres')
-    print('    de repos privados, o un slug de menos de')
-    print(f'    {MIN_TERM_LENGTH} caracteres (se descarta por generar falsos positivos).')
-    print('  · Términos genéricos (ciudades muy comunes, wordmarks que son palabras')
-    print('    corrientes) se descartan a propósito para no bloquear el motor; si')
-    print('    una marca los necesita, van a mano en el denylist.')
-    print('  · No detecta negocio sin nombrar la marca (criterio editorial, copy,')
-    print('    una paleta) — eso requiere lectura humana.')
-    print('  · No audita archivos binarios (los no-trackeados sí se auditan).')
-    print('  · La publicación se comprueba contra ramas remotas Y contra los pull')
-    print('    requests del remoto (refs/pull/*/head), que sobreviven a cerrar el PR.')
-    print('    No cubre forks ajenos: comparten objetos y sirven el commit igual.')
+    print('SCOPE OF THIS AUDIT — what it DOES NOT cover:')
+    print(f'  · Only searches the {len(terms)} term(s) listed above. Derived ones appear')
+    print('    automatically when a profile lands in profiles/<slug>/ — registering a')
+    print('    brand no longer requires hand-editing the denylist. Terms the derivation')
+    print('    doesn\'t see must be declared there: old aliases, private repo names, or')
+    print('    a slug shorter than')
+    print(f'    {MIN_TERM_LENGTH} chars (filtered to prevent false positives).')
+    print('  · Generic terms (common cities, wordmarks that are everyday words) are')
+    print('    filtered on purpose to avoid blocking the engine; if a specific brand')
+    print('    needs them, add by hand to the denylist.')
+    print('  · Doesn\'t detect business logic without naming the brand (editorial')
+    print('    criteria, copy, color palette) — that requires human reading.')
+    print('  · Doesn\'t audit binary files (untracked files are audited).')
+    print('  · Publishing is checked against remote branches AND the pull')
+    print('    requests (refs/pull/*/head) that survive closing the PR.')
+    print('    Doesn\'t cover external forks: they share objects and serve the commit too.')
 
     total = tree_total + len(history)
     print()
     if total == 0:
-        print('árbol e historial limpios para los términos conocidos')
+        print('tree and history clean for known terms')
     else:
-        print(f'{tree_total} en el árbol + {len(history)} commit(s) en historial — revisar antes de publicar')
+        print(f'{tree_total} in tree + {len(history)} commit(s) in history — review before publishing')
     return 1 if total else 0
 
 
@@ -810,9 +806,9 @@ def main() -> int:
     if not staged_files:
         return fail('nothing staged; this approval was already used — re-run commit-guardian review')
 
-    # Los tres checks de abajo son deterministas y NO los puede aprobar
-    # commit-guardian: son precisamente el tipo de fuga que una revisión por
-    # criterio dejó pasar diez veces en este repo.
+    # The three checks below are deterministic and commit-guardian CANNOT
+    # approve them: they're exactly the kind of leak that criterion-based
+    # review let slip ten times in this repo.
     negations = check_gitignore_negations(staged_files)
     if negations:
         return fail(
