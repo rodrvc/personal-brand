@@ -53,6 +53,11 @@ BRAND_DENYLIST_LOCAL = ROOT / 'scripts' / 'brand-denylist.local.txt'
 # brand-denylist.txt con el contexto que lo hace único, no derivarlo a ciegas.
 MIN_TERM_LENGTH = 4
 
+# Aviso cuando la comprobación de PRs no pudo completarse (sin red, sin
+# remoto, o con commits que el clon no tiene). Lo rellena
+# `_commits_published_via_pr` y lo imprime el informe.
+PR_CHECK_NOTE: str | None = None
+
 # Palabras demasiado comunes para bloquear por sí solas.
 #
 # Mitigación de falsos positivos: si un perfil declara la ciudad "Santiago" o
@@ -74,6 +79,19 @@ GENERIC_WORDS = {
     'semana', 'events', 'eventos', 'panoramas',
 }
 
+# Plataformas de terceros. Un perfil cuyo `copy.site` apunta aquí no está
+# declarando un dominio propio: está diciendo "mi presencia vive en la casa de
+# otro". Derivar "linkedin" de esa URL vigilaría el nombre de una plataforma
+# ajena — que el motor tiene todo el derecho a nombrar, porque renderiza para
+# ella (`core/src/linkedin.js` calcula dónde corta LinkedIn un post). El
+# dominio propio de una marca sí se deriva; el de la red social donde publica,
+# no.
+THIRD_PARTY_HOSTS = {
+    'linkedin.com', 'instagram.com', 'facebook.com', 'twitter.com', 'x.com',
+    'threads.net', 'tiktok.com', 'youtube.com', 'github.com', 'medium.com',
+    'substack.com', 'notion.so', 'behance.net', 'dribbble.com', 'bsky.app',
+}
+
 # TLDs que se recortan al derivar el nombre base de un dominio.
 KNOWN_TLDS = (
     '.com', '.cl', '.net', '.org', '.io', '.dev', '.app', '.co', '.ai',
@@ -81,6 +99,16 @@ KNOWN_TLDS = (
 )
 
 HANDLE = re.compile(r'@([A-Za-z0-9._]{3,30})\b')
+
+# Nombres de campo del esquema de perfil. Escritos tras una arroba son la
+# cita del concepto ("el @handle de la marca"), nunca el handle real de
+# nadie. Solo suprimen la captura del extractor: si una marca se llamase
+# así de verdad, sigue derivándose por su slug, wordmark, dominio o
+# profile.name, y puede declararse a mano en el denylist.
+SCHEMA_FIELD_NAMES = {
+    'handle', 'handles', 'usuario', 'user', 'username', 'slug', 'wordmark',
+    'site', 'hashtag', 'hashtags', 'nombre', 'name',
+}
 
 
 def _is_public_profile(name: str) -> bool:
@@ -151,6 +179,13 @@ def _domain_terms(domain: str) -> list[str]:
     domain = re.sub(r'^[a-z]+://', '', domain).split('/')[0]
     if not domain or '.' not in domain:
         return [domain] if domain else []
+    # Una plataforma de terceros no aporta término: ni el host ni su nombre
+    # base son de la marca. Se comprueba el dominio registrable, para que
+    # `www.linkedin.com` y `open.substack.com` caigan igual que el desnudo.
+    if domain in THIRD_PARTY_HOSTS or any(
+        domain.endswith('.' + host) for host in THIRD_PARTY_HOSTS
+    ):
+        return []
     terms = [domain]
     # Nombre base: la etiqueta anterior al TLD, no el subdominio. Para un TLD
     # de dos niveles (`.cl.com`, `.co.uk`) hay que retroceder una etiqueta más,
@@ -165,6 +200,87 @@ def _domain_terms(domain: str) -> list[str]:
     if base:
         terms.append(base)
     return terms
+
+
+def _identifying_hashtag(tag: str) -> bool:
+    """¿Este hashtag nombra a la marca, o es vocabulario del rubro?
+
+    `#Agentes` o `#Marketing` son el tema del que se habla, y el motor los usa
+    como palabras normales — vigilarlos convierte cada mención en una alarma.
+    Lo que sí identifica es un hashtag compuesto (`#PanoramasNorte`,
+    `#Estudio_X`): nadie lo escribe por casualidad. Heurística: se exige más de
+    un componente, detectado por CamelCase, dígito o separador.
+
+    Límite conocido: un hashtag de UNA sola palabra en minúsculas (`#nike`)
+    se descarta, y nada avisa de ello. Hoy no abre un hueco porque un
+    hashtag así suele repetir el slug o el wordmark, que se derivan por su
+    cuenta. Una marca cuyo único rastro sea ese hashtag debe declararse a
+    mano en el denylist.
+    """
+    body = tag.strip().lstrip('#')
+    if not body:
+        return False
+    if any(ch.isdigit() or ch in '-_.' for ch in body):
+        return True
+    # CamelCase: una mayúscula que no sea la inicial marca un segundo componente.
+    return any(ch.isupper() for ch in body[1:])
+
+
+def _commits_published_via_pr(shas: set[str]) -> set[str]:
+    """De `shas`, los que el remoto sirve aunque ninguna rama los contenga.
+
+    Un pull request deja su commit en `refs/pull/N/head`, una ref oculta que
+    sobrevive a cerrar el PR y a borrar la rama, y que `git branch -r` nunca
+    ve. Se pregunta al remoto por esas refs y se comprueba la pertenencia
+    contra los objetos que ya estén en el clon.
+
+    Silencioso y no bloqueante: sin red, sin remoto o sin permisos devuelve
+    un conjunto vacío. Un fallo de red no puede convertirse en un falso
+    "todo limpio" ruidoso ni en un error que impida commitear — pero el
+    informe avisa cuando la comprobación no se pudo hacer (ver PR_CHECK_NOTE).
+    """
+    global PR_CHECK_NOTE
+    if not shas:
+        return set()
+    try:
+        raw = subprocess.run(
+            ['git', 'ls-remote', 'origin', 'refs/pull/*/head'],
+            cwd=ROOT, capture_output=True, text=True, timeout=25,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        PR_CHECK_NOTE = 'no se pudo consultar el remoto (red o timeout)'
+        return set()
+    if raw.returncode != 0:
+        PR_CHECK_NOTE = 'no se pudo consultar el remoto (sin acceso a origin)'
+        return set()
+
+    pr_heads = [ln.split()[0] for ln in raw.stdout.splitlines() if ln.strip()]
+    if not pr_heads:
+        return set()
+
+    found: set[str] = set()
+    for sha in shas:
+        # `--contains` necesita el objeto en el clon. Si el PR trae historia
+        # que nunca se descargó, el head es desconocido y se salta: mejor no
+        # afirmar nada que afirmar de más.
+        for head in pr_heads:
+            try:
+                r = subprocess.run(
+                    ['git', 'merge-base', '--is-ancestor', sha, head],
+                    cwd=ROOT, capture_output=True, timeout=10,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+            if r.returncode == 0:
+                found.add(sha)
+                break
+    if not found and pr_heads:
+        PR_CHECK_NOTE = (
+            f'{len(pr_heads)} PR(s) en el remoto; los commits que no estén '
+            'descargados no se pueden comprobar (git fetch origin '
+            '"refs/pull/*/head:refs/remotes/pr/*" para incluirlos)'
+        )
+    return found
 
 
 def derive_terms() -> dict[str, set[str]]:
@@ -211,7 +327,8 @@ def derive_terms() -> dict[str, set[str]]:
             except OSError:
                 text = ''
             for tag in _yaml_list(text, 'default_hashtags'):
-                add(tag.lstrip('#'), f'{where}config.yaml default_hashtags')
+                if _identifying_hashtag(tag):
+                    add(tag.lstrip('#'), f'{where}config.yaml default_hashtags')
             for value in _yaml_scalar(text, 'name'):
                 add(value, f'{where}config.yaml profile.name')
 
@@ -245,6 +362,13 @@ def derive_terms() -> dict[str, set[str]]:
             for handle in HANDLE.findall(text):
                 if '.' in handle or handle.lower() in GENERIC_WORDS:
                     continue  # emails, versiones de fuentes, @400;600
+                if handle.lower() in SCHEMA_FIELD_NAMES:
+                    # La prosa de un perfil (un spec, un handoff) nombra los
+                    # campos que la describen, y "@handle" citado como
+                    # concepto no es el handle de nadie. Tomarlo por uno hizo
+                    # vigilar la palabra "handle" y produjo 47 falsos
+                    # positivos contra `delayRender(handle)` y compañía.
+                    continue
                 add(handle, f'{where}… (@handle)')
 
     return derived
@@ -557,6 +681,7 @@ def scan_tree() -> int:
             history.setdefault(line, []).append(term)
 
     pushed = set()
+    via_pr = set()
     for line in history:
         sha = line.split()[0]
         try:
@@ -564,20 +689,47 @@ def scan_tree() -> int:
                 pushed.add(sha)
         except subprocess.CalledProcessError:
             pass
+    # Una rama no es el único canal de publicación. Abrir un pull request
+    # deja el commit en `refs/pull/N/head` del remoto PARA SIEMPRE: cerrar el
+    # PR y borrar la rama no lo retira, y `git branch -r` no lo ve porque esa
+    # ref está oculta y no se replica en el clon. Esta laguna dejó pasar una
+    # fuga real: el árbol estaba limpio, ninguna rama contenía el commit, y el
+    # informe decía "NO hay fuga publicada" mientras el commit se servía
+    # anónimamente desde un PR cerrado. Se consulta al remoto, no al clon.
+    if history:
+        via_pr = _commits_published_via_pr({line.split()[0] for line in history})
+        pushed |= via_pr
 
     if history:
         print(f'  FAIL  {len(history)} commit(s) contienen términos de la denylist')
         for line, hits in sorted(history.items()):
             sha = line.split()[0]
-            mark = ' [YA EN UN REMOTO]' if sha in pushed else ''
+            if sha in via_pr:
+                mark = ' [PUBLICADO EN UN PULL REQUEST]'
+            elif sha in pushed:
+                mark = ' [YA EN UN REMOTO]'
+            else:
+                mark = ''
             print(f'          {line[:80]}  ({", ".join(sorted(set(hits)))}){mark}')
         print()
         if pushed:
             print(f'  {len(pushed)} de esos commits YA están en un remoto — eso sí es una fuga')
             print('  consumada; borrarlos del árbol no los saca de ahí.')
+            if via_pr:
+                print()
+                print(f'  {len(via_pr)} está(n) publicado(s) por un PULL REQUEST, no por una rama.')
+                print('  Cerrar el PR y borrar la rama NO los retira: viven en refs/pull/N/head')
+                print('  del remoto y se sirven anónimamente. No hay push ni reescritura de')
+                print('  historia que los borre — la ref es de solo lectura del lado servidor.')
+                print('  Vías reales: pedirlo a GitHub Support, o cambiar el repo a privado y')
+                print('  volverlo público. Si el repo tiene FORKS, los objetos se comparten con')
+                print('  ellos y hay que resolverlos primero o nada de lo anterior basta.')
         else:
             print('  Ninguno está en un remoto todavía: NO hay fuga publicada. Es higiene')
             print('  previa. Publicar por squash sobre una base limpia evita arrastrarlos.')
+        if PR_CHECK_NOTE:
+            print()
+            print(f'  aviso: {PR_CHECK_NOTE}')
     else:
         print('  ok    ningún commit local contiene términos de la denylist')
 
@@ -595,7 +747,10 @@ def scan_tree() -> int:
     print('    una marca los necesita, van a mano en el denylist.')
     print('  · No detecta negocio sin nombrar la marca (criterio editorial, copy,')
     print('    una paleta) — eso requiere lectura humana.')
-    print('  · No audita archivos binarios ni no-trackeados.')
+    print('  · No audita archivos binarios (los no-trackeados sí se auditan).')
+    print('  · La publicación se comprueba contra ramas remotas Y contra los pull')
+    print('    requests del remoto (refs/pull/*/head), que sobreviven a cerrar el PR.')
+    print('    No cubre forks ajenos: comparten objetos y sirven el commit igual.')
 
     total = tree_total + len(history)
     print()
