@@ -168,8 +168,36 @@ with each place it came from, and every finding names the matching term and its
 provenance. Without that, a block caused by a derived term is indistinguishable
 from a bug in the gate.
 
+## Installing the hooks
+
+The hooks live in `.githooks/` and git does not use them until it is told to:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
+```
+
+That setting is **local configuration, not part of the clone**. A fresh clone,
+a new machine, or a new worktree starts with no hooks and says nothing about
+it — the gate is simply absent. Anyone setting up this repo has to run that
+line, and a CI check is the only control that does not depend on someone
+remembering to.
+
 ## Scope
 
-This gate protects commits.
+Two hooks, two different questions.
 
-Push remains normal once the commit already passed the gate.
+`pre-commit` reviews a **commit**: it needs a commit-guardian approval pinned
+to the exact staged tree.
+
+`pre-push` reviews a **push**: it scans the lines the push would add under the
+generic layers for brand literals, with no approval and no human judgement
+involved.
+
+They are not redundant, because a commit and a push are not equally
+recoverable. A commit is local: a branch carrying a brand can be deleted and
+nothing escaped. A push is the one step that cannot be taken back — and this
+repo learned that the expensive way. Its brand leak went out through a pull
+request, and closing the PR and deleting the branch did not retract it: GitHub
+keeps a PR's commits in `refs/pull/N/head` permanently, where no force-push and
+no history rewrite reaches them. The gate did not fail; it was watching the
+reversible operation while the irreversible one had no gate at all.

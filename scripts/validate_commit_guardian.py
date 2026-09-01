@@ -757,9 +757,97 @@ def scan_tree() -> int:
     return 1 if total else 0
 
 
+def check_push(revisions: list[str]) -> int:
+    """`--check-push <rev>...`: audit the commits a push would publish.
+
+    The gate reviews a commit; `--scan` reviews the whole local history. This
+    answers the question that matters at the boundary: **of what I am about to
+    send, does any of it carry a brand?**
+
+    That boundary is where the leak happened. A commit is local and
+    reversible — a branch carrying a brand can be deleted and nothing escaped.
+    A push is the one operation that cannot be taken back, and until this
+    existed nothing checked it: this repo's leak went out through a pull
+    request, and the report called it clean because it only looked at
+    branches.
+
+    `revisions` is a `git log` revision expression — a range (`A..B`), or the
+    shape the hook uses for a brand-new branch, `<sha> --not --remotes`
+    ("everything here the remote does not have"). Empty means the push
+    publishes nothing new: a branch delete, or a ref already up to date.
+
+    Only ADDED lines under the generic layers are reported; removing a brand
+    literal is the fix, not the offence.
+    """
+    if not revisions:
+        return 0
+
+    origins = denylist_with_origins()
+    terms = sorted(origins, key=str.lower)
+    if not terms:
+        # No profiles on disk and no manual denylist: nothing to search for.
+        # Silent success, not a block — a fresh clone has nothing to leak.
+        return 0
+
+    try:
+        # `log -p`, not `diff`, for two reasons. A range diff compares its two
+        # endpoints, so a push that adds a brand in one commit and removes it
+        # in the next reads clean — while both commits still travel to the
+        # remote, and a pull request keeps them in refs/pull/N/head forever.
+        # And `git diff <bare-sha>` diffs the WORKING TREE against that commit,
+        # the reverse of what this audits: every added line would show as a
+        # removal and sail through. `git log` has no such trapdoor.
+        diff = git('log', '-p', '--unified=0', '--format=', *revisions)
+    except subprocess.CalledProcessError as exc:
+        # A range that cannot be read is not a range that is clean. Fail
+        # closed: the entire point of this check is the push it must not let
+        # through.
+        print(f'commit-gate: could not audit the push ({exc})', file=sys.stderr)
+        return 1
+
+    pattern = re.compile('|'.join(re.escape(t) for t in terms), re.IGNORECASE)
+    findings: list[str] = []
+    path = ''
+    for line in diff.splitlines():
+        if line.startswith('+++ b/'):
+            path = line[6:]
+            continue
+        if not line.startswith('+') or line.startswith('+++'):
+            continue
+        if not path.startswith(GENERIC_PREFIXES):
+            continue
+        body = line[1:]
+        found = pattern.search(body)
+        if found:
+            findings.append(
+                f'{path}: {body.strip()[:100]}\n'
+                f'      \u21b3 term "{found.group(0)}" \u2014 '
+                f'{describe_origin(found.group(0), origins)}'
+            )
+
+    if findings:
+        print(
+            'commit-gate: this push would publish brand literals in the '
+            'generic layers.\n'
+            'A push cannot be taken back: once these reach the remote, no '
+            'force-push and no\nhistory rewrite removes them \u2014 a pull '
+            'request keeps its commits in\nrefs/pull/N/head forever. '
+            'Parameterize them as <marca>/<ciudad>/<slug>\n(see CLAUDE.md):',
+            file=sys.stderr,
+        )
+        for item in findings:
+            print(f'  {item}', file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     if '--scan' in sys.argv[1:]:
         return scan_tree()
+
+    if '--check-push' in sys.argv[1:]:
+        i = sys.argv.index('--check-push')
+        return check_push(sys.argv[i + 1:])
 
     if not APPROVAL.exists():
         return fail(f'missing {APPROVAL}; run commit-guardian review first')
