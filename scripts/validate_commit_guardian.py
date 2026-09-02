@@ -34,8 +34,8 @@ BRAND_DENYLIST_LOCAL = ROOT / 'scripts' / 'brand-denylist.local.txt'
 #
 # The manual file protected against brand #1 and DIDN'T EXIST for brand #2
 # until someone remembered to register it. A manual step that nothing enforces
-# is not a guarantee; it's a remembered procedure — the same failure mode that
-# let the original leak slip through (the rule was already written in prose).
+# is not a guarantee; it's a remembered procedure, and a rule written only in
+# prose is enforced by whoever happens to remember it.
 #
 # So terms are read from the REAL profiles on disk. A real profile is a folder
 # under profiles/ that isn't `example*`: the `example*` are fictional brands,
@@ -457,9 +457,9 @@ def staged_blob(path: str) -> str | None:
 def check_brand_leaks(staged_files: list[str]) -> list[str]:
     """Brand literals in the generic layer.
 
-    Deterministic on purpose: the gate existed when this repo's leaks happened
-    and didn't stop them, because all judgment about what was safe was delegated
-    to agent review. This doesn't depend on judgment.
+    Deterministic on purpose. A gate that delegates every judgement about
+    what is safe to a review is only as reliable as that review; this one
+    does not depend on judgement at all.
     """
     origins = denylist_with_origins()
     if not origins:
@@ -621,10 +621,10 @@ def scan_tree() -> int:
 
     # --- (1) current tree ---
     # `-co --exclude-standard`: tracked PLUS untracked files not ignored.
-    # With just `ls-files` the scan didn't see work in progress and reported
-    # "ok" with a live leak on disk — the same false green this script exists
-    # to eliminate, one level up. Ignored files are intentionally outside: that's
-    # where real profiles live.
+    # `ls-files` alone would miss work in progress and report "ok" with a
+    # brand literal sitting on disk — the false green this script exists to
+    # prevent. Ignored files are intentionally outside: that's where real
+    # profiles live.
     tracked = sorted(filter(None, git('ls-files', '-co', '--exclude-standard').splitlines()))
     leaks = []
     for path in tracked:
@@ -689,9 +689,8 @@ def scan_tree() -> int:
     # GitHub leaves the commit in `refs/pull/N/head` on the remote FOREVER:
     # closing the PR and deleting the branch doesn't remove it, and
     # `git branch -r` doesn't see it because that ref is hidden and doesn't
-    # replicate to the clone. This gap let a real leak through: the tree was
-    # clean, no branch held the commit, and the report said "NO published leak"
-    # while the commit was served anonymously from a closed PR. We query the
+    # replicate to the clone. Without this, a tree can be clean and no branch
+    # hold the commit while the remote still serves it anonymously. We query the
     if history:
         via_pr = _commits_published_via_pr({line.split()[0] for line in history})
         pushed |= via_pr
@@ -764,12 +763,8 @@ def check_push(revisions: list[str]) -> int:
     answers the question that matters at the boundary: **of what I am about to
     send, does any of it carry a brand?**
 
-    That boundary is where the leak happened. A commit is local and
-    reversible — a branch carrying a brand can be deleted and nothing escaped.
-    A push is the one operation that cannot be taken back, and until this
-    existed nothing checked it: this repo's leak went out through a pull
-    request, and the report called it clean because it only looked at
-    branches.
+    A commit is local and reversible — a branch carrying a brand can be
+    deleted and nothing escaped. A push cannot be undone.
 
     `revisions` is a `git log` revision expression — a range (`A..B`), or the
     shape the hook uses for a brand-new branch, `<sha> --not --remotes`
@@ -793,8 +788,7 @@ def check_push(revisions: list[str]) -> int:
         # `log -p`, not `diff`, for two reasons. A range diff compares its two
         # endpoints, so a push that adds a brand in one commit and removes it
         # in the next reads clean — while both commits still travel to the
-        # remote, and a pull request keeps them in refs/pull/N/head forever.
-        # And `git diff <bare-sha>` diffs the WORKING TREE against that commit,
+        # remote. And `git diff <bare-sha>` diffs the WORKING TREE against it,
         # the reverse of what this audits: every added line would show as a
         # removal and sail through. `git log` has no such trapdoor.
         diff = git('log', '-p', '--unified=0', '--format=', *revisions)
@@ -829,10 +823,8 @@ def check_push(revisions: list[str]) -> int:
         print(
             'commit-gate: this push would publish brand literals in the '
             'generic layers.\n'
-            'A push cannot be taken back: once these reach the remote, no '
-            'force-push and no\nhistory rewrite removes them \u2014 a pull '
-            'request keeps its commits in\nrefs/pull/N/head forever. '
-            'Parameterize them as <marca>/<ciudad>/<slug>\n(see CLAUDE.md):',
+            'A push cannot be undone. Parameterize them as '
+            '<marca>/<ciudad>/<slug>\n(see CLAUDE.md):',
             file=sys.stderr,
         )
         for item in findings:
@@ -895,8 +887,8 @@ def main() -> int:
         return fail('nothing staged; this approval was already used — re-run commit-guardian review')
 
     # The three checks below are deterministic and commit-guardian CANNOT
-    # approve them: they're exactly the kind of leak that criterion-based
-    # review let slip ten times in this repo.
+    # approve them. They cover the cases a criterion-based review is worst at:
+    # the ones that look reasonable line by line.
     negations = check_gitignore_negations(staged_files)
     if negations:
         return fail(

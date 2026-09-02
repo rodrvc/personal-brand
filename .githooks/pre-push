@@ -6,11 +6,7 @@ set -eu
 # The pre-commit hook reviews a COMMIT; this reviews a PUSH, and they are not
 # the same question. A commit is local and reversible — a branch carrying a
 # brand can be deleted and nothing escaped. A push is the one irreversible
-# step, and until this hook existed nothing checked it. That is not
-# hypothetical: this repo's brand leak went out through a pull request, and
-# closing the PR and deleting the branch did not retract it. GitHub keeps a
-# PR's commits in refs/pull/N/head permanently, where no force-push and no
-# history rewrite can reach them.
+# step. Whatever it publishes is published for good.
 #
 # git feeds us one line per ref being pushed:
 #   <local ref> <local sha> <remote ref> <remote sha>

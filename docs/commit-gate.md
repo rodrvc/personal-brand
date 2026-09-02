@@ -100,16 +100,16 @@ the tree, there is no diff to review); `pre-commit` lets it through only when
 ## The brand denylist derives itself from the profiles on disk
 
 Three deterministic checks in `validate_commit_guardian.py` cannot be approved
-by `commit-guardian`, because judgement is exactly what let the original leaks
-through. One of them — brand literals under `system/` or `.claude/` — needs a
-list of terms to look for, and that list used to be maintained by hand in
-`scripts/brand-denylist.txt`.
+by `commit-guardian`, because a check that can be waived by judgement is only
+as reliable as the judgement waiving it. One of them — brand literals under
+`system/` or `.claude/` — needs a list of terms to look for, and that list used
+to be maintained by hand in `scripts/brand-denylist.txt`.
 
 That made the check protect brand #1 and **not exist** for brand #2 until
 someone remembered to register it. "Add the slug, domain, handle and city to the
 denylist" was a manual step nothing enforced — a remembered procedure, not a
-guarantee, and the same failure mode as the prose rule that did not stop the
-original leak.
+guarantee, and a rule written only in prose is enforced by whoever happens to
+remember it.
 
 So the terms are now **derived from the real profiles present on disk**. A real
 profile is any `profiles/<slug>/` that is not `example*`. From each one the gate
@@ -193,11 +193,6 @@ to the exact staged tree.
 generic layers for brand literals, with no approval and no human judgement
 involved.
 
-They are not redundant, because a commit and a push are not equally
-recoverable. A commit is local: a branch carrying a brand can be deleted and
-nothing escaped. A push is the one step that cannot be taken back — and this
-repo learned that the expensive way. Its brand leak went out through a pull
-request, and closing the PR and deleting the branch did not retract it: GitHub
-keeps a PR's commits in `refs/pull/N/head` permanently, where no force-push and
-no history rewrite reaches them. The gate did not fail; it was watching the
-reversible operation while the irreversible one had no gate at all.
+They are not redundant: a commit is local and can be undone, a push cannot. A
+gate on the commit alone guards the reversible operation and leaves the
+irreversible one open.
