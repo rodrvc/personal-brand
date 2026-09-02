@@ -1,0 +1,293 @@
+name: brand-gate
+
+# The same gate the pre-commit and pre-push hooks run, moved to the one place
+# a hook cannot reach: a machine that is not the author's. Hooks live in the
+# clone and are opt-in — `--no-verify`, a fresh clone with no `core.hooksPath`,
+# or a commit made from a web UI all bypass them silently. This job is the
+# copy that runs whether or not anyone remembered to install anything.
+#
+# What it enforces is the contract in CLAUDE.md: `system/`, `.claude/`, `app/`
+# and `core/` are the generic engine and may not carry a real brand's literals.
+# Brands live in `profiles/<slug>/`, outside version control.
+
+# A branch with an open pull request would otherwise run this twice per
+# push, on two different ranges. `pull_request` covers the branches; the
+# `push` trigger is kept for the default branch, which is what a merge (or a
+# direct push, should one ever happen) lands on.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only. The job needs the tree and, for a pull request, the merge commit;
+# it writes nothing back and must never hold a token that could.
+permissions:
+  contents: read
+
+concurrency:
+  group: brand-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  brand-gate:
+    runs-on: ubuntu-latest
+    steps:
+      # `fetch-depth: 0`. The scanner does not audit a snapshot, it audits a
+      # RANGE — the commits this event would publish — and a shallow clone has
+      # no merge base to compute that range against. With the default depth of
+      # 1 the range resolves to nothing, and a check that audits nothing is the
+      # exact failure mode this workflow exists to remove: green, and blind.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The terms the scanner searches for come from two places, and neither
+      # is in version control, by design (a published list of forbidden words
+      # IS the list of everything you meant to keep out). One is a local term
+      # file. The other is derivation from the brand profiles on disk — slug,
+      # wordmark, domain, city, handles — and a runner has no profiles, so
+      # derivation contributes nothing here however well it works locally.
+      # The runner starts with zero terms, and the scanner, quite correctly,
+      # finds zero problems.
+      #
+      # So the secret must carry the WHOLE set this gate is meant to catch,
+      # not just the local file's share of it. Whatever derivation supplies on
+      # a workstation has to be written into the secret by hand, or the gate
+      # runs at a fraction of its local coverage while looking equally green —
+      # and the terms it would be missing are the most identifying ones.
+      # A new profile does not reach the runner on its own: it has to be added
+      # to the secret. A periodic local `--scan`, which sees everything, is
+      # what covers the difference.
+      #
+      # That is the trap this step closes. The secret carries the term file's
+      # contents; without it the job must stop, loudly. A brand gate that passes
+      # because it had nothing to look for is worse than no gate at all: it
+      # spends the credibility of a green check on a check that never ran.
+      #
+      # Fork pull requests do not receive secrets — GitHub withholds them so an
+      # untrusted branch cannot exfiltrate them, and the terms are precisely the
+      # thing that must not be exfiltrated, so this is the correct behaviour and
+      # not an obstacle to work around. The job stops there too, and says why.
+      # A fork contribution is therefore gated by the maintainer's own push of
+      # the merge result, where the secret is present.
+      - name: Load the watched terms
+        env:
+          BRAND_DENYLIST: ${{ secrets.BRAND_DENYLIST }}
+          EVENT_NAME: ${{ github.event_name }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BRAND_DENYLIST}" ]; then
+            echo "::error::brand-gate cannot run without the BRAND_DENYLIST secret."
+            if [ "${EVENT_NAME}" = "pull_request" ] && [ "${IS_FORK}" = "true" ]; then
+              echo "This pull request comes from a fork, and forks do not receive"
+              echo "repository secrets. That is deliberate. A maintainer must run"
+              echo "this gate on the merge result before it is published."
+            else
+              echo "Set the BRAND_DENYLIST repository secret to the contents of the"
+              echo "local term file. Until then this job fails closed: it will not"
+              echo "report a clean result it did not actually verify."
+            fi
+            exit 1
+          fi
+          # Written, never echoed. The file itself is in .gitignore, so it
+          # cannot be committed by a later step even by accident.
+          printf '%s\n' "${BRAND_DENYLIST}" > scripts/brand-denylist.local.txt
+
+      # An assertion, not a formality. The step above proves the secret has
+      # BYTES; this proves those bytes parse into terms the scanner will
+      # actually search for. A secret holding only comments, or whitespace, or
+      # a file in the wrong format, satisfies "non-empty" and still leaves the
+      # scanner with an empty pattern — the same silent green in a new costume.
+      #
+      # The module is imported rather than run so the count can be taken
+      # without the scanner printing its report, which names every term.
+      # Only the COUNT is ever echoed.
+      - name: Assert the terms actually loaded
+        run: |
+          set -euo pipefail
+          count=$(python3 - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location(
+              "guardian", "scripts/validate_commit_guardian.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          print(len(module.denylist_with_origins()))
+          PY
+          )
+          echo "watched terms loaded: ${count}"
+          if [ "${count}" -lt 1 ]; then
+            echo "::error::the BRAND_DENYLIST secret parsed to zero terms."
+            echo "It is set but yields nothing to search for — check that it holds"
+            echo "one term per line and that the lines are not all comments."
+            exit 1
+          fi
+
+      # `--check-push`, not `--scan`, and the difference matters twice.
+      #
+      # `--scan` audits the whole tree and the whole local history against the
+      # terms — the right question to ask on a workstation before publishing,
+      # and the wrong one here: it reaches out to the remote to enumerate pull
+      # requests, and it opens its report by printing every watched term and
+      # where each one came from. On a public repository the job log is public,
+      # so that report would publish the list this whole arrangement exists to
+      # keep unpublished. `--check-push` prints nothing on success.
+      #
+      # What `--check-push` audits is the range: the commits this event would
+      # put on the remote, added lines only, under the generic layers only.
+      # Removing a brand literal is the fix, not the offence.
+      #
+      # Computing the range is where this job is easiest to get wrong, and
+      # every wrong answer fails the same way: an empty range, audited
+      # cleanly, reported green.
+      #
+      # The hooks ask the remote what it does not have yet, which is right on
+      # a workstation because the push has not happened. Here it already has:
+      # the runner checks out the very ref that was just pushed, so
+      # `<sha> --not --remotes` excludes precisely the commits under review
+      # and audits nothing at all. The range is computed from the merge base
+      # with the default branch instead — what this branch adds on top of it.
+      #
+      # Every ref and sha is verified before use, and the merge base must
+      # resolve. A range that cannot be computed is not a range that is clean.
+      - name: Audit what this event would publish
+        id: audit
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -uo pipefail
+
+          # A sha reaches `git log` as a revision, and an unexpected token
+          # there changes the question being asked — `--` turns the rest into
+          # a pathspec, and `git log <sha> -- nothing` exits 0 having read no
+          # commits. These values come from GitHub, so this is a guard against
+          # a future edit rather than against today's payload, but the failure
+          # it prevents is silent and this check is one line.
+          require_sha() {
+            case "$1" in
+              *[!0-9a-fA-F]*|'') echo "::error::$2 is not a plain sha"; exit 1 ;;
+            esac
+          }
+
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            require_sha "${HEAD_SHA}" "the head sha"
+            base_branch="${BASE_REF}"
+            head="${HEAD_SHA}"
+          else
+            require_sha "${PUSH_SHA}" "the pushed sha"
+            base_branch="${DEFAULT_BRANCH}"
+            head="${PUSH_SHA}"
+            # A push whose `before` is a real sha has a previous tip on the
+            # remote, and what it publishes is what sits between the two. The
+            # all-zero value marks a new branch, which has no previous tip:
+            # that case falls through to the merge base below.
+            case "${BEFORE}" in
+              *[!0]*)
+                require_sha "${BEFORE}" "the previous tip"
+                # A force-push can leave `before` pointing at a commit the
+                # runner never fetched; only use it when it is really here,
+                # and fall back to the merge base when it is not.
+                if git rev-parse --verify --quiet "${BEFORE}^{commit}" > /dev/null; then
+                  base_branch=""
+                fi
+                ;;
+            esac
+          fi
+
+          if [ -n "${base_branch}" ]; then
+            # The base branch is fetched explicitly. `actions/checkout` is not
+            # required to leave a remote-tracking ref for it, and a missing
+            # ref would collapse the range.
+            git fetch --no-tags --quiet origin \
+              "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}" || true
+            if ! git rev-parse --verify --quiet "refs/remotes/origin/${base_branch}^{commit}" > /dev/null; then
+              echo "::error::cannot resolve the base branch; refusing to audit an empty range."
+              exit 1
+            fi
+            if ! merge_base=$(git merge-base "refs/remotes/origin/${base_branch}" "${head}"); then
+              echo "::error::no merge base with the base branch; refusing to audit an empty range."
+              exit 1
+            fi
+            revs="${merge_base}..${head}"
+          else
+            revs="${BEFORE}..${head}"
+          fi
+
+          echo "auditing $(git rev-list --count ${revs}) commit(s)"
+
+          # Both streams captured to a file, neither shown. The scanner's
+          # FAILURE output quotes the offending line and names the term that
+          # matched — the term is the secret, and the line is the leak. Echoing
+          # the failure verbatim would broadcast exactly what it caught.
+          set +e
+          python3 scripts/validate_commit_guardian.py --check-push ${revs} \
+            > audit.out 2> audit.err
+          status=$?
+          set -e
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          exit 0
+
+      # On failure the log gets a count and the file paths, and nothing else.
+      # A path under the generic layers is not itself a brand literal — naming
+      # `core/src/foo.ts` tells a maintainer where to look without saying what
+      # is in it — while the matched term and the matched line stay in the
+      # runner and die with it. The fix is a local run, where the full report
+      # is safe to read.
+      - name: Report
+        if: always()
+        env:
+          PUSH_SHA: ${{ github.sha }}
+          AUDIT_STATUS: ${{ steps.audit.outputs.status }}
+        run: |
+          set -euo pipefail
+          status="${AUDIT_STATUS}"
+          if [ "${status}" = "0" ]; then
+            echo "clean: nothing in this range adds a brand literal to the generic layers"
+            exit 0
+          fi
+          # An empty status means the audit never ran, because a step before it
+          # stopped the job — missing secret, no terms. Reporting that as
+          # "0 literals would be published" would read like a clean result on a
+          # run that checked nothing, which is the confusion this file is here
+          # to prevent. The earlier step already said why it stopped.
+          if [ -z "${status}" ]; then
+            echo "::error::the audit did not run; see the failing step above."
+            exit 1
+          fi
+          findings=$(cat audit.out audit.err 2>/dev/null | grep -c '↳ term ' || true)
+          # A non-zero status with no findings is not a clean run — it is the
+          # scanner failing to run at all (a crash, an unreadable range).
+          # Reporting that as "0 brand literal(s)" reads like a flake and
+          # invites a re-run, so it is named for what it is.
+          if [ "${findings}" -eq 0 ]; then
+            echo "::error::the scanner did not complete; it reported no findings and still failed."
+            echo "This is not a clean result. Reproduce locally to see why:"
+            echo "  python3 scripts/validate_commit_guardian.py --scan"
+            exit 1
+          fi
+          echo "::error::${findings} brand literal(s) would be published by this change."
+          echo "Files involved:"
+          cat audit.out audit.err 2>/dev/null \
+            | grep -oE '^  [^ :]+(/[^ :]+)*:' \
+            | sed 's/^  //; s/:$//' | sort -u | sed 's/^/  /'
+          echo
+          echo "The matched terms and lines are deliberately not printed here:"
+          echo "this log is as public as the repository. Reproduce locally for the"
+          echo "full report, then parameterize the literal as <marca>/<ciudad>/<slug>:"
+          echo "  python3 scripts/validate_commit_guardian.py --scan"
+          exit 1
+
+      # Belt and braces. If a later change to this file ever adds a step that
+      # commits or uploads, the term file must not be sitting in the tree.
+      - name: Remove the term file from the runner
+        if: always()
+        run: rm -f scripts/brand-denylist.local.txt
