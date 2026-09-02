@@ -13,10 +13,14 @@ PROFILES_DIR = ROOT / 'profiles'
 # orchestrators are generic by contract (see CLAUDE.md).
 # Layers that must be generic: none can carry literals of a real brand.
 # `app/` and `core/` are included because `docs/ARQUITECTURA.md` promises
-# to check all four, and historically the validator covered only two: the
+# to check them, and historically the validator covered only two: the
 # written promise and what the code checked had diverged, which is exactly
 # how a guarantee becomes a habit (ignored).
-GENERIC_PREFIXES = ('system/', '.claude/', 'app/', 'core/')
+# `docs/` belongs here because prose is the layer nobody reads in a diff.
+# Code gets reviewed line by line; a paragraph of documentation is skimmed,
+# so a literal that would be caught instantly in a module survives
+# indefinitely in a guide.
+GENERIC_PREFIXES = ('system/', '.claude/', 'app/', 'core/', 'docs/')
 
 # Only example profiles (fictional onboarding brands) are publishable.
 # A real profile lives outside the repo tree.
