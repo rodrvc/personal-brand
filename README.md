@@ -1,102 +1,132 @@
 # Personal Brand System
 
-Sistema reusable para gestionar contenido de marca separado por perfiles.
+A content engine for social media — Instagram carousels (PNG) and vertical
+reels (MP4) — that renders for **any** brand without knowing about a single
+one of them.
 
-## Qué resuelve
+The repo is split in two, and the split is the whole design:
 
-Separa dos capas:
-- **system/** → templates, guías y convenciones compartidas
-- **profiles/** → identidad, config, ideas y contenido de cada autor o marca
+- **the engine** — `system/`, `.claude/`, `app/`, `core/` — generic, publishable,
+  and free of any real brand's literals.
+- **the brands** — `profiles/<slug>/` — identity, tokens, config, recipes and
+  business rules. Git-ignored; they live on disk next to the engine and travel
+  as a single folder.
 
-## Estructura
+## Getting started
+
+```bash
+pnpm install
+pnpm setup        # required — see below
+```
+
+`pnpm setup` is not optional. Cloning does not install git hooks, so a fresh
+clone has **no gate running**: it installs them, creates your local watched-terms
+file, checks that file is really ignored by git, and prints the boundary rules.
+It is safe to run again at any time.
+
+Then register a brand:
+
+```bash
+pnpm init:profile
+```
+
+An interactive terminal prompt. It asks for a slug, copies `profiles/example/`
+as the starting point, asks which of the brand's terms must be watched, and
+refuses to finish unless the new folder is genuinely outside git.
+
+Everyday commands:
+
+```bash
+pnpm check                                          # typecheck + tests
+python3 scripts/validate_commit_guardian.py --scan  # audit the whole tree
+```
+
+## The boundary
+
+**A real brand's literals never go in the engine.** Not its name, city, domain,
+`@handle`, hashtags or output paths — and not in a comment, an example or a
+skill description either. Prose is the risky layer, because it is the part
+nobody reads in a diff.
+
+**Generic layers write those values as parameters:** `<brand>`, `<city>`,
+`<slug>`, `--profile <slug>`, `profiles/<slug>/`.
+
+**The test is mechanical:** adding a second brand, with a different palette and
+a different language, must render correctly without editing one file under
+`system/` or `.claude/`. If supporting a brand means touching the engine, the
+value is in the wrong place.
+
+**And it is checked, not merely agreed.** A rule written in prose is worth
+whatever the review that applies it is worth. `scripts/validate_commit_guardian.py`
+runs from a pre-commit hook and refuses, deterministically, any commit that puts
+brand literals in a generic layer, tracks a profile other than `profiles/example*`,
+or adds a `!profiles/<slug>/` negation to `.gitignore` — a negation would
+silently win over every rule written above. See [`docs/commit-gate.md`](docs/commit-gate.md).
+
+Most watched terms are **derived automatically** from the profiles present on
+disk — slug, wordmark, domain, hashtags, city, `@handle`. Registering a brand is
+putting its folder there; there is no list to remember to update. What derivation
+cannot see goes in `scripts/brand-denylist.local.txt`, which is git-ignored:
+to forbid a word you have to write it down, so a published denylist would be a
+plain list of everything you meant to keep out of sight.
+
+## Layout
 
 ```text
 .
-├─ CLAUDE.md
-├─ PLAN.md
-├─ README.md
-├─ system/
-│  ├─ config/
-│  ├─ guides/
-│  ├─ ig-carousel/   # motor de render (genérico)
-│  └─ templates/
+├─ system/            the engine
+│  ├─ ig-carousel/    carousel render (PNG slides)
+│  ├─ ig-reel/        reel render (vertical MP4)
+│  ├─ recipes/        flow contracts: what the engine fixes, what a profile fills
+│  ├─ templates/      shared post and script templates
+│  ├─ guides/         operating guides
+│  └─ config/         schemas and config conventions
+├─ app/               desktop module (Tauri) — one module, not the product
+├─ core/              shared logic between modules
 ├─ profiles/
-│  └─ example/       # brand.json + carousels/ + config.yaml
-├─ notion-sync/
-└─ docs/
+│  ├─ example/        fictional profile, tracked — the template init:profile copies
+│  └─ example-personal/
+├─ scripts/           setup, profile registration, the commit gate
+└─ docs/              architecture and rules
 ```
 
-## Onboarding del perfil (vía Notion)
+## What a profile holds
 
-El **perfil** (identidad, posicionamiento, audiencia, pilares, tono, stack, canales)
-es la fuente de verdad del sistema y vive en **Notion**, no en archivos del repo.
+```text
+profiles/<slug>/
+  profile.md          identity, positioning, tone
+  brand.json          tokens: colours, fonts, categories, copy
+  brand-spec.md       the brand decisions and where they came from
+  config.yaml         operations: hashtags, output paths
+  config.local.yaml   optional private overrides
+  recipes/*.yaml      parameters for a flow defined in system/recipes/
+  skills/*/SKILL.md   the brand's own business rules
+  carousels/, reels/  render inputs
+  ideas/, content/    backlog, drafts, published archive
+```
 
-La primera vez, el agente:
-1. Busca en Notion lo que ya existe (página del sistema, DB de contenido, bios previas).
-2. Entrevista al usuario (posicionamiento, objetivo, audiencia, pilares, tono, canales).
-3. Complementa con datos reales encontrados y los marca como inferidos.
-4. Muestra el borrador y, con el OK, lo escribe en la página del sistema en Notion.
+That last one matters for anyone working in this repo: **the business rules are
+not here.** A skill that carries a brand's judgement — what content qualifies,
+its tone, its data source — belongs in `profiles/<slug>/skills/`, not in
+`.claude/skills/`, which holds only generic orchestrators. So a missing profile
+or recipe is usually a discovery problem, not a missing file.
 
-Requiere **MCP de Notion** conectado. Si falta algo que el flujo necesita, el agente
-**pregunta antes de crear**. Guía completa: `system/guides/profile-onboarding.md`.
+`BRAND_PROFILES_DIR` can move the profiles root elsewhere; the default,
+`<repo>/profiles`, is what is normally used.
 
-## Quick start
+## Workflow
 
-### En una máquina nueva
+idea → `profiles/<slug>/ideas/backlog.md` → draft in `content/drafts/` → owner
+review → manual publication → archived in `content/published/`.
 
-1. Clonar el repo
-2. Abrir el proyecto en el agente
-3. Duplicar `profiles/example/`
-4. Renombrar la carpeta al slug deseado: `profiles/<perfil>/`
-5. Revisar `profiles/<perfil>/config.yaml`
-6. Si usarás Notion, copiar `profiles/<perfil>/config.local.yaml.example` a `profiles/<perfil>/config.local.yaml`
-7. Completar tus IDs privados en `config.local.yaml`
-8. Confirmar que el entorno tiene MCP de Notion configurado si quieres sync
-9. Revisar `docs/windows-setup-checklist.md` si estás montando otro ambiente
+Full guide: [`system/guides/workflow.md`](system/guides/workflow.md).
 
-### Flujo diario
+## Where to read next
 
-1. Leer `profiles/<perfil>/profile.md`
-2. Revisar `profiles/<perfil>/config.yaml`
-3. Crear o refinar ideas en `profiles/<perfil>/ideas/backlog.md`
-4. Escribir drafts en `profiles/<perfil>/content/drafts/`
-5. Usar templates de `system/templates/`
-6. Publicar manualmente
-7. Mover la pieza a `profiles/<perfil>/content/published/`
-8. Si `notion.enabled: true`, hacer sync a Notion
-
-## Setup de Notion
-
-1. Abrir `profiles/<perfil>/config.yaml`
-2. Si quieres mantener los IDs fuera del repo, usar además `profiles/<perfil>/config.local.yaml`
-3. Verificar en la config local:
-   - `notion.enabled: true`
-   - `notion.database_id`
-   - `notion.parent_page_id`
-4. Confirmar que el MCP de Notion está disponible en el entorno
-5. Usar `notion-sync/README.md` como guía de sync
-
-## Cómo añadir un perfil nuevo
-
-1. Duplicar `profiles/example/`
-2. Renombrar la carpeta al slug deseado
-3. Editar `profile.md`
-4. Editar `config.yaml`
-5. Opcional: crear `config.local.yaml` desde el ejemplo
-6. Empezar a cargar ideas y drafts
-
-## Archivos clave
-
-- `CLAUDE.md` → guía operativa del repo
-- `system/guides/workflow.md` → flujo editorial
-- `system/guides/profile-onboarding.md` → cómo se construye el perfil en Notion
-- `system/config/brand.schema.md` → esquema de config
-- `system/templates/` → templates compartidos
-- `notion-sync/README.md` → integración opcional con Notion
-- `docs/scouting.md` → resumen persistente del estado arquitectónico del repo
-- `docs/windows-setup-checklist.md` → checklist para montar otro entorno sin fricción
-
-## Estado actual
-
-Perfil de referencia para clonar:
-- `profiles/example/`
+- [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) — the three layers and the
+  boundaries between modules. Read before touching anything outside one module.
+- [`docs/commit-gate.md`](docs/commit-gate.md) — how the gate works and why.
+- [`docs/public-repo-rules.md`](docs/public-repo-rules.md) — what may not be published.
+- [`CLAUDE.md`](CLAUDE.md) — operating guide for agents in this repo.
+- [`system/config/brand.schema.md`](system/config/brand.schema.md) — the `brand.json` schema.
+- [`app/ESTADO.md`](app/ESTADO.md) — decisions and known traps in the desktop module.

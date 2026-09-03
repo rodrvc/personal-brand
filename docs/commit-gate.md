@@ -51,7 +51,7 @@ If any check fails, commit is blocked.
 ## Run the checks before staging
 
 ```bash
-npm run check      # tsc --noEmit + both test suites (68 tests)
+pnpm check      # tsc --noEmit + both test suites (68 tests)
 ```
 
 The pre-render slide guard is a *compile-time* guarantee, and until this script
