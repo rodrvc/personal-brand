@@ -791,7 +791,11 @@ def check_push(revisions: list[str]) -> int:
         # remote. And `git diff <bare-sha>` diffs the WORKING TREE against it,
         # the reverse of what this audits: every added line would show as a
         # removal and sail through. `git log` has no such trapdoor.
-        diff = git('log', '-p', '--unified=0', '--format=', *revisions)
+        # The trailing `--` closes the revision list. Without it a stray
+        # token turns everything after it into a pathspec, and `git log
+        # <sha> -- nothing` exits 0 having read no commits: an audit that
+        # passes because it looked at nothing.
+        diff = git('log', '-p', '--unified=0', '--format=', *revisions, '--')
     except subprocess.CalledProcessError as exc:
         # A range that cannot be read is not a range that is clean. Fail
         # closed: the entire point of this check is the push it must not let
