@@ -92,18 +92,16 @@ en el motor.
 
 ## Lo que hay que saber para no repetir errores
 
-### Las fugas de este repo están en la prosa, no en el código
+### El riesgo está en la prosa, no en el código
 
-Cuatro fugas se atraparon en esta tanda. **Ninguna estaba en TypeScript:**
+Los sitios donde un literal de marca pasa desapercibido no son los archivos
+TypeScript: son la documentación, las descripciones de skills y los
+borradores de contenido. Nadie los lee en un diff.
 
-- `docs/PLAN-skills-agnosticas.md` nombraba marca, host de API y ciudad 15 veces
-- La descripción de una skill usaba vocabulario de una marca como frase de disparo
-- **`scripts/brand-denylist.txt` era la fuga que previene**: para prohibir una
-  palabra hay que escribirla. Contenía la marca, la ciudad y el nombre de un
-  repo privado — este último justo bajo el comentario "no debe aparecer en el
-  repo público". Ahora lo sensible vive en `brand-denylist.local.txt`,
-  gitignored, y el validador suma ambos.
-- Un borrador de LinkedIn con audiencia, objetivo, CTA y posicionamiento
+Un caso que merece atención propia: **una denylist es la lista de todo lo que
+no quieres publicar**, y para prohibir una palabra hay que escribirla. Por eso
+los términos sensibles viven en `brand-denylist.local.txt`, gitignored, y el
+validador suma ese archivo al trackeado.
 
 Los chequeos deterministas vigilan **términos de marca**. No ven contenido
 personal ni categorías nuevas de dato sensible. **Audita a mano antes de

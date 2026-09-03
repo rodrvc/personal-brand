@@ -20,7 +20,7 @@ prototipo-reel/
 
 # Experimento Remotion+MapLibre. Tiene literales de una marca real adentro
 # (nombres, ciudad, coordenadas, dominio); se ignora para que un `git add -A`
-# no repita la fuga histórica, y al estar ignorado el --scan del guardián no
+# no lo agregue por accidente, y al estar ignorado el --scan del guardián no
 # lo lee. OJO: es la ÚNICA copia de ese trabajo — ignorado NO significa
 # prescindible; no borrarlo (p. ej. con `git clean -fdx`) sin respaldo.
 experiments/

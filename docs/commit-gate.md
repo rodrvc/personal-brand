@@ -100,16 +100,16 @@ the tree, there is no diff to review); `pre-commit` lets it through only when
 ## The brand denylist derives itself from the profiles on disk
 
 Three deterministic checks in `validate_commit_guardian.py` cannot be approved
-by `commit-guardian`, because judgement is exactly what let the original leaks
-through. One of them — brand literals under `system/` or `.claude/` — needs a
-list of terms to look for, and that list used to be maintained by hand in
-`scripts/brand-denylist.txt`.
+by `commit-guardian`, because a check that can be waived by judgement is only
+as reliable as the judgement waiving it. One of them — brand literals under
+`system/` or `.claude/` — needs a list of terms to look for, and that list used
+to be maintained by hand in `scripts/brand-denylist.txt`.
 
 That made the check protect brand #1 and **not exist** for brand #2 until
 someone remembered to register it. "Add the slug, domain, handle and city to the
 denylist" was a manual step nothing enforced — a remembered procedure, not a
-guarantee, and the same failure mode as the prose rule that did not stop the
-original leak.
+guarantee, and a rule written only in prose is enforced by whoever happens to
+remember it.
 
 So the terms are now **derived from the real profiles present on disk**. A real
 profile is any `profiles/<slug>/` that is not `example*`. From each one the gate
@@ -168,8 +168,31 @@ with each place it came from, and every finding names the matching term and its
 provenance. Without that, a block caused by a derived term is indistinguishable
 from a bug in the gate.
 
+## Installing the hooks
+
+The hooks live in `.githooks/` and git does not use them until it is told to:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
+```
+
+That setting is **local configuration, not part of the clone**. A fresh clone,
+a new machine, or a new worktree starts with no hooks and says nothing about
+it — the gate is simply absent. Anyone setting up this repo has to run that
+line, and a CI check is the only control that does not depend on someone
+remembering to.
+
 ## Scope
 
-This gate protects commits.
+Two hooks, two different questions.
 
-Push remains normal once the commit already passed the gate.
+`pre-commit` reviews a **commit**: it needs a commit-guardian approval pinned
+to the exact staged tree.
+
+`pre-push` reviews a **push**: it scans the lines the push would add under the
+generic layers for brand literals, with no approval and no human judgement
+involved.
+
+They are not redundant: a commit is local and can be undone, a push cannot. A
+gate on the commit alone guards the reversible operation and leaves the
+irreversible one open.

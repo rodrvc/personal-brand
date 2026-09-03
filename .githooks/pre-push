@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+# The last gate before anything leaves this machine.
+#
+# The pre-commit hook reviews a COMMIT; this reviews a PUSH, and they are not
+# the same question. A commit is local and reversible — a branch carrying a
+# brand can be deleted and nothing escaped. A push is the one irreversible
+# step. Whatever it publishes is published for good.
+#
+# git feeds us one line per ref being pushed:
+#   <local ref> <local sha> <remote ref> <remote sha>
+
+ZERO=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+revs=""
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  # Deleting a remote branch publishes nothing.
+  [ "$local_sha" = "$ZERO" ] && continue
+
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # A new branch: what it publishes is whatever the remote does not already
+    # have. Asked of the remote itself rather than assumed from a branch name —
+    # `origin/main` does not exist in a fresh clone, in a fork whose default
+    # branch is named otherwise, or when the remote is not called "origin".
+    # Guessing wrong there is how a gate silently stops gating.
+    revs="$revs $local_sha --not --remotes"
+  else
+    revs="$revs $remote_sha..$local_sha"
+  fi
+done
+
+[ -z "$revs" ] && exit 0
+
+# shellcheck disable=SC2086
+python3 scripts/validate_commit_guardian.py --check-push $revs

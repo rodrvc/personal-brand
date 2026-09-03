@@ -73,11 +73,10 @@ En la capa genérica esos valores se escriben **siempre** parametrizados:
 `<marca>`, `<ciudad>`, `--profile <slug>`, `profiles/<perfil>/`.
 
 Aplica igual a la prosa: comentarios de código, ejemplos en docs,
-descripciones de skills y cuerpos de agentes. **La fuga histórica de este
-repo no ocurrió en el motor TypeScript — ocurrió en la capa de prosa**, que
-es la que nadie revisa en un diff. Un `examples/` dentro de una skill no es
-lugar para el contenido real de un perfil: usa una marca ficticia o apunta
-al template genérico.
+descripciones de skills y cuerpos de agentes. **La prosa es la capa de
+riesgo**, porque es la que nadie lee en un diff. Un `examples/` dentro de una
+skill no es lugar para el contenido real de un perfil: usa una marca ficticia
+o apunta al template genérico.
 
 La prueba: agregar un perfil nuevo con otra paleta y otro idioma debe
 renderizar bien **sin editar un solo archivo bajo `system/` ni
@@ -116,13 +115,13 @@ el default (`<repo>/profiles`) es lo normal y lo que se usa hoy.
 
 Un perfil real **nunca** se agrega al allow-list del `.gitignore`. Un
 `!profiles/<marca>/` gana en silencio sobre cualquier regla escrita en
-prosa — así se colaron los perfiles reales al repo.
+prosa.
 
 ### Esto es verificable, no una convención
 
-La regla ya existía en prosa (aquí y en `docs/public-repo-rules.md`) y no
-impidió la fuga, porque el commit gate delegaba todo el juicio a la
-revisión de un agente y nunca abría el contenido de un archivo. Ahora
+Una regla escrita en prosa (aquí y en `docs/public-repo-rules.md`) vale lo
+que valga la revisión que la aplique, y una revisión que no abre el contenido
+de un archivo no puede ver lo que hay dentro. Por eso
 `scripts/validate_commit_guardian.py` lo comprueba de forma determinista:
 
 - literales de `scripts/brand-denylist.txt` bajo `system/` o `.claude/`
