@@ -415,6 +415,6 @@ feed the engine; the `audio/cards/` folder in the output is a derived copy.
   it automatically. If the key is already in your environment (e.g. exported
   in the shell), the environment takes priority over the file.
 
-Interactive preview: `cd system/ig-reel/remotion && npm run studio`. It opens with
+Interactive preview: `cd system/ig-reel/remotion && pnpm studio`. It opens with
 fictional and neutral props ("Puerto Ejemplo", coordinates near 0,0) without requiring
 any real profile on disk; an actual render always passes full props via `--props`.

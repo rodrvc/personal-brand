@@ -7,6 +7,10 @@
 > **¿Vas a tocar el editor de afiches (`app/`)?** Lee además
 > [`app/ESTADO.md`](app/ESTADO.md): decisiones, porqués y trampas conocidas.
 >
+> **¿Clon nuevo, o vas a instalar, commitear o dar de alta una marca?** Lee
+> [`docs/SETUP.md`](docs/SETUP.md) primero. Un clon no trae los hooks
+> puestos, y el gestor es pnpm.
+>
 > Tres reglas que mandan sobre todo lo demás:
 > 1. **El proyecto es AGNÓSTICO: ninguna marca vive en el repo.** Ni
 >    nombres, ni colores, ni ciudades, ni copy real. El repo es el motor;

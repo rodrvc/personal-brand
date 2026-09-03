@@ -1,69 +1,13 @@
 # Personal Brand System
 
-## Propósito
+Read [`CLAUDE.md`](CLAUDE.md).
 
-Este repo guarda un **sistema reusable de contenido/marca** separado de los **perfiles específicos** que lo usan.
+It is the single entry point for agents: the boundary between the generic
+engine and the brands that feed it, the layout, how to work with a profile,
+and where to go from there — [`docs/SETUP.md`](docs/SETUP.md) for a fresh
+clone, [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) for the layers.
 
-La idea es distinguir entre:
-- **system/** → templates, guías y reglas compartidas
-- **profiles/** → identidad, backlog y contenido de cada perfil
-
----
-
-## Estructura del proyecto
-
-| Ruta | Propósito |
-|---|---|
-| `system/templates/` | Templates reutilizables para posts y scripts |
-| `system/guides/` | Guías operativas del sistema |
-| `system/config/` | Esquemas y convenciones de configuración |
-| `system/ig-carousel/` | Motor de render de carruseles (genérico, sin datos de marca) |
-| `profiles/<perfil>/profile.md` | Identidad, posicionamiento y tono del perfil |
-| `profiles/<perfil>/config.yaml` | Configuración operativa del perfil |
-| `profiles/<perfil>/config.local.yaml` | Overrides locales y privados opcionales |
-| `profiles/<perfil>/brand-spec.md` | Decisiones de marca y su procedencia (para humanos) |
-| `profiles/<perfil>/brand.json` | Esas decisiones compiladas, que consume el motor |
-| `profiles/<perfil>/carousels/` | Inputs de carrusel del perfil |
-| `profiles/<perfil>/ideas/` | Backlog de ideas del perfil |
-| `profiles/<perfil>/content/drafts/` | Borradores en progreso |
-| `profiles/<perfil>/content/published/` | Archivo de contenido publicado |
-| `notion-sync/` | Notas de integración con Notion |
-| `docs/` | Documentación adicional |
-
----
-
-## Cómo trabajar con un perfil
-
-Cuando se trabaje contenido para un autor concreto:
-1. leer su `profile.md`
-2. revisar su `config.yaml`
-3. si existe, revisar también `config.local.yaml`
-4. usar los templates de `system/templates/`
-5. guardar ideas y drafts dentro de su carpeta de perfil
-
----
-
-## Workflow
-
-Ver guía principal en:
-- `system/guides/workflow.md`
-
-Resumen:
-- idea → backlog del perfil
-- draft → `profiles/<perfil>/content/drafts/`
-- revisión del owner
-- publicación manual
-- archivo en `published/`
-
----
-
-## Regla de separación
-
-No meter en este archivo:
-- datos personales del autor
-- narrativa personal específica
-- stack individual
-- diferenciadores de una sola persona
-- IDs privados, tokens o enlaces internos
-
-Eso debe vivir en el perfil correspondiente o en archivos locales fuera del repo.
+This file used to restate that content. Two documents making the same claims
+do not drift apart occasionally; they drift apart always, because nothing
+obliges the copy to move when the original does — and the copy had already
+fallen behind the modules it listed. So it points instead.

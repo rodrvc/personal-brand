@@ -34,8 +34,9 @@ agentes no se enteran de que existió.
 ## Cómo abrirlo
 
 ```bash
-cd app && npm install    # solo la primera vez
-npm run dev
+pnpm install             # desde la raíz del repo; instala también app/
+cd app
+pnpm dev
 ```
 
 Los scripts ya añaden `~/.cargo/bin` al PATH, así que no hace falta
@@ -44,7 +45,7 @@ Los scripts ya añaden `~/.cargo/bin` al PATH, así que no hace falta
 Para generar el instalable:
 
 ```bash
-npm run build            # deja el .dmg en src-tauri/target/release/bundle/
+pnpm build                      # deja el .dmg en src-tauri/target/release/bundle/
 ```
 
 El resultado queda en `src-tauri/target/release/bundle/`.
@@ -86,7 +87,7 @@ el usuario.
 Se puede forzar con una variable de entorno:
 
 ```bash
-BRAND_STUDIO_ROOT=/ruta/al/repo npm run dev
+BRAND_STUDIO_ROOT=/ruta/al/repo pnpm dev
 ```
 
 ## Qué falta

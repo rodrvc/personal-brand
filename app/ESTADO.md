@@ -30,7 +30,7 @@ lo impide `resolver_dentro()` y lo comprueban 6 tests (`cargo test`). Se puede p
 ## Cómo abrirla
 
 ```bash
-cd app && npm run dev
+cd app && pnpm dev
 ```
 
 Necesita Rust instalado. La clave de OpenAI se lee de

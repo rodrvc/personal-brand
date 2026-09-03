@@ -32,7 +32,7 @@ Los 7 pasos del plan original están cerrados. Seis commits en la rama
 
 **Verificado, no asumido:**
 
-- `npm run check` → 41/41 + 33/33
+- `pnpm check` → 41/41 + 33/33
 - `validate_commit_guardian.py --scan` → 0 hallazgos en el árbol
 - **Transportabilidad**: `profiles/example` (otra ciudad, otro idioma, otra
   paleta) renderiza un reel **sin editar `system/` ni `.claude/`**

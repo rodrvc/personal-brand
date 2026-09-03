@@ -163,6 +163,29 @@ function assertConcatDuration(path: string, expectedSeconds: number): void {
  * triggers a fallback to a re-encoded concat with the engine's fixed
  * parameters, at the cost of a generation of quality on the seams only.
  */
+/**
+ * The Remotion project is a workspace package: its dependencies are installed
+ * from the repo root, together with everything else, by a single command.
+ *
+ * This used to install them here on a cache miss, which was one package
+ * manager reaching for another. Installing a workspace member on its own
+ * builds a second, differently-shaped node_modules beside the one the
+ * workspace links, and resolves a tree the lockfile never described — a render
+ * that then fails, or quietly renders against versions no one chose.
+ *
+ * So it asks rather than acts. An installer that is wrong is worse than an
+ * error message that is right.
+ */
+function requireRemotionDependencies(remotionDir: string): void {
+  if (existsSync(join(remotionDir, "node_modules"))) return;
+  throw new Error(
+    "the Remotion project's dependencies are not installed.\n" +
+      "Run `pnpm install` at the repository root — it installs every workspace\n" +
+      "package, this one included. Do not install inside " +
+      `${remotionDir} on its own.`,
+  );
+}
+
 function assembleClips(
   ranges: readonly ClipRange[],
   clipsDir: string,
@@ -531,10 +554,7 @@ async function main(): Promise<void> {
 
     if (!assembleOnly) {
       const wanted = wantsAllClips ? ranges : ranges.filter((range) => requestedCardIds.includes(range.cardId));
-      if (!existsSync(join(remotionDir, "node_modules"))) {
-        console.log("Installing the Remotion project's dependencies (first run)…");
-        execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: remotionDir, stdio: "inherit" });
-      }
+      requireRemotionDependencies(remotionDir);
       mkdirSync(clipsDir, { recursive: true });
       console.log(`Rendering ${wanted.length} clip(s)…`);
       for (const range of wanted) {
@@ -590,10 +610,7 @@ async function main(): Promise<void> {
     // assembleClips wrote.
   } else {
     // --- render (monolithic, default) ---
-    if (!existsSync(join(remotionDir, "node_modules"))) {
-      console.log("Installing the Remotion project's dependencies (first run)…");
-      execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: remotionDir, stdio: "inherit" });
-    }
+    requireRemotionDependencies(remotionDir);
 
     mkdirSync(rendersDir, { recursive: true });
     console.log("Rendering…");
