@@ -1,15 +1,19 @@
 # pnpm settings for this repo. Since pnpm 11 these live here and not in the
 # "pnpm" field of package.json, which pnpm no longer reads.
 
-# The repo holds three Node projects, not one: the root (render engines and
-# tests), the Remotion renderer the reel engine drives, and the desktop app.
-# Declaring them as workspace members is what makes a single `pnpm install` at
-# the root set all three up — otherwise a nested install silently no-ops,
-# because pnpm resolves the workspace root upward and finds this file.
+# The repo holds several Node projects, not one: the root (render engines
+# and tests), the Remotion renderer the reel engine drives, the desktop app,
+# the shared `core` package, and the `editor/server` + `editor/web` pair.
+# Declaring them as workspace members is what makes a single `pnpm install`
+# at the root set all of them up — otherwise a nested install silently
+# no-ops, because pnpm resolves the workspace root upward and finds this
+# file.
 packages:
   - "."
   - "system/ig-reel/remotion"
   - "app"
+  - "core"
+  - "editor/*"
 
 # Build scripts of dependencies, decided once here instead of by a prompt on
 # every clone. Left undecided, pnpm refuses to run ANY script — `pnpm check`

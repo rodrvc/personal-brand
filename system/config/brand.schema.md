@@ -413,6 +413,20 @@ headless (y romper el desacople que hoy existe de verdad).
 **Es la costura por donde esto se va a romper.** Cuando aparezca, es el momento
 de unificar, no de parchear.
 
+**Resuelto: el logo es una pieza de la biblioteca de assets, no un token.**
+`brand.json` **sigue sin** un bloque `logo{}` y **así se queda**: el logo vive
+como una o más piezas `kind: "logo"` en `profiles/<slug>/assets/` (ver
+`system/config/assets.schema.md`), etiquetadas `ink:dark` / `ink:light` según
+la tinta del logo. `system/assets/logo.ts` elige la variante contra el color
+real del fondo con `pickLogoVariant()` de `core/color.js`, y si la biblioteca
+no tiene ninguna pieza `logo`, el llamador cae a `copy.wordmark` — el mismo
+comportamiento que el motor de reel ya tiene hoy. Esto evita las dos salidas
+malas descritas arriba: no se duplica el dato en `brand.json` ni el motor
+headless lee `brand.yaml`. `brand.yaml` queda **deprecado junto con `app/`**
+(ver `app/ESTADO.md`): su bloque `logo{}` no tiene proyección a `brand.json`
+ni la tendrá — la ruta hacia adelante es la biblioteca de assets, no ese
+archivo.
+
 ---
 
 # `brand.yaml` — apariencia editable por la app

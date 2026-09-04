@@ -7,6 +7,13 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@personal-brand/core':
+        specifier: workspace:*
+        version: link:core
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -26,6 +33,12 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.11.4
+
+  core: {}
+
+  editor/server: {}
+
+  editor/web: {}
 
   system/ig-reel/remotion:
     dependencies:
@@ -1368,6 +1381,9 @@ packages:
   zod@3.22.3:
     resolution: {integrity: sha512-EjIevzuJRiRPbVH4mGc8nApb/lVLKVpmUhAaR5R5doKGfAnGJ6Gr3CViAVjP+4FWSxCsybeWQdcgCtbX+7oZug==}
 
+  zod@4.5.4:
+    resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
+
 snapshots:
 
   '@babel/helper-string-parser@7.29.7': {}
@@ -2610,3 +2626,5 @@ snapshots:
       fd-slicer: 1.1.0
 
   zod@3.22.3: {}
+
+  zod@4.5.4: {}

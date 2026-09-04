@@ -1,0 +1,555 @@
+<title>Editor de carrusel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  /* blue scale */
+  --p800:#11324a; --p700:#1a4b70; --p600:#2a6692; --p500:#3c80b4; --p400:#64a1ce;
+  --p200:#b8d5ea; --p100:#deecf7; --p50:#eef6fb;
+  --g50:#f8fafc; --g100:#f1f5f9; --g200:#e2e8f0; --g300:#cbd5e1; --g400:#94a3b8;
+  --g500:#64748b; --g600:#475569; --g700:#334155; --g900:#0f172a;
+  --white:#ffffff;
+
+  --bg:var(--g50); --surface:var(--white); --line:var(--g200); --line-soft:var(--g100);
+  --ink:var(--g700); --ink-2:var(--g500); --ink-3:var(--g400); --head:var(--p700);
+  --accent:var(--p600); --accent-soft:var(--p50);
+  --ok:#2f8f6b; --warn:#c2792a; --danger:#c8463f; --lock:#c2792a;
+
+  --sh-sm:0 1px 2px 0 rgb(17 50 74 / .06);
+  --sh-md:0 6px 16px -6px rgb(17 50 74 / .14),0 2px 4px -2px rgb(17 50 74 / .08);
+  --sh-lg:0 16px 32px -10px rgb(17 50 74 / .18),0 4px 8px -4px rgb(17 50 74 / .1);
+  --r-btn:10px; --r-card:18px; --r-pill:50px; --r-sm:8px;
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --disp:"Bricolage Grotesque","Inter",sans-serif;
+  --t-fast:150ms ease;
+  color-scheme:light;
+}
+:root[data-theme="dark"]{
+  --bg:#0d1720; --surface:#132330; --line:#1e3444; --line-soft:#182b39;
+  --ink:#dce8f2; --ink-2:#8fa7ba; --ink-3:#647f94; --head:#a8cde8;
+  --accent:var(--p400); --accent-soft:#16303f;
+  --sh-sm:0 1px 2px 0 rgb(0 0 0 / .3);
+  --sh-md:0 6px 16px -6px rgb(0 0 0 / .45),0 2px 4px -2px rgb(0 0 0 / .3);
+  --sh-lg:0 16px 32px -10px rgb(0 0 0 / .5),0 4px 8px -4px rgb(0 0 0 / .3);
+  color-scheme:dark;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d1720; --surface:#132330; --line:#1e3444; --line-soft:#182b39;
+  --ink:#dce8f2; --ink-2:#8fa7ba; --ink-3:#647f94; --head:#a8cde8;
+  --accent:var(--p400); --accent-soft:#16303f;
+  --sh-sm:0 1px 2px 0 rgb(0 0 0 / .3);
+  --sh-md:0 6px 16px -6px rgb(0 0 0 / .45),0 2px 4px -2px rgb(0 0 0 / .3);
+  --sh-lg:0 16px 32px -10px rgb(0 0 0 / .5),0 4px 8px -4px rgb(0 0 0 / .3);
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:13px;height:100vh;overflow:hidden;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.app{display:grid;grid-template-rows:52px 1fr;height:100vh}
+
+/* ---------- topbar ---------- */
+.bar{display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line);box-shadow:var(--sh-sm);z-index:5}
+.back{display:flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px;font-weight:500;padding:6px 10px;border-radius:var(--r-btn);transition:var(--t-fast)}
+.back:hover{background:var(--g100);color:var(--head)}
+.back svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2}
+.bpill{display:flex;align-items:center;gap:7px;padding:4px 12px 4px 5px;border-radius:var(--r-pill);background:var(--accent-soft);border:1px solid var(--p200)}
+.bpill .dot{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,#E8A33D,#C4622A);display:grid;place-items:center;font-size:10px}
+.bpill .nm{font-size:12px;font-weight:600;color:var(--p700)}
+.ttl{font-weight:600;font-size:13.5px;color:var(--head);letter-spacing:-.01em}
+.chip{display:inline-block;font-size:9.5px;font-weight:600;color:var(--warn);background:#fdf6ec;border:1px solid #f2ddbe;padding:1px 7px;border-radius:var(--r-pill);margin-left:7px;vertical-align:1px;letter-spacing:.02em}
+:root[data-theme="dark"] .chip,:root:not([data-theme="light"]) .chip{background:#2c2113;border-color:#4a3a1e}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .chip{background:#fdf6ec;border-color:#f2ddbe}}
+.sub{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+.sp{flex:1}
+.tb{width:32px;height:30px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--ink-2);transition:var(--t-fast)}
+.tb:hover{background:var(--g100);color:var(--head)}
+.tb.on{background:var(--accent);color:#fff;box-shadow:var(--sh-sm)}
+.tb svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.btn{padding:7px 14px;border-radius:var(--r-btn);font-size:12.5px;font-weight:600;border:1px solid var(--line);color:var(--ink);display:inline-flex;gap:6px;align-items:center;background:var(--surface);transition:var(--t-fast)}
+.btn:hover{border-color:var(--p400);color:var(--head)}
+.btn-p{background:var(--p600);border-color:var(--p600);color:#fff;box-shadow:var(--sh-sm)}
+.btn-p:hover{background:var(--p700);border-color:var(--p700);color:#fff}
+.btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+
+/* ---------- layout ---------- */
+.body{display:grid;grid-template-columns:1fr 288px;overflow:hidden}
+@media (max-width:1040px){.body{grid-template-columns:1fr}.props{display:none}}
+.center{display:grid;grid-template-rows:auto 1fr;overflow:hidden;min-width:0}
+
+/* ---------- prompt ---------- */
+.prompt{background:var(--surface);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;align-items:flex-start;gap:12px}
+.prompt .ic{width:26px;height:26px;border-radius:var(--r-sm);background:linear-gradient(140deg,var(--p500),var(--p700));display:grid;place-items:center;flex:none;box-shadow:var(--sh-sm)}
+.prompt .ic svg{width:14px;height:14px;fill:#fff;stroke:none}
+.prompt .tx{flex:1;min-width:0}
+.prompt p{margin:0;font-size:13px;line-height:1.5;color:var(--ink)}
+.prompt p b{font-weight:600;color:var(--head)}
+.prompt .ref{color:var(--p600);background:var(--p50);padding:1px 6px;border-radius:5px;font-weight:500;white-space:nowrap}
+:root[data-theme="dark"] .prompt .ref,:root:not([data-theme="light"]) .prompt .ref{background:var(--accent-soft);color:var(--p200)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .prompt .ref{background:var(--p50);color:var(--p600)}}
+.pmeta{font-size:10.5px;color:var(--ink-3);margin-top:7px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.pmeta span{display:inline-flex;align-items:center;gap:4px}
+.pmeta .ck{color:var(--ok);font-weight:700}
+.pmeta .sv{color:var(--ok);font-weight:600}
+.redo{padding:6px 12px;border-radius:var(--r-btn);border:1px solid var(--line);font-size:12px;font-weight:500;color:var(--ink-2);flex:none;display:inline-flex;gap:6px;align-items:center;background:var(--surface);transition:var(--t-fast)}
+.redo:hover{border-color:var(--p400);color:var(--p600)}
+.redo svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2}
+
+/* ---------- stage ---------- */
+.stagewrap{display:grid;grid-template-columns:1fr 72px;overflow:hidden;background:var(--bg)}
+.stage{display:flex;align-items:center;justify-content:center;gap:24px;padding:26px;overflow:auto}
+.sheet{position:relative;flex:none}
+.sheet .lbl{position:absolute;top:-21px;left:2px;font-size:10.5px;color:var(--ink-3);font-weight:500}
+.sheet .lbl b{color:var(--ink-2);font-weight:600}
+.art{width:330px;height:412px;position:relative;overflow:hidden;border-radius:var(--r-card);box-shadow:var(--sh-lg);background:#1A1206}
+.sheet.active .art{outline:2px solid var(--accent);outline-offset:4px}
+.sheet.next{opacity:.5}
+
+.zone{position:absolute;pointer-events:none}
+.zone.hl{outline:1.5px dashed rgba(255,255,255,.42);outline-offset:-2px;border-radius:3px}
+.zone .tz{position:absolute;top:4px;right:5px;font-family:var(--mono);font-size:7px;color:#fff;background:rgba(0,0,0,.5);padding:1px 4px;border-radius:3px;letter-spacing:.06em}
+
+.ob{position:absolute;cursor:move}
+.ob:hover{outline:1.5px solid rgba(100,161,206,.6);outline-offset:2px;border-radius:2px}
+.ob.sel{outline:2px solid var(--p400);outline-offset:2px;border-radius:2px}
+.h{display:none;position:absolute;width:8px;height:8px;background:#fff;border:2px solid var(--p500);border-radius:2px}
+.ob.sel .h{display:block}
+.h.tl{top:-5px;left:-5px}.h.tr{top:-5px;right:-5px}.h.bl{bottom:-5px;left:-5px}.h.br{bottom:-5px;right:-5px}
+.ob .rot{display:none;position:absolute;top:-22px;left:50%;margin-left:-6px;width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid var(--p500)}
+.ob.sel .rot{display:block}
+.ob .badge{display:none;position:absolute;top:-23px;left:0;font-size:9px;font-weight:600;background:var(--p600);color:#fff;padding:2px 7px;border-radius:var(--r-pill);white-space:nowrap;box-shadow:var(--sh-sm)}
+.ob.sel .badge{display:flex;align-items:center;gap:4px}
+.pin{position:absolute;top:-8px;right:-8px;width:17px;height:17px;border-radius:50%;background:var(--ok);display:none;place-items:center;box-shadow:var(--sh-sm)}
+.ob.pinned .pin{display:grid}
+.pin svg{width:9px;height:9px;fill:none;stroke:#fff;stroke-width:2.6}
+.ob.pinned{outline:1.5px solid var(--ok);outline-offset:2px;border-radius:2px}
+
+/* strip */
+.strip{background:var(--surface);border-left:1px solid var(--line);overflow-y:auto;padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:9px}
+.th{cursor:pointer;flex:none}
+.th .mini{width:48px;height:60px;border-radius:var(--r-sm);overflow:hidden;border:2px solid transparent;position:relative;display:flex;flex-direction:column;justify-content:flex-end;padding:5px;transition:var(--t-fast);box-shadow:var(--sh-sm)}
+.th.on .mini{border-color:var(--accent)}
+.th:hover .mini{border-color:var(--p300,var(--p400))}
+.th .n{text-align:center;font-size:9.5px;color:var(--ink-3);margin-top:3px;font-weight:500}
+.th.on .n{color:var(--head);font-weight:600}
+.th .mt{font-size:5px;line-height:1.15;font-weight:800;font-family:var(--disp);color:#FFF3DF}
+.th .kd{position:absolute;top:3px;left:3px;font-size:6px;font-weight:700;padding:1px 3px;border-radius:3px;background:rgba(0,0,0,.5);color:#E8A33D}
+.addth{width:48px;height:60px;border:1.5px dashed var(--g300);border-radius:var(--r-sm);display:grid;place-items:center;color:var(--ink-3);flex:none;transition:var(--t-fast)}
+.addth:hover{border-color:var(--accent);color:var(--accent);background:var(--p50)}
+
+/* ---------- props ---------- */
+.props{background:var(--surface);border-left:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
+.ptabs{display:flex;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);z-index:3;padding:0 6px}
+.pt{flex:1;padding:12px 0;font-size:12px;font-weight:500;color:var(--ink-3);position:relative;transition:var(--t-fast)}
+.pt:hover{color:var(--ink-2)}
+.pt[aria-selected="true"]{color:var(--head);font-weight:600}
+.pt[aria-selected="true"]::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2.5px;background:var(--accent);border-radius:2px 2px 0 0}
+.pbody{padding:14px}
+.pane{display:none;flex-direction:column;gap:18px}
+.pane.on{display:flex}
+
+.card{background:var(--g50);border:1px solid var(--line-soft);border-radius:var(--r-card);padding:12px;display:flex;flex-direction:column;gap:9px}
+:root[data-theme="dark"] .card,:root:not([data-theme="light"]) .card{background:rgba(255,255,255,.03)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .card{background:var(--g50)}}
+.gh{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:700;display:flex;align-items:center;gap:6px}
+.gh .lk{margin-left:auto;color:var(--warn);text-transform:none;letter-spacing:0;font-size:10px;font-weight:600;display:flex;gap:4px;align-items:center}
+.gh .lk svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2.4}
+.row{display:flex;gap:7px}
+.f{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.f label{font-size:10px;color:var(--ink-3);font-weight:500}
+.inp{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px;font-size:12px;color:var(--ink);width:100%;font-family:inherit;transition:var(--t-fast)}
+.inp:focus{outline:none;border-color:var(--p400);box-shadow:0 0 0 3px var(--p50)}
+.inp.mono{font-family:var(--mono);font-size:11px}
+textarea.inp{resize:vertical;min-height:52px;line-height:1.45}
+select.inp{cursor:pointer}
+.seg{display:flex;background:var(--g100);border-radius:var(--r-sm);padding:2px;gap:2px}
+:root[data-theme="dark"] .seg,:root:not([data-theme="light"]) .seg{background:rgba(255,255,255,.05)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .seg{background:var(--g100)}}
+.seg button{flex:1;padding:6px 0;font-size:11.5px;font-weight:500;color:var(--ink-2);border-radius:6px;transition:var(--t-fast)}
+.seg button.on{background:var(--surface);color:var(--head);font-weight:600;box-shadow:var(--sh-sm)}
+.sw{display:flex;gap:6px;flex-wrap:wrap}
+.c{width:28px;height:28px;border-radius:var(--r-sm);position:relative;box-shadow:inset 0 0 0 1px rgb(17 50 74 / .12),var(--sh-sm)}
+.c.on::after{content:"";position:absolute;inset:-3px;border:2px solid var(--accent);border-radius:11px}
+.hint{font-size:11px;color:var(--ink-3);line-height:1.5;margin:0}
+.hint b{color:var(--ink-2);font-weight:600}
+.note{margin:0;padding:9px 11px;background:#fdf9f0;border:1px solid #f2e3c8;border-left:3px solid var(--warn);border-radius:0 var(--r-sm) var(--r-sm) 0;font-size:11px;color:var(--ink-2);line-height:1.5}
+:root[data-theme="dark"] .note,:root:not([data-theme="light"]) .note{background:#241c10;border-color:#3d3018}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .note{background:#fdf9f0;border-color:#f2e3c8}}
+
+.lyr{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r-sm);font-size:12px;color:var(--ink-2);cursor:pointer;transition:var(--t-fast)}
+.lyr:hover{background:var(--g100)}
+:root[data-theme="dark"] .lyr:hover,:root:not([data-theme="light"]) .lyr:hover{background:rgba(255,255,255,.05)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .lyr:hover{background:var(--g100)}}
+.lyr.on{background:var(--p50);color:var(--p700);font-weight:600}
+:root[data-theme="dark"] .lyr.on,:root:not([data-theme="light"]) .lyr.on{background:var(--accent-soft);color:var(--p200)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .lyr.on{background:var(--p50);color:var(--p700)}}
+.lyr .i{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.lyr .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.lyr .rt{margin-left:auto;flex:none;display:flex;gap:3px;align-items:center}
+.pinbtn{width:21px;height:21px;border-radius:5px;display:grid;place-items:center;color:var(--ink-3);flex:none}
+.pinbtn:hover{background:var(--g200);color:var(--head)}
+.pinbtn.on{background:#e6f4ee;color:var(--ok)}
+:root[data-theme="dark"] .pinbtn.on,:root:not([data-theme="light"]) .pinbtn.on{background:#123024}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .pinbtn.on{background:#e6f4ee}}
+.pinbtn svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.3}
+.regen{width:21px;height:21px;border-radius:5px;display:grid;place-items:center;color:var(--ink-3);flex:none}
+.regen:hover{background:var(--p50);color:var(--p600)}
+.regen svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2}
+.regen[disabled]{opacity:.28;cursor:not-allowed}
+
+.src{font-size:9.5px;font-weight:600;padding:1px 6px;border-radius:var(--r-pill);flex:none}
+.src.lib{background:#e6f4ee;color:var(--ok)}
+.src.ia{background:var(--p50);color:var(--p600)}
+:root[data-theme="dark"] .src.lib,:root:not([data-theme="light"]) .src.lib{background:#123024}
+:root[data-theme="dark"] .src.ia,:root:not([data-theme="light"]) .src.ia{background:var(--accent-soft);color:var(--p200)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .src.lib{background:#e6f4ee}:root:not([data-theme="dark"]) .src.ia{background:var(--p50);color:var(--p600)}}
+
+.bk{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-2);padding:8px 10px;background:var(--p50);border:1px solid var(--p200);border-radius:var(--r-sm)}
+:root[data-theme="dark"] .bk,:root:not([data-theme="light"]) .bk{background:var(--accent-soft);border-color:#265170}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .bk{background:var(--p50);border-color:var(--p200)}}
+.bk b{color:var(--p700);font-weight:600;font-family:var(--mono);font-size:11px}
+:root[data-theme="dark"] .bk b,:root:not([data-theme="light"]) .bk b{color:var(--p200)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .bk b{color:var(--p700)}}
+.bk svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;flex:none}
+.fold{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);font-weight:500}
+.fold svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.9}
+
+.assets{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.as{aspect-ratio:1;border-radius:var(--r-sm);overflow:hidden;border:2px solid transparent;position:relative;cursor:pointer;display:grid;place-items:center;font-size:21px;box-shadow:var(--sh-sm);transition:var(--t-fast)}
+.as:hover{border-color:var(--p400)}
+.as.used{border-color:var(--ok)}
+.as .u{position:absolute;bottom:3px;left:3px;font-size:8px;font-weight:600;background:rgba(255,255,255,.94);color:var(--g700);padding:1px 4px;border-radius:4px}
+.as .g{position:absolute;top:3px;right:3px;font-size:7.5px;font-weight:700;background:rgba(255,255,255,.94);color:var(--p600);padding:1px 4px;border-radius:4px}
+
+.outs{display:flex;flex-direction:column;gap:6px}
+.out{display:flex;align-items:center;gap:9px;padding:8px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:12px;background:var(--surface);transition:var(--t-fast)}
+.out:hover{border-color:var(--p400);box-shadow:var(--sh-sm)}
+.out .sq{width:22px;height:28px;border-radius:5px;flex:none;box-shadow:var(--sh-sm)}
+.out .nm{flex:1;min-width:0}
+.out .nm div:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.out .nm .d{font-size:10px;color:var(--ink-3);margin-top:1px}
+.out .dl{color:var(--ink-3);width:26px;height:26px;border-radius:6px;display:grid;place-items:center}
+.out .dl:hover{background:var(--p50);color:var(--p600)}
+.out .dl svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
+
+.savings{display:flex;align-items:center;gap:9px;padding:10px 12px;background:#eef9f4;border:1px solid #c9e8db;border-radius:var(--r-card)}
+:root[data-theme="dark"] .savings,:root:not([data-theme="light"]) .savings{background:#123024;border-color:#1e4a38}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .savings{background:#eef9f4;border-color:#c9e8db}}
+.savings .big{font-family:var(--disp);font-size:21px;font-weight:800;color:var(--ok);line-height:1}
+.savings .tx{font-size:10.5px;color:var(--ink-2);line-height:1.4}
+
+.sbar{height:26px;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px;font-size:10.5px;color:var(--ink-3);position:fixed;bottom:0;left:0;right:288px}
+@media (max-width:1040px){.sbar{right:0}}
+.sbar .g{display:flex;align-items:center;gap:5px}
+.sbar .d{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+</style>
+
+<div class="app">
+
+  <header class="bar">
+    <button class="back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Carruseles</button>
+    <div class="bpill"><span class="dot">🐕</span><span class="nm">Perritos Habilosos</span></div>
+    <div class="sep"></div>
+    <div>
+      <div class="ttl">Cómo funciona un concurso canino<span class="chip">borrador</span></div>
+      <div class="sub">6 láminas · 1080×1350</div>
+    </div>
+    <div class="sep"></div>
+    <button class="tb on" title="Seleccionar"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.6L10 19z"/></svg></button>
+    <button class="tb" title="Texto"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
+    <button class="tb" title="Asset"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l4.5-4.5 4 4L15 12l6 6"/><circle cx="8.5" cy="9" r="1.2"/></svg></button>
+    <div class="sep"></div>
+    <button class="tb" title="Deshacer"><svg viewBox="0 0 24 24"><path d="M4 8h11a5 5 0 010 10h-6M4 8l4-4M4 8l4 4"/></svg></button>
+    <button class="tb" title="Rehacer"><svg viewBox="0 0 24 24"><path d="M20 8H9a5 5 0 000 10h6M20 8l-4-4M20 8l-4 4"/></svg></button>
+    <div class="sp"></div>
+    <button class="tb" id="theme" title="Tema claro / oscuro" aria-label="Cambiar tema">
+      <svg id="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/></svg>
+      <svg id="ic-moon" viewBox="0 0 24 24" hidden><path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 1010.5 10.5z"/></svg>
+    </button>
+    <div class="sep"></div>
+    <button class="btn btn-p"><svg viewBox="0 0 24 24"><path d="M12 3v13M7 11l5 5 5-5M4 20h16"/></svg>Exportar 6 PNG</button>
+  </header>
+
+  <div class="body">
+    <div class="center">
+
+      <div class="prompt">
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 5.8L20 10l-5.6 2.2L12 18l-2.4-5.8L4 10l5.6-2.2z"/></svg></span>
+        <div class="tx">
+          <p>Un carrusel que explique <b>cómo funciona un concurso canino</b>, paso a paso, con el template <span class="ref">explicativo</span> de la marca. Usa <span class="ref">las fotos de perros</span> de los assets.</p>
+          <div class="pmeta">
+            <span><i class="ck">✓</i> 6 láminas</span>
+            <span><i class="ck">✓</i> textos redactados</span>
+            <span><i class="ck">✓</i> 4 assets de biblioteca</span>
+            <span><i class="ck">✓</i> 2 fondos nuevos · 0,78¢</span>
+            <span class="sv">3 reusados · 1,17¢ ahorrados</span>
+          </div>
+        </div>
+        <button class="redo"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg>Regenerar lo no fijado</button>
+      </div>
+
+      <div class="stagewrap">
+        <div class="stage">
+
+          <div class="sheet active">
+            <div class="lbl"><b>Lámina 3</b> · paso 2 de 4</div>
+            <div class="art" style="background:radial-gradient(120% 90% at 78% 22%,#4A3010,#1A1206)">
+
+              <div class="zone hl" style="inset:0"><span class="tz">FONDO · TEMPLATE</span></div>
+
+              <div class="ob pinned" style="left:8%;top:9%;font-family:var(--disp);font-size:11px;font-weight:800;color:#E8A33D;letter-spacing:.16em">PASO 02
+                <span class="pin"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+              </div>
+
+              <div class="ob" style="right:5%;top:15%;width:130px;height:148px;display:grid;place-items:center;font-size:94px;filter:drop-shadow(0 8px 16px rgba(0,0,0,.45))">🐕
+                <span class="badge">🐾 asset · pastor-aleman</span>
+                <span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span><span class="rot"></span>
+              </div>
+
+              <div class="ob sel pinned" style="left:8%;top:44%;width:60%">
+                <div style="font-family:var(--disp);font-size:28px;line-height:1.03;font-weight:800;color:#FFF3DF;letter-spacing:-.03em">La prueba de obediencia</div>
+                <span class="badge">Titular · fijado</span>
+                <span class="pin"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+                <span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span><span class="rot"></span>
+              </div>
+
+              <div class="ob pinned" style="left:8%;top:66%;width:56%;font-size:10px;line-height:1.5;color:#C9B79A">
+                El juez pide cinco órdenes básicas. Se puntúa la respuesta, no la velocidad.
+                <span class="pin"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+              </div>
+
+              <div class="ob" style="left:9%;bottom:19%;font-size:15px;opacity:.55">🐾</div>
+
+              <div class="zone hl" style="left:0;right:0;bottom:0;height:9.5%;background:rgba(10,7,3,.85)"><span class="tz">FOOTER</span></div>
+              <div style="position:absolute;left:8%;bottom:3.2%;font-family:var(--disp);font-weight:800;font-size:9px;color:#E8A33D;pointer-events:none">🐾 perritos habilosos</div>
+              <div style="position:absolute;right:8%;bottom:3.6%;font-size:7px;color:#7A6849;letter-spacing:.1em;pointer-events:none">3 / 6</div>
+            </div>
+          </div>
+
+          <div class="sheet next">
+            <div class="lbl"><b>Lámina 4</b> · paso 3</div>
+            <div class="art" style="background:radial-gradient(120% 90% at 25% 28%,#4A3010,#1A1206)">
+              <div style="position:absolute;left:8%;top:9%;font-family:var(--disp);font-size:11px;font-weight:800;color:#E8A33D;letter-spacing:.16em">PASO 03</div>
+              <div style="position:absolute;left:6%;top:14%;font-size:90px;filter:drop-shadow(0 8px 16px rgba(0,0,0,.45))">🦮</div>
+              <div style="position:absolute;right:8%;top:45%;width:60%;text-align:right;font-family:var(--disp);font-size:28px;line-height:1.03;font-weight:800;color:#FFF3DF;letter-spacing:-.03em">El circuito de agilidad</div>
+              <div style="position:absolute;right:8%;top:67%;width:54%;text-align:right;font-size:10px;line-height:1.5;color:#C9B79A">Doce obstáculos contra reloj. Cada falta descuenta cinco puntos.</div>
+              <div style="position:absolute;left:0;right:0;bottom:0;height:9.5%;background:rgba(10,7,3,.85)"></div>
+              <div style="position:absolute;left:8%;bottom:3.2%;font-family:var(--disp);font-weight:800;font-size:9px;color:#E8A33D">🐾 perritos habilosos</div>
+              <div style="position:absolute;right:8%;bottom:3.6%;font-size:7px;color:#7A6849;letter-spacing:.1em">4 / 6</div>
+            </div>
+          </div>
+
+        </div>
+
+        <nav class="strip" aria-label="Láminas">
+          <div class="th"><div class="mini" style="background:radial-gradient(120% 90% at 50% 30%,#5A3A12,#1A1206)"><span class="kd">POR</span><span class="mt">Cómo funciona un concurso canino</span></div><div class="n">01</div></div>
+          <div class="th"><div class="mini" style="background:radial-gradient(120% 90% at 30% 25%,#4A3010,#1A1206)"><span class="kd">01</span><span class="mt">La inscripción</span></div><div class="n">02</div></div>
+          <div class="th on"><div class="mini" style="background:radial-gradient(120% 90% at 78% 22%,#4A3010,#1A1206)"><span class="kd">02</span><span class="mt">La prueba de obediencia</span></div><div class="n">03</div></div>
+          <div class="th"><div class="mini" style="background:radial-gradient(120% 90% at 25% 28%,#4A3010,#1A1206)"><span class="kd">03</span><span class="mt">El circuito de agilidad</span></div><div class="n">04</div></div>
+          <div class="th"><div class="mini" style="background:radial-gradient(120% 90% at 70% 30%,#4A3010,#1A1206)"><span class="kd">04</span><span class="mt">La puntuación final</span></div><div class="n">05</div></div>
+          <div class="th"><div class="mini" style="background:#C4622A"><span class="kd">FIN</span><span class="mt">¿Inscribirías al tuyo?</span></div><div class="n">06</div></div>
+          <button class="addth" title="Añadir lámina"><svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2"><path d="M5 12h14M12 5v14"/></svg></button>
+        </nav>
+      </div>
+    </div>
+
+    <aside class="props">
+      <div class="ptabs" role="tablist">
+        <button class="pt" role="tab" aria-selected="true" data-p="sel">Selección</button>
+        <button class="pt" role="tab" aria-selected="false" data-p="bucket">Bucket</button>
+        <button class="pt" role="tab" aria-selected="false" data-p="lam">Lámina</button>
+      </div>
+
+      <div class="pbody">
+
+        <div class="pane on" data-pane="sel">
+          <div class="card">
+            <div class="gh">Titular<span class="src lib" style="margin-left:auto">fijado</span></div>
+            <textarea class="inp">La prueba de obediencia</textarea>
+            <div class="row">
+              <div class="f"><label>Tamaño</label><input class="inp mono" value="84 px"></div>
+              <div class="f"><label>Interlínea</label><input class="inp mono" value="1.03"></div>
+            </div>
+            <div class="row">
+              <div class="f"><label>Posición</label><input class="inp mono" value="8% · 44%"></div>
+              <div class="f"><label>Rotación</label><input class="inp mono" value="0°"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="gh">Color<span class="lk"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>marca</span></div>
+            <div class="sw">
+              <span class="c on" style="background:#FFF3DF"></span>
+              <span class="c" style="background:#E8A33D"></span>
+              <span class="c" style="background:#C4622A"></span>
+              <span class="c" style="background:#1A1206"></span>
+              <span class="c" style="background:#C9B79A"></span>
+            </div>
+            <p class="hint">Los 5 colores de la marca. Son <b>inputs</b>, no configuración: si un color no está aquí, no existe para esta pieza.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">Piezas de la lámina</div>
+            <p class="hint" style="margin-bottom:2px">Fija <b>✓</b> lo que te gustó y regenera <b>↻</b> solo el resto.</p>
+
+            <div class="lyr"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l4.5-4.5 4 4"/></svg><span class="nm">Fondo</span><span class="rt"><span class="src ia">IA</span><button class="pinbtn" title="Fijar"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button><button class="regen" title="Regenerar"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg></button></span></div>
+
+            <div class="lyr"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg><span class="nm">Personaje</span><span class="rt"><span class="src lib">bib</span><button class="pinbtn" title="Fijar"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button><button class="regen" title="Regenerar"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg></button></span></div>
+
+            <div class="lyr"><svg class="i" viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16"/></svg><span class="nm">Paso 02</span><span class="rt"><button class="pinbtn on" title="Fijado"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button><button class="regen" disabled><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg></button></span></div>
+
+            <div class="lyr on"><svg class="i" viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16"/></svg><span class="nm">Titular</span><span class="rt"><button class="pinbtn on" title="Fijado"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button><button class="regen" disabled><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg></button></span></div>
+
+            <div class="lyr"><svg class="i" viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16"/></svg><span class="nm">Cuerpo</span><span class="rt"><button class="pinbtn on" title="Fijado"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button><button class="regen" disabled><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg></button></span></div>
+
+            <div class="lyr"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/></svg><span class="nm">Footer + logo</span><span class="rt"><svg class="i" style="color:var(--warn)" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></span></div>
+
+            <p class="note">Fondo y personaje siguen abiertos: <b>Regenerar lo no fijado</b> cambia solo esos dos y respeta los textos.</p>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="bucket">
+          <div class="bk"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><b>perritos-habilosos/</b><span style="margin-left:auto;font-size:10.5px">1,4 GB</span></div>
+
+          <div class="savings">
+            <span class="big">62%</span>
+            <span class="tx">de este carrusel salió de la biblioteca.<br>Hace un mes era 0%.</span>
+          </div>
+
+          <div class="card">
+            <div class="gh">assets/ · entrada<span style="margin-left:auto;font-weight:500;text-transform:none;letter-spacing:0;font-size:10.5px;color:var(--ink-3)">23 archivos</span></div>
+            <div class="assets">
+              <div class="as used" style="background:linear-gradient(140deg,#4A3010,#8A5A20)">🐕<span class="u">↻2</span></div>
+              <div class="as used" style="background:linear-gradient(140deg,#3A2810,#7A5A28)">🦮<span class="u">↻1</span></div>
+              <div class="as used" style="background:linear-gradient(140deg,#4A3410,#8A6A2E)">🐩<span class="u">↻1</span></div>
+              <div class="as" style="background:linear-gradient(140deg,#3A2A14,#6A4A22)">🐕‍🦺</div>
+              <div class="as used" style="background:#1A1206;color:#E8A33D">🐾<span class="u">↻6</span></div>
+              <div class="as" style="background:linear-gradient(140deg,#2A1E0C,#5A4018)">🦴</div>
+            </div>
+            <p class="hint">Borde verde = ya está en este carrusel. <b>↻</b> = veces reutilizado. El logo es un asset más.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">Fondos aprobados</div>
+            <div class="assets">
+              <div class="as used" style="background:radial-gradient(120% 90% at 50% 30%,#5A3A12,#1A1206)"><span class="g">IA</span><span class="u">↻1</span></div>
+              <div class="as used" style="background:radial-gradient(120% 90% at 30% 25%,#4A3010,#1A1206)"><span class="g">IA</span><span class="u">↻2</span></div>
+              <div class="as used" style="background:radial-gradient(120% 90% at 78% 22%,#4A3010,#1A1206)"><span class="g">IA</span><span class="u">↻1</span></div>
+            </div>
+            <p class="hint">Al fijar una pieza, entra a la biblioteca clasificada. El siguiente carrusel la reusa sin pagar de nuevo.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">outputs/ · salida</div>
+            <div class="outs">
+              <div class="out"><span class="sq" style="background:radial-gradient(120% 90% at 50% 30%,#5A3A12,#1A1206)"></span><span class="nm"><div>concurso-canino · v3</div><div class="d">6 PNG · hoy 14:20</div></span><button class="dl"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg></button></div>
+              <div class="out"><span class="sq" style="background:radial-gradient(120% 90% at 40% 30%,#4A3010,#1A1206)"></span><span class="nm"><div>concurso-canino · v2</div><div class="d">6 PNG · ayer</div></span><button class="dl"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg></button></div>
+              <div class="out"><span class="sq" style="background:#C4622A"></span><span class="nm"><div>razas-para-depto</div><div class="d">5 PNG · 28 ago</div></span><button class="dl"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg></button></div>
+            </div>
+            <p class="hint">Cada exportación crea una versión nueva. Nada se sobrescribe.</p>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="lam">
+          <div class="card">
+            <div class="gh">Tipo de lámina</div>
+            <select class="inp"><option>Paso — explicativo</option><option>Portada</option><option>Cierre</option></select>
+            <p class="hint">El tipo decide qué zonas quedan fijas y cómo se numera.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">Estructura<span class="lk"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>template</span></div>
+            <div class="lyr"><span class="nm">Fondo a sangre</span></div>
+            <div class="lyr"><span class="nm">Footer + logo · 9,5%</span></div>
+            <div class="lyr"><span class="nm">Márgenes · 8%</span></div>
+            <p class="note">Estas zonas no se arrastran. Se cambian en el template y el cambio entra en las 6 láminas a la vez, así el carrusel no se desalinea lámina a lámina.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">Fondo de esta lámina</div>
+            <div class="seg"><button>Color</button><button>Biblioteca</button><button class="on">IA</button></div>
+            <textarea class="inp">interior de gimnasio canino, luz cálida de tarde, fondo desenfocado</textarea>
+            <button class="btn" style="justify-content:center">Regenerar · ~0,39¢</button>
+            <p class="note">La IA hace el fondo y redacta los textos base. No dibuja letras sobre la imagen: eso lo pone el template encima, porque un modelo de imagen las deforma.</p>
+          </div>
+
+          <div class="card">
+            <div class="gh">Contraste</div>
+            <div class="lyr" style="color:var(--ok)"><span class="nm">Titular sobre fondo</span><span class="rt" style="font-family:var(--mono);font-size:10.5px;font-weight:600">9.2:1 AA ✓</span></div>
+            <div class="lyr" style="color:var(--ok)"><span class="nm">Logo · variante clara</span><span class="rt" style="font-family:var(--mono);font-size:10.5px;font-weight:600">auto</span></div>
+            <p class="hint">Medido contra el fondo real de cada lámina, no estimado.</p>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="sbar">
+  <span class="g"><i class="d"></i>Lámina 3 de 6</span>
+  <span class="g">Titular · 84 px · fijado</span>
+  <span class="g">x 8% · y 44%</span>
+  <span style="flex:1"></span>
+  <span class="g">4 de 6 piezas fijadas</span>
+  <span class="g">maqueta no funcional</span>
+</div>
+
+<script>
+/* tema: arranca en claro salvo que el visor haya elegido otro antes */
+(function(){
+  var root=document.documentElement, saved=null;
+  try{ saved=localStorage.getItem('ed-theme'); }catch(e){}
+  root.setAttribute('data-theme', saved || 'light');
+  function paint(){
+    var dark=root.getAttribute('data-theme')==='dark';
+    document.getElementById('ic-sun').hidden=dark;
+    document.getElementById('ic-moon').hidden=!dark;
+  }
+  paint();
+  document.getElementById('theme').addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{ localStorage.setItem('ed-theme',next); }catch(e){}
+    paint();
+  });
+})();
+
+document.querySelectorAll('.pt').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.pt').forEach(x=>x.setAttribute('aria-selected','false'));
+  t.setAttribute('aria-selected','true');
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.dataset.pane===t.dataset.p));
+}));
+document.querySelectorAll('.th').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.th').forEach(x=>x.classList.remove('on'));t.classList.add('on');
+}));
+document.querySelectorAll('.ob').forEach(o=>o.addEventListener('click',e=>{
+  e.stopPropagation();
+  document.querySelectorAll('.ob').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');
+}));
+document.querySelectorAll('.tb').forEach(b=>b.addEventListener('click',()=>{
+  if(b.title==='Deshacer'||b.title==='Rehacer')return;
+  document.querySelectorAll('.tb').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+}));
+document.querySelectorAll('.c').forEach(c=>c.addEventListener('click',()=>{
+  c.parentElement.querySelectorAll('.c').forEach(x=>x.classList.remove('on'));c.classList.add('on');
+}));
+document.querySelectorAll('.seg').forEach(s=>s.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  s.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+})));
+document.querySelectorAll('.pinbtn').forEach(p=>p.addEventListener('click',e=>{
+  e.stopPropagation();
+  p.classList.toggle('on');
+  const rg=p.parentElement.querySelector('.regen');
+  if(rg) rg.disabled=p.classList.contains('on');
+}));
+document.querySelectorAll('.lyr').forEach(l=>l.addEventListener('click',()=>{
+  const p=l.parentElement;p.querySelectorAll('.lyr').forEach(x=>x.classList.remove('on'));l.classList.add('on');
+}));
+</script>

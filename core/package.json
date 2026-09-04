@@ -1,0 +1,21 @@
+{
+  "name": "@personal-brand/core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Framework-free helpers (color, layout, LinkedIn copy rules) shared by system/ and editor/.",
+  "type": "module",
+  "exports": {
+    "./color": {
+      "types": "./types/color.d.ts",
+      "default": "./src/color.js"
+    },
+    "./layout": {
+      "types": "./types/layout.d.ts",
+      "default": "./src/layout.js"
+    },
+    "./linkedin": {
+      "types": "./types/linkedin.d.ts",
+      "default": "./src/linkedin.js"
+    }
+  }
+}
