@@ -228,6 +228,15 @@ with the actual count reported (`card item-2: 41 words, max 30 for visual=item`)
 This ensures that a derived scene stays within the length that the format can
 sustain.
 
+**Punctuation costs time the word count does not show.** A synthesizer pauses
+at a full stop — roughly a quarter of a second — and that pause is spoken
+duration the budget never sees. Three short sentences therefore run longer
+than one sentence built from the same words. When a card comes back a little
+over the length you wanted, joining two sentences is usually enough, and it
+costs no words: reach for that before cutting content. The check is the same
+one the engine trusts everywhere else — synthesize, measure, look at the
+table — because word count predicts the budget, not the duration.
+
 You can validate without network, without an API key, and without ffmpeg —
 it always prints the id / visual / word-count table:
 

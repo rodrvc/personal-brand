@@ -251,6 +251,56 @@ re-sintetiza solo esa), mide cada uno, escribe
 escena, inicio de cada tarjeta, total). Si una tarjeta suena mal, se corrige
 la narración y se repite; nada se renderiza hasta que el audio convence.
 
+#### Los datos verificables no se parafrasean
+
+El presupuesto de palabras aprieta, y aprieta justo sobre las tarjetas `item`,
+que son las que llevan los datos duros del ítem: su nombre, su fecha, su hora,
+su lugar, su precio. Cuando una narración no cabe, la salida tentadora es
+redondear la hora, acortar el nombre del lugar o resumir el título. **Eso no
+se hace.**
+
+Un dato verificable se copia textual **o se omite entero**. Nunca se
+reformula, se aproxima ni se completa con lo que parezca razonable. Si no
+cabe, cae el dato completo y la tarjeta habla de otra cosa — porque el
+público usa esos datos para presentarse en un lugar a una hora, y un dato
+alterado no es un error de estilo: manda a alguien al lugar equivocado.
+
+Es la contraparte, en la narración, de la regla que la etapa 5 ya aplica a la
+curaduría. Curar decide **qué** se cuenta; esta regla protege que lo contado
+siga siendo cierto después de comprimirlo para que quepa.
+
+Lo que sí es libre es todo lo demás: el ángulo, la observación, el humor si la
+marca lo usa. El criterio editorial vive en el perfil (`tone:`, y la skill de
+negocio de la marca si existe); lo que fija el motor es que los datos salgan
+intactos.
+
+#### Que cada tarjeta haga un trabajo distinto
+
+El formato es repetitivo por construcción: portada, luego N ítems, luego
+cierre. Un storyboard válido puede ser, aun así, plano — y el validador no lo
+detecta, porque cuenta palabras, no función.
+
+Los dos aplanamientos frecuentes:
+
+- **Las transiciones se repiten.** Si las N tarjetas `item` abren todas
+  anunciando lo que viene ("ahora vamos a…", "y también…"), el reel pierde
+  avance aunque cada frase esté bien escrita. Conviene que cada una cambie de
+  función: anunciar, preguntar, interpelar al espectador, dejar suspenso.
+- **Los ítems tienen todos la misma forma.** *Dato + comentario neutro*, N
+  veces, no construye escalada. La observación de cada ítem debería ser sobre
+  *ese* ítem, no una plantilla rellenada.
+
+Por tipo de tarjeta, el trabajo que le toca a la narración:
+
+| Tarjeta | Rol de la narración |
+|---|---|
+| `cover` | Gancho. Instala la premisa del período |
+| `item` | El dato del ítem + una observación propia de ese ítem |
+| `closing` | Remate, callback al gancho, o llamada a la acción |
+
+Esto es estructura del formato, no tono: **cómo** suenan el gancho y el remate
+lo decide el perfil.
+
 ### 8. Renderizar
 
 ```
