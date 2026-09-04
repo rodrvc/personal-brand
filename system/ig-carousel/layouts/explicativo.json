@@ -3,7 +3,7 @@
   "canvas": { "w": 1080, "h": 1350 },
   "zones": {
     "background": { "policy": "fill" },
-    "footer": { "height": 120, "logo": "auto", "pagination": true },
+    "footer": { "height": 120, "logo": "auto", "pagination": "all" },
     "margins": { "top": 96, "right": 86, "bottom": 96, "left": 86 }
   },
   "slides": {

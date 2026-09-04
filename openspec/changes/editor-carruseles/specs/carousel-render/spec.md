@@ -8,7 +8,7 @@
 - **THEN** the string sent to Playwright is identical to the preview's, except for asset and font URLs (HTTP in the browser, local path in Playwright)
 
 ### Requirement: Typed input to the render engine
-`render-batch.ts` SHALL gain a concrete overload that accepts `CarouselDocument` slides validated by `carousel-document.ts`, whose guarantee is that every `assetId` resolves to a file in the index and every `colorKey` to `brand.colors`. `VerifiedSlide` and `verifyOrThrow` MUST NOT change, and the guardian keeps rejecting `as VerifiedSlide` outside `verify-slides.ts`.
+`render-batch.ts` SHALL gain a concrete function that accepts `CarouselDocument` slides validated by `carousel-document.ts`, whose guarantee is that every `assetId` resolves to a file in the index and every `colorKey` to `brand.colors`. A concrete parameter, not a generic overload, is what keeps that guarantee: `VerifiedSlide` is nominal and only `verifyOrThrow` can mint it, so a signature typed to a type parameter has an unresolved case for a future caller to slip through where a concrete one has none (see `render-batch.ts`'s comment on `renderSlides`/`renderDocuments` for the three attempts that leaked). `VerifiedSlide` and `verifyOrThrow` MUST NOT change, and the guardian keeps rejecting `as VerifiedSlide` outside `verify-slides.ts`.
 
 #### Scenario: Nonexistent asset
 - **WHEN** a document references an `assetId` not present in the index
@@ -29,7 +29,7 @@ The server SHALL offer, on demand, the active slide's PNG captured with its warm
 - **THEN** they receive the slide's real PNG in under a second with the warm browser, and can compare it against the preview
 
 ### Requirement: Locked zones painted by the template
-The render function SHALL paint background, footer (logo chosen by contrast, pagination per slide type) and margins from the resolved template and the carousel; no zone data is read from the slide.
+The render function SHALL paint background, footer (logo chosen by contrast, pagination per slide type) and margins from the resolved template and the carousel; no zone data is read from the slide. Pagination is governed by the template's `zones.footer.pagination` (`"all"` | `"steps"` | `"none"`) — a template parameter, not a fixed rule — so a profile or a single carousel's `template.params` can change whether pagination shows on every slide, only on `step` slides, or not at all.
 
 #### Scenario: Six slides, one footer
 - **WHEN** the 6 slides of a carousel are rendered

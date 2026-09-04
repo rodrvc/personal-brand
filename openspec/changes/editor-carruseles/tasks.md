@@ -26,10 +26,11 @@
 
 ## 4. WYSIWYG render
 
-- [ ] 4.1 `templates/free-layout.ts`: pure render of one slide (zones from the template, objects, colors by key, local `@font-face`, rotation) with no brand literals
-- [ ] 4.2 `document.ts`: accept inline `@font-face` in addition to `fontsHref`; wait for `document.fonts.ready` in `render-batch.ts`
-- [ ] 4.3 Typed overload in `render-batch.ts` for `CarouselDocument`; `VerifiedSlide` untouched
-- [ ] 4.4 Per-object contrast measurement against the real background (sampling the PNG behind the box) using `core/color.js`; `pnpm check` green
+- [x] 4.1 `templates/free-layout.ts`: pure render of one slide (zones from the template, objects, colors by key, local `@font-face`, rotation) with no brand literals
+- [x] 4.2 `document.ts`: accept inline `@font-face` in addition to `fontsHref`; wait for `document.fonts.ready` in `render-batch.ts`
+- [x] 4.3 Typed overload in `render-batch.ts` for `CarouselDocument`; `VerifiedSlide` untouched
+- [x] 4.4 Per-object contrast measurement against the real background (sampling the PNG behind the box) using `core/color.js`; `pnpm check` green
+- [x] 4.5 Apply `template.params`: `loadLayoutTemplate` deep-merges a carousel document's `template.params` on top of the profile-resolved template, validated the same way; docs updated
 
 ## 5. Server (editor/server)
 

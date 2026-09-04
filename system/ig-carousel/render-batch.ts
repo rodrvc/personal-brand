@@ -2,7 +2,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser } from "playwright";
 
+import type { BrandTokens } from "./brand-schema.js";
+import { validateDocument, type CarouselDocument } from "./carousel-document.js";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "./document.js";
+import type { LayoutTemplate } from "./layout-template.js";
+import { renderFreeLayoutSlide, type FreeLayoutRenderContext } from "./templates/free-layout.js";
 import type { SlideTemplate, VerifiedSlide } from "./types.js";
 
 interface RenderBatchOptions<T> {
@@ -154,4 +158,59 @@ export async function renderDocuments(
   opts: RenderBatchOptions<readonly [string, SlideTemplate]>,
 ): Promise<string[]> {
   return renderBatchInternal(opts);
+}
+
+export interface RenderCarouselDocumentOptions {
+  brand: BrandTokens;
+  template: LayoutTemplate;
+  doc: unknown;
+  ctx: FreeLayoutRenderContext;
+  outputDir: string;
+  /** Injected the same way `carousel-document.ts`'s `validateDocument` wants it. */
+  assetExists: (assetId: string) => boolean;
+  /** Reuse an existing browser instead of launching a new one — same contract as `RenderBatchOptions.browser`. */
+  browser?: Browser;
+}
+
+/**
+ * Renders every slide of a `CarouselDocument` to `01.png … NN.png` in
+ * `outputDir` (design.md D10, D11). `doc` is untrusted input — it is run
+ * through `validateDocument` first, so a document referencing an unknown
+ * `assetId` or `colorKey` is rejected before Chromium ever opens, naming the
+ * offending slide and field.
+ *
+ * This is a standalone concrete function rather than another `renderSlides`
+ * overload: `VerifiedSlide`/`verifyOrThrow` is a different, untouched
+ * pipeline (event-listing content), and `CarouselDocument` slides are not
+ * `Slide`s at all — mixing them into the same overload set would be exactly
+ * the kind of generic-over-"slide-like" surface `renderSlides`'s doc comment
+ * explains why to avoid.
+ */
+export async function renderCarouselDocument(
+  opts: RenderCarouselDocumentOptions,
+): Promise<string[]> {
+  const { brand, template, doc, ctx, outputDir, assetExists } = opts;
+
+  const result = validateDocument(doc, { brand, assetExists });
+  if (!result.valid) {
+    const [first] = result.errors;
+    throw new Error(
+      `Invalid carousel document: ${result.errors.length} error(s), first at ` +
+        `"${first!.path}": ${first!.message}`,
+    );
+  }
+  const document: CarouselDocument = result.document;
+
+  const pad = Math.max(2, String(document.slides.length).length);
+  const filename = (_slide: CarouselDocument["slides"][number], index: number) =>
+    `${String(index + 1).padStart(pad, "0")}.png`;
+
+  return renderBatchInternal({
+    items: document.slides,
+    toHtml: (_slide, index) => renderFreeLayoutSlide(brand, template, document, index, ctx),
+    outputDir,
+    filename,
+    manifest: true,
+    browser: opts.browser,
+  });
 }

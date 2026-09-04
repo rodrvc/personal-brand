@@ -9,7 +9,7 @@
     "setup": "node scripts/setup.mjs",
     "init:profile": "node scripts/init-profile.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx system/ig-carousel/verify-slides.test.ts && tsx system/ig-carousel/recipe.test.ts && tsx system/ig-carousel/layout-template.test.ts && tsx system/ig-carousel/carousel-document.test.ts && tsx system/ig-reel/reel.test.ts && tsx system/assets/assets.test.ts",
+    "test": "tsx system/ig-carousel/verify-slides.test.ts && tsx system/ig-carousel/recipe.test.ts && tsx system/ig-carousel/layout-template.test.ts && tsx system/ig-carousel/carousel-document.test.ts && tsx system/ig-carousel/templates/free-layout.test.ts && tsx system/ig-reel/reel.test.ts && tsx system/assets/assets.test.ts",
     "check": "pnpm run typecheck && pnpm run test",
     "render:all": "tsx system/ig-carousel/render.ts --profile example"
   },

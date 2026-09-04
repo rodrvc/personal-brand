@@ -78,7 +78,7 @@ const tests: Array<[string, () => void]> = [
         const template = loadLayoutTemplate(profileDir, "explicativo");
         assert.equal(template.zones.footer.height, 140);
         assert.equal(template.zones.footer.logo, "auto");
-        assert.equal(template.zones.footer.pagination, true);
+        assert.equal(template.zones.footer.pagination, "all");
         assert.ok(template.slides.cover, "cover slot block preserved");
         assert.ok(template.slides.step, "step slot block preserved");
         assert.ok(template.slides.closing, "closing slot block preserved");

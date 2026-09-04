@@ -85,7 +85,16 @@ an id lives at `system/ig-carousel/layouts/<id>.json` (generic — no brand
 literals) and a profile may override any part at
 `profiles/<slug>/templates/<id>.json` (deep partial merge: plain objects
 merge key by key, arrays replace wholesale). Load the resolved, validated
-result with `loadLayoutTemplate(profileDir, id)`.
+result with `loadLayoutTemplate(profileDir, id, params?)`.
+
+`params` is the carousel document's own `template.params` (see "Per-carousel
+template parameters" below) and, when given, is deep-merged on top of the
+profile's override — last, so a single carousel can nudge a parameter (e.g.
+lower `zones.footer.height`) without touching the profile's template file or
+affecting any other carousel using the same template id. The whole result
+(default → profile override → carousel params) is validated as one document,
+so an invalid `template.params` value fails naming the exact key, the same
+way an invalid profile override does.
 
 ```json
 {
@@ -93,7 +102,7 @@ result with `loadLayoutTemplate(profileDir, id)`.
   "canvas": { "w": 1080, "h": 1350 },
   "zones": {
     "background": { "policy": "fill" },
-    "footer": { "height": 120, "logo": "auto", "pagination": true },
+    "footer": { "height": 120, "logo": "auto", "pagination": "all" },
     "margins": { "top": 96, "right": 86, "bottom": 96, "left": 86 }
   },
   "slides": {
@@ -121,7 +130,9 @@ Key rules:
 
 - `zones` are locked: `background` (paint policy), `footer` (height,
   `logo` — `"auto"` picks a variant from the library by contrast, `"none"`
-  disables the footer logo entirely — and `pagination`), `margins`
+  disables the footer logo entirely — and `pagination`: `"all"` shows
+  "N/total" on every slide (the default), `"steps"` only on `kind: step`
+  slides, `"none"` shows no pagination at all), `margins`
   (top/right/bottom/left). Zones are painted by the template on every slide
   — they are never document objects.
 - `colorRole` and `zones.background.policy` are role/policy **names**, not
@@ -176,3 +187,25 @@ against its template slot:
 
 Both functions are pure — they return a new value and never touch disk or
 mutate their input.
+
+## Rendering a document
+
+`renderFreeLayoutSlide(brand, template, doc, slideIndex, ctx)`
+(`system/ig-carousel/templates/free-layout.ts`) is the one function that
+turns a resolved slide into HTML — the editor's preview iframe and
+Playwright's export both call it, so there is no second render to drift out
+of sync (design.md D2). `ctx` supplies `assetUrl(assetId)` (an HTTP path in
+the browser, a local path for Playwright), an optional `fontFaces` list for
+local `@font-face` declarations, and an optional pre-picked `logo` for the
+footer's automatic logo (design.md D8) — `renderFreeLayoutSlide` never picks
+the logo itself, since that needs the asset index and the slide's real
+background color, neither of which it touches.
+
+`renderCarouselDocument({ brand, template, doc, ctx, outputDir, assetExists, browser? })`
+(`system/ig-carousel/render-batch.ts`) validates `doc` with
+`validateDocument` and renders every slide to `01.png … NN.png` under
+`outputDir`, rejecting an invalid document (unknown `assetId`/`colorKey`)
+before Chromium opens. It is a standalone function, not a `renderSlides`
+overload — `CarouselDocument` slides are not `VerifiedSlide`s, and mixing
+the two pipelines would blur the "only `verifyOrThrow` mints a
+`VerifiedSlide`" guarantee `system/ig-carousel/types.ts` documents.

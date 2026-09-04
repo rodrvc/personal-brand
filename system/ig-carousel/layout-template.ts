@@ -81,7 +81,8 @@ const zonesSchema = z.object({
     height: z.number().int().nonnegative(),
     /** "auto" picks a logo variant from the library by contrast (D8); "none" lets a profile disable the footer logo entirely. */
     logo: z.enum(["auto", "none"]),
-    pagination: z.boolean(),
+    /** "all" shows i/total on every slide; "steps" only on `kind: step` slides; "none" shows no pagination at all. */
+    pagination: z.enum(["all", "steps", "none"]),
   }),
   margins: marginsSchema,
 });
@@ -141,11 +142,20 @@ function deepMerge(base: unknown, override: unknown): unknown {
 /**
  * Loads the default template from `system/ig-carousel/layouts/<id>.json`
  * and, if `profiles/<slug>/templates/<id>.json` exists, deep-merges it on
- * top. The resolved result is validated as a whole so an invalid override
- * (a typo'd key, a missing geometry field) fails naming that key, not the
- * default's.
+ * top. When `params` is given (a carousel document's `template.params`,
+ * layout-template spec's "Per-carousel template parameters"), it is
+ * deep-merged again, last, so a single carousel can nudge a parameter (e.g.
+ * `zones.footer.height`) without touching the profile's own override or any
+ * other carousel using the same template id. The resolved result — default,
+ * then profile override, then per-carousel params — is validated as a
+ * whole so an invalid override (a typo'd key, a missing geometry field)
+ * fails naming that key, regardless of which layer introduced it.
  */
-export function loadLayoutTemplate(profileDir: string, id: string): LayoutTemplate {
+export function loadLayoutTemplate(
+  profileDir: string,
+  id: string,
+  params?: Record<string, unknown>,
+): LayoutTemplate {
   const engineDir = dirname(fileURLToPath(import.meta.url));
   const defaultPath = join(engineDir, "layouts", `${id}.json`);
 
@@ -171,13 +181,19 @@ export function loadLayoutTemplate(profileDir: string, id: string): LayoutTempla
     resolved = deepMerge(defaultRaw, overrideRaw);
   }
 
+  if (params && Object.keys(params).length > 0) {
+    resolved = deepMerge(resolved, params);
+  }
+
   const result = layoutTemplateSchema.safeParse(resolved);
   if (!result.success) {
     const [issue] = result.error.issues;
     throw new LayoutTemplateError(
       `Invalid layout template "${id}" (resolved from ${defaultPath}${
         existsSync(overridePath) ? ` + ${overridePath}` : ""
-      }): ${zodPath(issue.path)} — ${issue.message}`,
+      }${params && Object.keys(params).length > 0 ? " + carousel template.params" : ""}): ${zodPath(
+        issue.path,
+      )} — ${issue.message}`,
     );
   }
   return result.data;
