@@ -34,33 +34,33 @@
 
 ## 5. Server (editor/server)
 
-- [ ] 5.1 Express 5 + TS scaffold, bind to `127.0.0.1`, `EDITOR_BIND`/`EDITOR_AUTH` (refuses to expose without auth), Playwright check on startup
-- [ ] 5.2 `ProfileStore`: allowed roots, rejects `..`, absolute paths and symlinks pointing outside. Confinement test: every escape case (including `system/templates/x`) is rejected and none writes outside `profiles/` or `outputs.base_dir`
-- [ ] 5.3 Endpoints for profiles, brand, resolved template, document (CRUD + versions), carousel listing
-- [ ] 5.4 Asset endpoints: index, upload (multipart), reclassify, hide, confined static serving with hash-based cache
-- [ ] 5.5 Render endpoints: slide HTML, exact PNG, measured contrast; shared warm Chromium
-- [ ] 5.6 `PieceGenerator` (interface) + OpenAI implementation (`draftCopy`, `generateImage`) with per-call cost; 503 with no key
-- [ ] 5.7 Composition planner: plan per slide and slot, library first, generation only where missing or requested; per-piece regeneration respecting `pinned`; document version before batch operations
-- [ ] 5.8 Export: serial queue, atomic-`mkdir` `v<N>`, `manifest.json`, per-slide progress, used pieces move to `approved`
-- [ ] 5.9 Versioning test: two consecutive exports of the same carousel produce `v1` and `v2` without overwriting; atomic `mkdir` under `EEXIST` retries with `N+1` instead of clobbering
+- [x] 5.1 Express 5 + TS scaffold, bind to `127.0.0.1`, `EDITOR_BIND`/`EDITOR_AUTH` (refuses to expose without auth), Playwright check on startup
+- [x] 5.2 `ProfileStore`: allowed roots, rejects `..`, absolute paths and symlinks pointing outside. Confinement test: every escape case (including `system/templates/x`) is rejected and none writes outside `profiles/` or `outputs.base_dir`
+- [x] 5.3 Endpoints for profiles, brand, resolved template, document (CRUD + versions), carousel listing
+- [x] 5.4 Asset endpoints: index, upload (multipart), reclassify, hide, confined static serving with hash-based cache
+- [x] 5.5 Render endpoints: slide HTML, exact PNG, measured contrast; shared warm Chromium
+- [x] 5.6 `PieceGenerator` (interface) + OpenAI implementation (`draftCopy`, `generateImage`) with per-call cost; 503 with no key
+- [x] 5.7 Composition planner: plan per slide and slot, library first, generation only where missing or requested; per-piece regeneration respecting `pinned`; document version before batch operations
+- [x] 5.8 Export: serial queue, atomic-`mkdir` `v<N>`, `manifest.json`, per-slide progress, used pieces move to `approved`
+- [x] 5.9 Versioning test: two consecutive exports of the same carousel produce `v1` and `v2` without overwriting; atomic `mkdir` under `EEXIST` retries with `N+1` instead of clobbering
 
 ## 6. Interface (editor/web)
 
-- [ ] 6.1 React 19 + Vite + TS scaffold, light/dark product tokens (`--ui-*`, Inter, 205.7° blue ramp, cool grays) with a theme button and local persistence, routes `/`, `/:slug/carousels`, `/:slug/carousels/:id`
-- [ ] 6.2 Top bar, prompt header with summary and the "Regenerar lo no fijado" button, status bar
-- [ ] 6.3 Stage: scaled iframe with server HTML, dimmed next slide, thumbnail strip, add slide
-- [ ] 6.4 Selection overlay: corner handles, rotation, local proxy during drag, text editing via floating textarea, locked zones non-selectable
-- [ ] 6.5 "Selección" panel: properties, closed-palette swatches, layers with an origin badge (AI/library) per piece, independent pin/regenerate (pinning disables regenerate), reset
-- [ ] 6.6 "Bucket" panel: library by type, used-in-carousel with counter, candidates, reclassify, hide, upload, exported versions with "open folder", indicator of the carousel's library % with historical comparison
-- [ ] 6.7 "Lámina" panel: type, locked structure, background (color | asset | AI), regenerate background, measured contrast
-- [ ] 6.8 New carousel: prompt, brand, template, pieces; preview plan with per-piece origin; cost confirmation; "Regenerar lo no fijado" with a pinned-pieces warning
-- [ ] 6.9 Client-side undo/redo with debounced persistence; standard keyboard shortcuts
-- [ ] 6.10 Minimal carousel listing to enter and exit (no full gallery)
+- [x] 6.1 React 19 + Vite + TS scaffold, light/dark product tokens (`--ui-*`, Inter, 205.7° blue ramp, cool grays) with a theme button and local persistence, routes `/`, `/:slug/carousels`, `/:slug/carousels/:id`
+- [x] 6.2 Top bar, prompt header with summary and the "Regenerar lo no fijado" button, status bar
+- [x] 6.3 Stage: scaled iframe with server HTML, dimmed next slide, thumbnail strip, add slide
+- [x] 6.4 Selection overlay: corner handles, rotation, local proxy during drag, text editing via floating textarea, locked zones non-selectable
+- [x] 6.5 "Selección" panel: properties, closed-palette swatches, layers with an origin badge (AI/library) per piece, independent pin/regenerate (pinning disables regenerate), reset
+- [x] 6.6 "Bucket" panel: library by type, used-in-carousel with counter, candidates, reclassify, hide, upload, exported versions with "open folder", indicator of the carousel's library % with historical comparison
+- [x] 6.7 "Lámina" panel: type, locked structure, background (color | asset | AI), regenerate background, measured contrast
+- [x] 6.8 New carousel: prompt, brand, template, pieces; preview plan with per-piece origin; cost confirmation; "Regenerar lo no fijado" with a pinned-pieces warning
+- [x] 6.9 Client-side undo/redo with debounced persistence; standard keyboard shortcuts
+- [x] 6.10 Minimal carousel listing to enter and exit (no full gallery)
 
 ## 7. Documentation and closeout
 
-- [ ] 7.1 `editor/ESTADO.md` (what it does, decisions and their reasons, what's missing, known pitfalls, what deploy would require) and `editor/README.md` in English
-- [ ] 7.2 `app/ESTADO.md`: mark deprecated, record the web decision and point to `editor/`
-- [ ] 7.3 `docs/ARQUITECTURA.md`: module table and boundaries (the editor writes only to `profiles/` and `outputs.base_dir`)
-- [ ] 7.4 `docs/SETUP.md`: how to start the editor, `.env` with `OPENAI_API_KEY`, `fetch-fonts`
-- [ ] 7.5 Smoke test with `profiles/example`: prompt → plan → export `v1` and `v2`; guardian at 0; PR with no `Co-Authored-By`
+- [x] 7.1 `editor/ESTADO.md` (what it does, decisions and their reasons, what's missing, known pitfalls, what deploy would require) and `editor/README.md` in English
+- [x] 7.2 `app/ESTADO.md`: mark deprecated, record the web decision and point to `editor/`
+- [x] 7.3 `docs/ARQUITECTURA.md`: module table and boundaries (the editor writes only to `profiles/` and `outputs.base_dir`)
+- [x] 7.4 `docs/SETUP.md`: how to start the editor, `.env` with `OPENAI_API_KEY`, `fetch-fonts`
+- [x] 7.5 Smoke test with `profiles/example`: prompt → plan → export `v1` and `v2`; guardian at 0; PR with no `Co-Authored-By`

@@ -29,7 +29,8 @@ que existe. No es el producto entero.
 └────────────────────────────────────────────────────┘
 ┌─ módulos ──────────────────────────────────────────┐
 │  .claude/agents/   agentes de contenido (existe)   │
-│  app/              editor de afiches   (existe)    │
+│  editor/           editor de carruseles (existe)   │
+│  app/              editor de afiches (deprecado)   │
 │  ...               videos, guiones, métricas       │
 └────────────────────────────────────────────────────┘
 ```
@@ -94,8 +95,11 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
 | `profiles/<m>/config.yaml` | a mano | todos |
 | `profiles/<m>/brand.yaml` | la app | todos |
 | `profiles/<m>/content/**` | app y agentes | todos |
-| `core/` | a mano | app, y cualquier módulo JS |
+| `core/` | a mano (paquete pnpm `@personal-brand/core`) | app, editor, y cualquier módulo JS |
 | `app/**` | solo la app | — |
+| `editor/**` | solo el editor | — |
+| `profiles/<m>/carousels/`, `assets/`, `templates/` override | el editor, vía `ProfileStore` | todos |
+| `outputs.base_dir` resuelto | el editor (export) | todos |
 | `.claude/agents/` | a mano | Claude Code |
 
 **Prohibiciones duras:**
@@ -113,6 +117,14 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
    Una revisión encontró que la primera versión solo confinaba a la raíz,
    así que `system/templates/x.md` pasaba. De ahí los tests: la garantía
    estaba escrita aquí antes de existir en el código.
+5. El editor (`editor/`) solo puede escribir dentro de `profiles/<m>/` y
+   dentro del `outputs.base_dir` resuelto de esa marca (que puede vivir
+   fuera del repo). Implementado en `ProfileStore`
+   (`editor/server/src/profile-store.ts`): dos raíces permitidas, rechaza
+   rutas con `..`, absolutas, o cuyo `realpath` (siguiendo symlinks) caiga
+   fuera de ambas — el mismo patrón que `resolver_dentro()` en la app de
+   escritorio, pero con dos raíces en vez de una. Cubierto por tests
+   (`editor/server/src/profile-store.test.ts`).
 
 ## Estado de aislamiento — verificado 2026-08-08
 
@@ -165,10 +177,34 @@ herramientas como `listar_marcas`, `leer_marca`, `crear_pieza`,
 | Módulo | Estado | Documento |
 |---|---|---|
 | Agentes de contenido | funcionando | `.claude/agents/README.md` |
-| Editor de afiches | usable, incompleto | `app/ESTADO.md` |
+| Editor de carruseles | usable localmente | `editor/ESTADO.md` |
+| Editor de afiches (app/) | deprecado, no se borra | `app/ESTADO.md` |
 | Videos | no existe | — |
 | Guiones | template en `system/templates/script-short.md` | — |
 | Métricas / seguimiento | no existe | — |
+
+## Biblioteca de assets (`system/assets/`)
+
+Motor genérico de biblioteca de piezas de marca — fondos, personajes, fotos,
+logo, decoraciones, fuentes — con índice reconstruible, sidecars por pieza
+generada (prompt, modelo, costo) y deduplicación por hash. Vive a nivel de
+motor, no dentro de `editor/`, porque no es exclusiva del carrusel: hoy la
+usa `editor/` para componer láminas y bajar fuentes
+(`system/assets/fetch-fonts.ts`), y el motor de reel (`system/ig-reel/`) ya
+lee `profiles/<slug>/assets/fonts/` — cuando el reel necesite un logo, sale
+del mismo índice. El esquema del índice y de los sidecars está en
+`system/config/assets.schema.md`.
+
+## Especificaciones (OpenSpec)
+
+Los cambios de arquitectura y las decisiones de diseño de cada módulo se
+proponen y versionan como specs en `openspec/` (`openspec/changes/` para
+cambios en curso o archivados, `openspec/specs/` para el estado consolidado
+por capacidad). `openspec list` y `openspec validate` sirven para consultar
+el estado sin abrir cada archivo a mano. Ver
+`openspec/changes/editor-carruseles/` como ejemplo: `proposal.md` (por qué y
+qué cambia), `design.md` (decisiones con alternativas descartadas) y
+`tasks.md` (checklist de implementación).
 
 ## Para publicar el módulo de afiches tal como está
 

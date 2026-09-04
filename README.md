@@ -39,6 +39,7 @@ Everyday commands:
 ```bash
 pnpm check                                          # typecheck + tests
 python3 scripts/validate_commit_guardian.py --scan  # audit the whole tree
+pnpm dev:editor                                      # run the carousel editor (editor/)
 ```
 
 ## The boundary
@@ -81,7 +82,8 @@ plain list of everything you meant to keep out of sight.
 │  ├─ templates/      shared post and script templates
 │  ├─ guides/         operating guides
 │  └─ config/         schemas and config conventions
-├─ app/               desktop module (Tauri) — one module, not the product
+├─ editor/            carousel editor (web) — one module, not the product
+├─ app/               desktop module (Tauri) — deprecated, superseded by editor/
 ├─ core/              shared logic between modules
 ├─ profiles/
 │  ├─ example/        fictional profile, tracked — the template init:profile copies
@@ -129,4 +131,5 @@ Full guide: [`system/guides/workflow.md`](system/guides/workflow.md).
 - [`docs/public-repo-rules.md`](docs/public-repo-rules.md) — what may not be published.
 - [`CLAUDE.md`](CLAUDE.md) — operating guide for agents in this repo.
 - [`system/config/brand.schema.md`](system/config/brand.schema.md) — the `brand.json` schema.
-- [`app/ESTADO.md`](app/ESTADO.md) — decisions and known traps in the desktop module.
+- [`editor/README.md`](editor/README.md) / [`editor/ESTADO.md`](editor/ESTADO.md) — the carousel editor: how to run it, decisions, known traps.
+- [`app/ESTADO.md`](app/ESTADO.md) — the deprecated desktop module.

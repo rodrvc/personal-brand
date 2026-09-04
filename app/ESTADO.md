@@ -2,6 +2,22 @@
 
 Actualizado: 2026-08-08
 
+> ## ⚠️ MÓDULO DEPRECADO
+>
+> El dueño revirtió la decisión de escritorio: el reemplazo es **web, no
+> Tauri**, por portabilidad entre sistemas operativos (Windows/Mac/Linux sin
+> compilar por plataforma). La razón original para elegir escritorio — "los
+> logos y tipografías de los clientes de la usuaria se quedan en su
+> máquina" — se preserva igual: el nuevo módulo es **local-first**, corre en
+> `127.0.0.1`, sin login ni sync remoto por ahora.
+>
+> El reemplazo es [`editor/`](../editor/ESTADO.md) (React + Vite + Express),
+> que ya cubre lo que esta app no llegó a tener conectado: persiste el
+> documento del carrusel, biblioteca de assets de marca, regeneración por
+> pieza, export versionado. Este módulo **no se borra** — sigue aislado y no
+> rompe nada si queda instalado — pero no recibe desarrollo nuevo. Cualquier
+> trabajo de edición de afiches/carruseles va a `editor/`.
+
 > **Esto es UN MÓDULO**, no el proyecto entero. El proyecto es una
 > plataforma de contenido: publicaciones, videos, guiones y seguimiento de
 > redes. Lee [`../docs/ARQUITECTURA.md`](../docs/ARQUITECTURA.md) para las
