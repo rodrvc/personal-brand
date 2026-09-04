@@ -1,0 +1,37 @@
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(15 23 42 / 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+}
+
+.modal-card {
+  background: var(--ui-surface);
+  border-radius: var(--ui-radius-card);
+  box-shadow: var(--ui-shadow-lg);
+  width: min(420px, 92vw);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ui-head);
+}
+
+.modal-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ui-ink);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

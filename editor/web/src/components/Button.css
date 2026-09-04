@@ -1,0 +1,41 @@
+.ui-btn {
+  padding: 7px 14px;
+  border-radius: var(--ui-radius-btn);
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--ui-line);
+  color: var(--ui-ink);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  background: var(--ui-surface);
+  transition: var(--ui-transition);
+}
+
+.ui-btn:hover:not(:disabled) {
+  border-color: var(--ui-p400);
+  color: var(--ui-head);
+}
+
+.ui-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ui-btn-primary {
+  background: var(--ui-p600);
+  border-color: var(--ui-p600);
+  color: #fff;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.ui-btn-primary:hover:not(:disabled) {
+  background: var(--ui-p700);
+  border-color: var(--ui-p700);
+  color: #fff;
+}
+
+.ui-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}

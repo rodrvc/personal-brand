@@ -1,0 +1,167 @@
+import { useCallback, useEffect, useState } from "react";
+
+import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
+import type { useDocumentEditor } from "../hooks/useDocumentEditor";
+import { useTheme } from "../hooks/useTheme";
+import { regenerate } from "../api/client";
+import { TopBar } from "./TopBar";
+import { PromptHeader } from "./PromptHeader";
+import { Stage } from "./Stage";
+import { PropertiesPanel } from "./panels/PropertiesPanel";
+import { StatusBar } from "./StatusBar";
+import type { Selection } from "./geometry";
+import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
+import { ExportDialog } from "./ExportDialog";
+import "./Editor.css";
+
+const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
+
+export type Tool = "select" | "text" | "asset";
+export type PanelTab = "sel" | "bucket" | "lam";
+
+interface EditorProps {
+  slug: string;
+  brand: BrandTokens;
+  template: LayoutTemplate;
+  editorState: ReturnType<typeof useDocumentEditor>;
+  stats: StatsResponse | null;
+  initialActiveSlide: number;
+}
+
+export function Editor({ slug, brand, template, editorState, stats: initialStats, initialActiveSlide }: EditorProps) {
+  const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion } = editorState;
+  const { theme, toggleTheme } = useTheme();
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.min(initialActiveSlide, Math.max(0, doc.slides.length - 1)),
+  );
+  const [tool, setTool] = useState<Tool>("select");
+  const [selection, setSelection] = useState<Selection>(null);
+  const [panelTab, setPanelTab] = useState<PanelTab>("sel");
+  const [stats, setStats] = useState(initialStats);
+  const [showRegenDialog, setShowRegenDialog] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_SLIDE_STORAGE_PREFIX + doc.id, String(activeIndex));
+    } catch {
+      // best-effort
+    }
+  }, [doc.id, activeIndex]);
+
+  useEffect(() => {
+    setSelection(null);
+  }, [activeIndex]);
+
+  const activeSlide = doc.slides[activeIndex];
+
+  const pinnedCount = doc.slides.reduce((sum, s) => sum + s.objects.filter((o) => o.pinned).length + (s.background.pinned ? 1 : 0), 0);
+  const totalPieceCount = doc.slides.reduce((sum, s) => sum + s.objects.length + 1, 0);
+
+  const handleRegenerateUnpinned = useCallback(async () => {
+    if (!activeSlide) return;
+    setShowRegenDialog(false);
+    setRegenUnpinnedError(null);
+    try {
+      const next = await regenerate(slug, doc.id, { slideId: activeSlide.id, scope: "unpinned" });
+      applyRemote(next);
+    } catch (err) {
+      setRegenUnpinnedError(err instanceof Error ? err.message : String(err));
+    }
+  }, [slug, doc.id, activeSlide, applyRemote]);
+
+  if (!activeSlide) {
+    return <div className="editor-empty">Este carrusel no tiene láminas.</div>;
+  }
+
+  return (
+    <div className="editor-app">
+      <TopBar
+        slug={slug}
+        brand={brand}
+        doc={doc}
+        tool={tool}
+        onToolChange={setTool}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undo}
+        onRedo={redo}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onExport={() => setShowExportDialog(true)}
+      />
+      <div className="editor-body">
+        <div className="editor-center">
+          <PromptHeader
+            doc={doc}
+            stats={stats}
+            onRegenerateUnpinned={() => setShowRegenDialog(true)}
+            regenerateUnpinnedError={regenUnpinnedError}
+          />
+          <Stage
+            slug={slug}
+            doc={doc}
+            template={template}
+            brand={brand}
+            renderVersion={renderVersion}
+            activeIndex={activeIndex}
+            onActiveIndexChange={setActiveIndex}
+            selection={selection}
+            onSelectionChange={setSelection}
+            onDocUpdate={update}
+            fallbackColorKey={Object.keys(brand.colors)[0] ?? ""}
+            onAddSlide={(colorKey) => {
+              update((d) => {
+                const slides = [...d.slides];
+                slides.splice(activeIndex + 1, 0, {
+                  id: `slide-${Date.now()}`,
+                  kind: "step",
+                  background: { mode: "color", colorKey, pinned: false, source: "manual" },
+                  objects: [],
+                });
+                return { ...d, slides, updatedAt: new Date().toISOString() };
+              });
+              setActiveIndex(activeIndex + 1);
+            }}
+          />
+        </div>
+        <PropertiesPanel
+          slug={slug}
+          brand={brand}
+          template={template}
+          doc={doc}
+          renderVersion={renderVersion}
+          activeIndex={activeIndex}
+          selection={selection}
+          onSelectionChange={setSelection}
+          onDocUpdate={update}
+          onDocReplace={applyRemote}
+          panelTab={panelTab}
+          onPanelTabChange={setPanelTab}
+          stats={stats}
+          onStatsRefresh={setStats}
+        />
+      </div>
+      <StatusBar
+        doc={doc}
+        activeIndex={activeIndex}
+        selection={selection}
+        pinnedCount={pinnedCount}
+        totalPieceCount={totalPieceCount}
+        dirty={dirty}
+        saveError={saveError}
+      />
+      {showRegenDialog && (
+        <RegenerateUnpinnedDialog
+          slide={activeSlide}
+          onCancel={() => setShowRegenDialog(false)}
+          onConfirm={handleRegenerateUnpinned}
+        />
+      )}
+      {showExportDialog && (
+        <ExportDialog slug={slug} carouselId={doc.id} onClose={() => setShowExportDialog(false)} />
+      )}
+    </div>
+  );
+}

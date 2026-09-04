@@ -1,0 +1,86 @@
+.carousel-list {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.carousel-list-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.carousel-list-back {
+  color: var(--ui-ink-3);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.carousel-list-back:hover {
+  color: var(--ui-head);
+}
+
+.carousel-list-title {
+  color: var(--ui-head);
+  font-size: 20px;
+  margin: 4px 0 0;
+}
+
+.carousel-list-error {
+  color: var(--ui-danger);
+}
+
+.carousel-list-hint {
+  color: var(--ui-ink-3);
+}
+
+.carousel-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--ui-surface);
+  border-radius: var(--ui-radius-card);
+  overflow: hidden;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.carousel-table th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-ink-3);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.carousel-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ui-line-soft);
+  font-size: 12.5px;
+}
+
+.carousel-status {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-g100);
+  color: var(--ui-ink-2);
+}
+
+.carousel-status.exported,
+.carousel-status.published {
+  background: var(--ui-ok-soft);
+  color: var(--ui-ok);
+}
+
+.carousel-open-link {
+  color: var(--ui-p600);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.carousel-open-link:hover {
+  text-decoration: underline;
+}

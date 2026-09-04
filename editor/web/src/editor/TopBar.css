@@ -1,0 +1,119 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-line);
+  box-shadow: var(--ui-shadow-sm);
+  z-index: 5;
+}
+
+.topbar-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: var(--ui-radius-btn);
+  transition: var(--ui-transition);
+  text-decoration: none;
+  flex: none;
+}
+
+.topbar-back:hover {
+  background: var(--ui-g100);
+  color: var(--ui-head);
+}
+
+.topbar-brand-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px 4px 5px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-accent-soft);
+  border: 1px solid var(--ui-p200);
+}
+
+.topbar-brand-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ui-p500);
+  display: inline-block;
+}
+
+.topbar-brand-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ui-p700);
+}
+
+.topbar-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--ui-head);
+  letter-spacing: -0.01em;
+}
+
+.topbar-chip {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--ui-warn);
+  background: var(--ui-warn-soft);
+  border: 1px solid var(--ui-warn-line);
+  padding: 1px 7px;
+  border-radius: var(--ui-radius-pill);
+  margin-left: 7px;
+  vertical-align: 1px;
+  letter-spacing: 0.02em;
+}
+
+.topbar-subtitle {
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  color: var(--ui-ink-3);
+}
+
+.topbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--ui-line);
+  margin: 0 4px;
+  flex: none;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.topbar-tool {
+  width: 32px;
+  height: 30px;
+  border-radius: var(--ui-radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--ui-ink-2);
+  transition: var(--ui-transition);
+  flex: none;
+}
+
+.topbar-tool:hover:not(:disabled) {
+  background: var(--ui-g100);
+  color: var(--ui-head);
+}
+
+.topbar-tool.on {
+  background: var(--ui-accent);
+  color: #fff;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.topbar-tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

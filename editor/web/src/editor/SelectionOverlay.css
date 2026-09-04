@@ -1,0 +1,136 @@
+.selection-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.overlay-zone {
+  position: absolute;
+  pointer-events: none;
+  outline: 1.5px dashed var(--ui-lock);
+  outline-offset: -2px;
+  border-radius: 3px;
+}
+
+.overlay-zone-label {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  font-family: var(--ui-mono);
+  font-size: 7px;
+  color: var(--ui-lock);
+  background: rgb(0 0 0 / 0.5);
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+}
+
+.overlay-object {
+  position: absolute;
+  cursor: move;
+}
+
+.overlay-object:hover {
+  outline: 1.5px solid rgb(100 161 206 / 0.6);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.overlay-object.selected {
+  outline: 2px solid var(--ui-p400);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.overlay-object.pinned {
+  outline: 1.5px solid var(--ui-ok);
+  outline-offset: 2px;
+}
+
+.overlay-object.locked {
+  pointer-events: none;
+  cursor: default;
+  outline: 1.5px dashed var(--ui-lock);
+  outline-offset: -2px;
+}
+
+.overlay-lock-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 9px;
+  opacity: 0.75;
+}
+
+.overlay-pin-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ui-ok);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.overlay-handle {
+  display: block;
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border: 2px solid var(--ui-p500);
+  border-radius: 2px;
+  cursor: nwse-resize;
+}
+
+.overlay-handle.tl {
+  top: -5px;
+  left: -5px;
+}
+.overlay-handle.tr {
+  top: -5px;
+  right: -5px;
+  cursor: nesw-resize;
+}
+.overlay-handle.bl {
+  bottom: -5px;
+  left: -5px;
+  cursor: nesw-resize;
+}
+.overlay-handle.br {
+  bottom: -5px;
+  right: -5px;
+}
+
+.overlay-rotate-handle {
+  display: block;
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  margin-left: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--ui-p500);
+  cursor: grab;
+}
+
+.overlay-text-editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  background: rgb(255 255 255 / 0.92);
+  border: 1px solid var(--ui-p400);
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: normal;
+  padding: 2px;
+}

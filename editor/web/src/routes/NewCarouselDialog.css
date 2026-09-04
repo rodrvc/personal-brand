@@ -1,0 +1,102 @@
+.new-carousel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.new-carousel-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ui-ink-3);
+  font-weight: 500;
+}
+
+.ui-input {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--ui-ink);
+  font-family: inherit;
+  width: 100%;
+}
+
+.ui-input:focus {
+  outline: none;
+  border-color: var(--ui-p400);
+  box-shadow: 0 0 0 3px var(--ui-p50);
+}
+
+.new-carousel-error {
+  color: var(--ui-danger);
+  font-size: 12px;
+}
+
+.plan-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-summary {
+  font-size: 12px;
+  color: var(--ui-ink-2);
+  margin: 0;
+}
+
+.plan-slides {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.plan-slide {
+  border: 1px solid var(--ui-line-soft);
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  background: var(--ui-g50);
+}
+
+.plan-slide-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ui-head);
+  text-transform: capitalize;
+}
+
+.plan-slide-headline {
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+
+.plan-slide-visuals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.plan-origin {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--ui-radius-pill);
+}
+
+.plan-origin.library {
+  background: var(--ui-ok-soft);
+  color: var(--ui-ok);
+}
+
+.plan-origin.generate {
+  background: var(--ui-accent-soft);
+  color: var(--ui-p600);
+}
