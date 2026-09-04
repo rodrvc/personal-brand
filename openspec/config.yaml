@@ -1,0 +1,31 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+context: |
+  Stack: TypeScript, pnpm workspace (root + system/ig-reel/remotion + app +
+  core + editor/server + editor/web), Playwright for rendering/testing,
+  React 19 + Vite in editor/web, Express 5 in editor/server, zod for
+  runtime validation.
+  Rules: the repo is brand-agnostic — no brand literals (names, colors,
+  cities, real copy) under system/ or .claude/; brands live in
+  profiles/<slug>/, gitignored. Answer briefly in Spanish; code and
+  comments in English. Add tests only where a silent failure would hurt
+  (rendering correctness, path confinement, document validation) — not for
+  coverage's own sake.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
