@@ -1,6 +1,7 @@
 {
   "id": "explicativo",
   "canvas": { "w": 1080, "h": 1350 },
+  "defaultSlideCount": 6,
   "zones": {
     "background": { "policy": "fill" },
     "footer": { "height": 120, "logo": "auto", "pagination": "all" },

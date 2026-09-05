@@ -106,21 +106,53 @@ function collectAssetIds(doc: CarouselDocument): string[] {
   for (const slide of doc.slides) {
     if (slide.background.mode === "asset") ids.add(slide.background.assetId);
     for (const object of slide.objects) {
-      if (object.kind === "asset") ids.add((object as Extract<SlideObject, { kind: "asset" }>).assetId);
+      // A `pending: true` asset object may have no `assetId` yet (the
+      // immediate-build compose flow's placeholder, carousel-document.ts) —
+      // export shouldn't be reachable while any piece is still pending in
+      // practice, but this stays defensive rather than crashing the whole
+      // manifest build over one skipped/incomplete slot.
+      const assetId = (object as Extract<SlideObject, { kind: "asset" }>).assetId;
+      if (object.kind === "asset" && assetId) ids.add(assetId);
     }
   }
   return [...ids];
 }
+
+/** True when at least one piece (a slide's background or any object) is still `pending: true` — the compose job hasn't filled it in yet. */
+function hasPendingPieces(doc: CarouselDocument): boolean {
+  return doc.slides.some((slide) => slide.background.pending || slide.objects.some((o) => o.pending));
+}
+
+/** Thrown by `enqueueExport` when the document still has pending pieces and the caller didn't pass `allowPending: true` — routed to a 409 by the export route (piece-generation/editor-api: exporting mid-compose is refused unless explicitly overridden). */
+export class ExportHasPendingPiecesError extends Error {}
 
 /**
  * Queues one export, running strictly after any export already queued
  * (carousel-export spec's "Serial queue with a warm browser": "neither
  * fails from browser contention"). `render` is injected so tests can
  * substitute a fake and never touch Playwright.
+ *
+ * Refuses to queue at all (throws `ExportHasPendingPiecesError`, synchronously,
+ * before anything is added to `jobs`) when the document still has a
+ * `pending: true` piece — the background compose job (compose-job.ts)
+ * hasn't finished filling in every placeholder yet, so exporting now would
+ * bake an empty text box or a missing image into the PNGs. Passing
+ * `allowPending: true` skips this check for a caller (the web's "Exportar
+ * igual" button) that explicitly wants to export anyway.
  */
-export function enqueueExport(store: ProfileStore, carouselId: string, render: RenderFn): string {
-  const jobId = `${store.slug}-${carouselId}-${Date.now()}`;
+export function enqueueExport(
+  store: ProfileStore,
+  carouselId: string,
+  render: RenderFn,
+  options?: { allowPending?: boolean },
+): string {
   const doc = readValidatedDocument(store, carouselId);
+  if (!options?.allowPending && hasPendingPieces(doc)) {
+    throw new ExportHasPendingPiecesError(
+      `Carousel "${carouselId}" still has pending pieces — export refused unless "allowPending" is set.`,
+    );
+  }
+  const jobId = `${store.slug}-${carouselId}-${Date.now()}`;
   const job: ExportJob = {
     id: jobId,
     slug: store.slug,

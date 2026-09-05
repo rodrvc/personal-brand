@@ -50,6 +50,17 @@ export function profilesRouter(): Router {
       const brand = loadBrand(store.roots.profileDir);
       res.json(brand);
     } catch (error) {
+      // `loadBrand` throws a plain `Error` (system/ig-carousel/brand-schema.ts
+      // has no dedicated error class) whose message starts with "No
+      // brand.json found at" for exactly this case — matched here, ahead of
+      // `handleStoreError`, because that function's generic ENOENT sniff
+      // would otherwise answer 404 ("no such carousel/profile") for what is
+      // really "the profile exists but isn't configured yet", a 422.
+      const message = (error as Error)?.message ?? String(error);
+      if (/^No brand\.json found at/.test(message)) {
+        res.status(422).json({ error: `El perfil "${req.params.slug}" no tiene brand.json.` });
+        return;
+      }
       handleStoreError(error, res);
     }
   });
@@ -208,7 +219,10 @@ function approveNewlyPinnedAssets(
     }
 
     for (const object of slide.objects) {
-      if (object.kind !== "asset" || !object.pinned) continue;
+      // A pinned placeholder with no `assetId` yet (pending, immediate-build
+      // compose flow) has nothing to approve into the library — skip it
+      // rather than calling `updateEntry` with `undefined`.
+      if (object.kind !== "asset" || !object.pinned || !object.assetId) continue;
       const previousObject = previousSlide?.objects?.find((o) => o.id === object.id);
       const objectWasPinned = previousObject?.pinned ?? false;
       if (!objectWasPinned) {

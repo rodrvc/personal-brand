@@ -70,7 +70,7 @@ const server = app.listen(port, bind, async () => {
   const profiles = listProfiles();
   console.log(
     profiles.length > 0
-      ? `Profiles found: ${profiles.join(", ")}`
+      ? `Profiles found: ${profiles.map((p) => (p.hasBrand ? p.slug : `${p.slug} (no brand.json)`)).join(", ")}`
       : "No profiles found under the resolved profiles root (see BRAND_PROFILES_DIR).",
   );
 

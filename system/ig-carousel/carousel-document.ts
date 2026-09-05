@@ -46,12 +46,22 @@ const backgroundSchema = z.discriminatedUnion("mode", [
     colorKey: z.string().min(1),
     pinned: z.boolean(),
     source: pieceSourceSchema,
+    // Set only while `mode: "color"` is standing in for a background whose
+    // AI generation hasn't run yet (the immediate-build compose flow:
+    // editor-ui spec's "Composition from the prompt" placeholder phase).
+    // The role surface color is the real, renderable value in the
+    // meantime, so a document with `pending: true` is always valid and
+    // paintable — this flag exists purely so the UI can show a shimmer
+    // instead of the color as final. Cleared to `false` (never removed)
+    // once the compose job either fills in the real asset or gives up.
+    pending: z.boolean().optional(),
   }),
   z.object({
     mode: z.literal("asset"),
     assetId: z.string().min(1),
     pinned: z.boolean(),
     source: pieceSourceSchema,
+    pending: z.boolean().optional(),
   }),
 ]);
 export type SlideBackground = z.infer<typeof backgroundSchema>;
@@ -64,6 +74,15 @@ const baseObjectFields = {
   pinned: z.boolean(),
   locked: z.boolean(),
   source: pieceSourceSchema,
+  // Placeholder marker used only by the immediate-build compose flow
+  // (editor-ui spec's "Composition from the prompt"): a `pending: true`
+  // text object carries `text: ""` and a `pending: true` asset object
+  // carries no `assetId` yet (see `assetObjectSchema` below), both standing
+  // in for a piece the background compose job hasn't generated/drafted
+  // yet. The UI renders these with a shimmer; the job flips this to
+  // `false` (never removes it) on every object it touches, whether it
+  // succeeded or gave up, so nothing is left showing a spinner forever.
+  pending: z.boolean().optional(),
 };
 
 const textObjectSchema = z.object({
@@ -89,7 +108,20 @@ export type TextObject = z.infer<typeof textObjectSchema>;
 const assetObjectSchema = z.object({
   ...baseObjectFields,
   kind: z.literal("asset"),
-  assetId: z.string().min(1),
+  // Optional, not a sentinel string: an asset object created as a
+  // placeholder for an image the compose job hasn't generated yet has no
+  // `assetId` at all (rather than e.g. `assetId: ""` or a fake id that
+  // `assetExists` would have to special-case). This is the less invasive
+  // choice against the existing zod schema and every caller that already
+  // does `object.assetId` on an `asset`-kind object elsewhere in this
+  // codebase. An asset object with no `assetId` stays valid whether or not
+  // it's still `pending`: the "skipped" compose-job path (no AI key
+  // configured) deliberately clears `pending` back to `false` on a slot it
+  // never filled, so the document is not stuck showing a spinner forever —
+  // it just renders as an empty box (free-layout.ts's `renderAssetObject`).
+  // `validateDocument` only ever checks `assetExists` when an `assetId` IS
+  // present, never requires one.
+  assetId: z.string().min(1).optional(),
   fit: z.enum(["cover", "contain"]),
 });
 export type AssetObject = z.infer<typeof assetObjectSchema>;
@@ -256,11 +288,23 @@ export function validateDocument(
         if (object.fontKey !== undefined && !fontKeys.has(object.fontKey)) {
           errors.push({ path: `${base}.fontKey`, message: `unknown font key "${object.fontKey}"` });
         }
-      } else {
+      } else if (object.assetId !== undefined) {
+        // Whenever an assetId IS present it's still checked like any other
+        // asset reference, pending or not.
         if (!assetExists(object.assetId)) {
           errors.push({ path: `${base}.assetId`, message: `unknown asset id "${object.assetId}"` });
         }
       }
+      // No `else` branch requiring `assetId` when it's absent: an asset
+      // object with no image is always valid, not just while `pending`.
+      // The immediate-build compose flow (carousel-document.ts's
+      // `assetObjectSchema` comment) creates these as `pending: true`, but a
+      // compose job that ends up with no library candidate AND no AI key
+      // (the "skipped" path, compose-job.ts) deliberately leaves the same
+      // object with `pending: false` and still no `assetId` — piece-
+      // generation's "with no key, generation is disabled" behavior means
+      // that slot simply renders as an empty box (free-layout.ts's
+      // `renderAssetObject`) rather than the document becoming invalid.
     });
   });
 

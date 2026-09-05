@@ -65,7 +65,15 @@ SHALL show the slide's type (cover, step, closing), the template's locked struct
 - **THEN** the background becomes `{mode:'color', colorKey}`, the contrast is recalculated, and it is shown
 
 ### Requirement: Composition from the prompt
-The new-carousel screen SHALL ask for the prompt, the brand, the template, and optionally library pieces to use. Before generating, the UI SHALL show the plan per slide with each piece's expected origin (library or generate, with estimated cost) and allow changing it. "Regenerar lo no fijado" from the header SHALL respect pinned pieces and warn how many it's about to touch.
+The new-carousel screen SHALL ask for the prompt, the brand, the template, and optionally library pieces to use, with a single "Crear" action and no mandatory plan-approval step. Submitting SHALL take the user directly into the editor at `/:slug/carousels/:id`: the carousel already exists as a document — every library-sourced piece placed, every piece that needs AI standing in as a `pending` placeholder — and composition continues in the background from there. Slide count is not a field on this screen: it is read from an explicit number in the prompt (e.g. "en 4 pasos", "6 láminas") when present, or otherwise from the template's own default. The prompt header SHALL show ongoing progress ("Generando... X/Y piezas") and the accumulated cost while the background composition runs, and SHALL surface an error or a "no AI configured" message inline, in Spanish, rather than swallowing it. A read-only plan view remains available on demand, never blocking, via a "Ver plan" control in the prompt header. "Regenerar lo no fijado" from the header SHALL respect pinned pieces and warn how many it's about to touch.
+
+#### Scenario: Prompt to editor with no approval step
+- **WHEN** the user writes a prompt and presses "Crear"
+- **THEN** the browser navigates straight to `/:slug/carousels/:id` with no intermediate plan-approval screen, the carousel is visible immediately with its AI-bound pieces shimmering as pending, the prompt header shows "Generando... X/Y piezas" while the background job runs, and the shimmer clears piece by piece as each one completes
+
+#### Scenario: Ver plan is optional and non-blocking
+- **WHEN** the user presses "Ver plan" in the prompt header at any point, including while composition is still running
+- **THEN** a read-only drawer shows each slide's pieces with their slot, kind, origin (library/IA) and pending state, and closing it does not affect composition or navigation
 
 #### Scenario: Regenerar lo no fijado with pinned pieces
 - **WHEN** the user presses "Regenerar lo no fijado" with 4 pieces pinned across 6 slides

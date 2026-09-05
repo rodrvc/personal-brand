@@ -90,7 +90,13 @@ export function CarouselListRoute() {
         <NewCarouselDialog
           slug={slug}
           onClose={() => setShowNew(false)}
-          onCreated={(id) => navigate(`/${slug}/carousels/${id}`)}
+          onCreated={({ document, jobId }) =>
+            // Router state carries the just-created document (and its
+            // compose jobId) straight to EditorRoute so it can skip its own
+            // fetch-and-flash and start polling the background compose job
+            // immediately — see EditorRoute's own comment.
+            navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document, jobId } })
+          }
         />
       )}
     </div>

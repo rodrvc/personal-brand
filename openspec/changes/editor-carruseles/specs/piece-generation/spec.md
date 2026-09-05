@@ -10,12 +10,16 @@ Image generation MUST produce only backgrounds and figures with no text. Text an
 ### Requirement: The AI drafts basic editable copy
 From the carousel's prompt, the system SHALL generate a plan with a headline and, when the slide type calls for it, a short body per slide, as `text` objects with `pinned: false`. Text MUST respect the slot's limits without mutilating words (the prompt explicitly forbids this, see the known pitfall in `app/ESTADO.md`) and MUST be editable on the canvas from the first moment.
 
+Creating the carousel is immediate and has no mandatory plan/approval step: `POST .../carousels` writes a document right away where every text object that needs drafting starts as a `pending: true` placeholder (empty text) and a background compose job (`GET .../compose/:jobId`) fills each one in afterward, one slide's copy call at a time, persisting after every piece. The editor opens on this placeholder document immediately — the user edits while the job is still running rather than waiting on a plan screen.
+
 #### Scenario: Initial prompt
 - **WHEN** the user writes "un carrusel que explique X paso a paso, con el template explicativo, usando las fotos de los assets" ("a carousel explaining X step by step, with the explicativo template, using the photos from the assets")
-- **THEN** they get N slides with a cover, steps and a closing, each with a basic editable headline and body, and the slide count is editable afterward
+- **THEN** they get N slides with a cover, steps and a closing, each starting as a `pending` placeholder that becomes an editable headline and body as the background job reaches it, and the slide count is editable afterward
 
 ### Requirement: Library first, generate after
 For each visual slot in the plan (background, figure, decoration) the system SHALL search the brand's approved library first by `kind` and `tags` and propose the best candidate. It SHALL only generate with AI if there's no candidate, if the user asks for one, or if the prompt explicitly requests it. Composing from the library MUST be a first-class path in the UI, not a fallback.
+
+Library-sourced pieces are placed synchronously, at document-creation time — there is no `pending` phase for them, since no AI call and no wait is needed. Only pieces the plan marked for AI generation start as `pending: true` placeholders for the background compose job to fill in.
 
 #### Scenario: Character already approved
 - **WHEN** the library has approved characters with the requested tag
@@ -39,9 +43,15 @@ Regeneration SHALL be requestable for a single piece (this background, this char
 ### Requirement: Cost recorded and visible
 Every call to the AI provider SHALL record `model`, tokens or size, `costCents` and date: in the asset's sidecar if it produced an image, and in the document's `prompt.runs[]` if it produced text. The status bar and the prompt header SHALL show the carousel's accumulated cost and how many pieces came from the library.
 
+While the background compose job is still running, cost and piece counters are the job's own numbers (`costCentsSoFar`, `completedPieces`/`totalPieces`, and `counts.fromLibrary`/`counts.generated`/`counts.drafted` from `GET .../compose/:jobId`) rather than a recount of the document — the prompt header polls the job and shows these live as pieces land, not only once the job finishes.
+
 #### Scenario: Carousel composed with no generation
 - **WHEN** every visual piece came from the library and only text was drafted
 - **THEN** the cost shown is the text's cost, and the header shows "N piezas de biblioteca · 0 fondos generados" ("N pieces from the library · 0 generated backgrounds")
+
+#### Scenario: Compose job still running
+- **WHEN** the background compose job has filled in 3 of 7 pending pieces
+- **THEN** the prompt header shows "3/7 piezas" and the cost accumulated so far, updating as each subsequent piece completes
 
 ### Requirement: Every piece is marked with its origin
 Every visual object in the document (background, figure, photo) SHALL record its origin: `source: 'ai'` if it came from a generation, or `source: 'library'` with the library's `assetId` if it was composed from an already-approved piece. The origin MUST persist in the document and be available for the UI to show per piece, not only as a carousel-level aggregate.

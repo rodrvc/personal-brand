@@ -10,9 +10,15 @@ Each carousel SHALL be persisted at `profiles/<slug>/carousels/<carousel-id>/car
 ### Requirement: Slides and pieces
 Each slide SHALL have `id`, `kind` (`cover` | `step` | `closing`), `background` and `objects[]` in stacking order (the last one paints on top). `background` SHALL be `{mode:'color', colorKey}` or `{mode:'asset', assetId}`; an AI-generated background is an `asset` background whose asset has `origin: ai`. Each object SHALL be `text` (`text`, `fontKey`, `fontSize`, `lineHeight`, `align`, `colorKey`) or `asset` (`assetId`, `fit`), with `slot?`, `geometry?` (`x`, `y`, `w`, `h?`, `rotation`), `pinned` and `locked`.
 
+A background or an object MAY carry `pending: true` — a placeholder the immediate-build compose flow leaves behind for a piece it hasn't drafted or generated yet (a text object with `pending: true` carries `text: ""`; an asset object with `pending: true` carries no `assetId`). The document MUST stay valid and paintable while `pending` pieces exist: the placeholder's empty text or missing image is a legitimate, renderable value, not an error state — the UI renders it with a shimmer instead of final content. The background compose job (`piece-generation` spec, "The AI drafts basic editable copy") clears `pending` to `false` on every piece it touches, whether it succeeded or gave up; `pending` is never removed from the schema, only flipped. A piece already marked `pending: false` on disk, or one the user has since `pinned`, MUST NOT be overwritten by that job — see "Per-piece pinning" below and the job's own re-read-before-write rule.
+
 #### Scenario: Reorder layers
 - **WHEN** the user moves a figure above the headline in the layers panel
 - **THEN** the `objects` array changes order and the render paints it on top
+
+#### Scenario: Placeholder still valid
+- **WHEN** a carousel is created and its AI-bound pieces are still `pending: true`
+- **THEN** the document validates and renders immediately, with those pieces showing a shimmer instead of final text or an image
 
 ### Requirement: Colors only by brand key
 The document MUST NOT contain hex values. Every piece color SHALL be a `brand.colors` key; roles from `brand.roles` are resolved by the template for zones and defaults. An import or edit that tries to write a hex value MUST be rejected.

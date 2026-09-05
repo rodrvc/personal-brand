@@ -76,7 +76,7 @@
 }
 
 .carousel-open-link {
-  color: var(--ui-p600);
+  color: var(--ui-accent-ink);
   font-weight: 600;
   text-decoration: none;
 }

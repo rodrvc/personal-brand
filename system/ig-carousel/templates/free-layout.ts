@@ -140,6 +140,14 @@ function renderAssetObject(object: ResolvedObject, ctx: FreeLayoutRenderContext)
     `display: block`,
   ].join("; ");
 
+  // No `assetId` yet: this is a pending placeholder (immediate-build
+  // compose flow) awaiting AI generation. Render an empty box instead of an
+  // `<img>` with nothing to point at — the editor overlays its own shimmer
+  // on top of `[data-object-id]` elements regardless of what's inside.
+  if (!content.assetId) {
+    return `<div class="obj obj-asset obj-asset-pending" data-object-id="${escapeHtml(object.id)}" style="${wrapperStyle}"></div>`;
+  }
+
   return `<div class="obj obj-asset" data-object-id="${escapeHtml(object.id)}" style="${wrapperStyle}"><img src="${escapeHtml(
     ctx.assetUrl(content.assetId),
   )}" style="${imgStyle}" /></div>`;

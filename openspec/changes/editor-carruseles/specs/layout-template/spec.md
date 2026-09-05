@@ -1,7 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Layout template with an engine default and a brand override
-A layout template SHALL be a JSON with `id`, `canvas`, `zones` (locked zones) and `slides` (slots by slide type). Defaults SHALL live in `system/ig-carousel/layouts/<id>.json` and MUST NOT contain hex colors, copy or names: only geometry, `brand.json` roles and copy keys. A brand SHALL be able to override any part in `profiles/<slug>/templates/<id>.json` by deep partial merge. The resolved result is validated against a schema and fails naming the invalid key.
+A layout template SHALL be a JSON with `id`, `canvas`, `zones` (locked zones), `slides` (slots by slide type) and an optional `defaultSlideCount` (a positive integer). Defaults SHALL live in `system/ig-carousel/layouts/<id>.json` and MUST NOT contain hex colors, copy or names: only geometry, `brand.json` roles and copy keys. A brand SHALL be able to override any part in `profiles/<slug>/templates/<id>.json` by deep partial merge. The resolved result is validated against a schema and fails naming the invalid key.
+
+`defaultSlideCount` is the template's own fallback for how many step slides a freshly composed carousel gets when the prompt doesn't name a count and the caller doesn't pass one explicitly (piece-generation spec's composition plan step-count resolution). A template with no `defaultSlideCount` at all falls back to the engine's own absolute default.
+
+#### Scenario: Prompt names no slide count
+- **WHEN** a carousel is created with a prompt that doesn't say how many slides, no explicit `slideCount`, and a template declaring `defaultSlideCount: 6`
+- **THEN** the composed carousel gets 6 step slides (plus cover and closing)
 
 #### Scenario: Partial override
 - **WHEN** the profile declares only `zones.footer.height: 140`

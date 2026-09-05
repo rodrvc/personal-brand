@@ -36,7 +36,12 @@ export interface ResolvedObject {
         colorRole?: string;
         colorKey?: string;
       }
-    | { kind: "asset"; assetId: string; fit: AssetObject["fit"] };
+    // `assetId` is optional here for the same reason it's optional on
+    // `AssetObject` (carousel-document.ts): a `pending: true` placeholder
+    // created by the immediate-build compose flow has no image yet. The
+    // renderer (templates/free-layout.ts) treats a missing `assetId` as an
+    // empty placeholder box rather than throwing.
+    | { kind: "asset"; assetId?: string; fit: AssetObject["fit"] };
 }
 
 export interface ResolvedSlide {

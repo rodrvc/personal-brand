@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { exportCarousel, getExportJob } from "../api/client";
+import { ApiError, exportCarousel, getExportJob } from "../api/client";
 import type { ExportJob } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
@@ -16,15 +16,33 @@ const POLL_MS = 800;
 export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
   const [job, setJob] = useState<ExportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Set only when the server refused with 409 (pieces still pending) —
+  // shows the "Exportar igual" override instead of the plain error text.
+  const [pendingWarning, setPendingWarning] = useState(false);
   const started = useRef(false);
+
+  const startExport = useCallback(
+    (allowPending: boolean) => {
+      setError(null);
+      setPendingWarning(false);
+      exportCarousel(slug, carouselId, { allowPending })
+        .then(({ jobId }) => setJob({ jobId, slug, carouselId, status: "queued" }))
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            setPendingWarning(true);
+            return;
+          }
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    },
+    [slug, carouselId],
+  );
 
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    exportCarousel(slug, carouselId)
-      .then(({ jobId }) => setJob({ jobId, slug, carouselId, status: "queued" }))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [slug, carouselId]);
+    startExport(false);
+  }, [startExport]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -44,23 +62,42 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
       title="Exportar carrusel"
       onClose={onClose}
       actions={
-        <Button variant="primary" onClick={onClose}>
-          Cerrar
-        </Button>
+        pendingWarning ? (
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button variant="primary" onClick={() => startExport(true)}>
+              Exportar igual
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" onClick={onClose}>
+            Cerrar
+          </Button>
+        )
       }
     >
-      {error && <p style={{ color: "var(--ui-danger)" }}>{error}</p>}
-      {!error && !job && <p>Encolando exportación…</p>}
-      {!error && job && job.status !== "done" && job.status !== "error" && (
+      {pendingWarning && (
+        <p style={{ color: "var(--ui-warn)" }}>
+          Todavía hay piezas generándose en segundo plano. Si exportás ahora, el PNG puede salir con texto vacío o
+          sin imagen en esas piezas.
+        </p>
+      )}
+      {!pendingWarning && error && <p style={{ color: "var(--ui-danger)" }}>{error}</p>}
+      {!pendingWarning && !error && !job && <p>Encolando exportación…</p>}
+      {!pendingWarning && !error && job && job.status !== "done" && job.status !== "error" && (
         <p>Exportando ({job.status})…</p>
       )}
-      {!error && job?.status === "done" && (
+      {!pendingWarning && !error && job?.status === "done" && (
         <p>
           Exportación lista{job.version !== undefined ? ` · versión v${job.version}` : ""}. Los PNG quedan en{" "}
           <code>outputs/</code> dentro del perfil.
         </p>
       )}
-      {!error && job?.status === "error" && <p style={{ color: "var(--ui-danger)" }}>{job.error}</p>}
+      {!pendingWarning && !error && job?.status === "error" && (
+        <p style={{ color: "var(--ui-danger)" }}>{job.error}</p>
+      )}
     </Modal>
   );
 }

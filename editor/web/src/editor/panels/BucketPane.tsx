@@ -26,7 +26,8 @@ function usedAssetIds(doc: CarouselDocument): Set<string> {
   for (const slide of doc.slides) {
     if (slide.background.mode === "asset") ids.add(slide.background.assetId);
     for (const object of slide.objects) {
-      if (object.kind === "asset") ids.add(object.assetId);
+      // A `pending: true` asset object may have no `assetId` yet (immediate-build compose flow's placeholder).
+      if (object.kind === "asset" && object.assetId) ids.add(object.assetId);
     }
   }
   return ids;

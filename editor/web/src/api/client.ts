@@ -3,11 +3,14 @@ import type {
   BrandTokens,
   CarouselDocument,
   CarouselSummary,
+  ComposeJobStatus,
   CompositionPlanResponse,
   ContrastMeasurement,
+  CreateCarouselResponse,
   ExportJob,
   LayoutTemplate,
   OutputVersion,
+  ProfileListingEntry,
   StatsResponse,
 } from "./types";
 
@@ -41,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function listProfiles(): Promise<{ profiles: string[] }> {
+export function listProfiles(): Promise<{ profiles: ProfileListingEntry[] }> {
   return request("/profiles");
 }
 
@@ -74,21 +77,43 @@ export function putCarousel(
   });
 }
 
+/**
+ * Immediate-build creation (editor-ui spec's "Composition from the
+ * prompt"): the returned document is already real and persisted — no
+ * plan-approval step. `jobId` is for `getComposeJob` polling while pending
+ * placeholders are filled in the background.
+ */
 export function createCarouselFromPrompt(
   slug: string,
-  body: { prompt: string; templateId?: string; id?: string },
-): Promise<CompositionPlanResponse> {
+  body: { prompt: string; templateId?: string; id?: string; assetIds?: string[] },
+): Promise<CreateCarouselResponse> {
   return request(`/profiles/${slug}/carousels`, {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
 
+/** API/script-only preview mode (`?mode=plan`): returns a plan without creating a document. Not called by editor/web — see routes/compose.ts's comment on why it's kept. */
+export function previewCompositionPlan(
+  slug: string,
+  body: { prompt: string; templateId?: string; id?: string; slideCount?: number },
+): Promise<CompositionPlanResponse> {
+  return request(`/profiles/${slug}/carousels?mode=plan`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** API/script-only: executes a plan previously created via `previewCompositionPlan`. Not called by editor/web. */
 export function applyPlan(slug: string, carouselId: string, templateId?: string): Promise<CarouselDocument> {
   return request(`/profiles/${slug}/carousels/${carouselId}/plan/apply`, {
     method: "POST",
     body: JSON.stringify(templateId ? { templateId } : {}),
   });
+}
+
+export function getComposeJob(slug: string, carouselId: string, jobId: string): Promise<ComposeJobStatus> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/compose/${jobId}`);
 }
 
 export interface RegenerateTarget {
@@ -156,8 +181,21 @@ export function assetFileUrl(slug: string, relPathUnderAssets: string): string {
   return `/api/profiles/${slug}/assets/files/${relPathUnderAssets}`;
 }
 
-export function exportCarousel(slug: string, carouselId: string): Promise<{ jobId: string }> {
-  return request(`/profiles/${slug}/carousels/${carouselId}/export`, { method: "POST" });
+/**
+ * `allowPending: true` overrides the server's refusal (409) to export while
+ * the carousel still has a piece the background compose job hasn't filled
+ * in yet — ExportDialog sends it only after the user picks "Exportar
+ * igual" in response to that 409.
+ */
+export function exportCarousel(
+  slug: string,
+  carouselId: string,
+  options?: { allowPending?: boolean },
+): Promise<{ jobId: string }> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/export`, {
+    method: "POST",
+    body: JSON.stringify({ allowPending: options?.allowPending === true }),
+  });
 }
 
 export function getExportJob(slug: string, carouselId: string, jobId: string): Promise<ExportJob> {

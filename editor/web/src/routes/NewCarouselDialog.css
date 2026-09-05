@@ -27,12 +27,34 @@
 .ui-input:focus {
   outline: none;
   border-color: var(--ui-p400);
-  box-shadow: 0 0 0 3px var(--ui-p50);
+  box-shadow: 0 0 0 3px var(--ui-accent-soft);
 }
 
 .new-carousel-error {
   color: var(--ui-danger);
   font-size: 12px;
+}
+
+.new-carousel-assets {
+  font-size: 11px;
+  color: var(--ui-ink-3);
+}
+
+.new-carousel-assets summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--ui-ink-2);
+}
+
+.new-carousel-assets .new-carousel-label {
+  margin-top: 8px;
+}
+
+.new-carousel-hint {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--ui-ink-3);
+  line-height: 1.4;
 }
 
 .plan-preview {
@@ -98,5 +120,5 @@
 
 .plan-origin.generate {
   background: var(--ui-accent-soft);
-  color: var(--ui-p600);
+  color: var(--ui-accent-ink);
 }

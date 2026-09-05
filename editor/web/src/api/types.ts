@@ -30,6 +30,12 @@ export interface CarouselSummary {
   slideCount: number;
 }
 
+export interface ProfileListingEntry {
+  slug: string;
+  /** False when the profile has no `brand.json` yet — the picker shows it disabled with a hint instead of letting it fail once opened. */
+  hasBrand: boolean;
+}
+
 export type AssetKind = "background" | "character" | "photo" | "logo" | "decoration" | "unclassified";
 export type AssetStatus = "candidate" | "approved" | "hidden";
 
@@ -85,6 +91,25 @@ export interface CompositionPlanResponse {
   estimatedCostCents: number;
   libraryPieces: number;
   generatedPieces: number;
+}
+
+/** Response from the immediate-build `POST /carousels` (editor-ui spec's "Composition from the prompt": no plan-approval step) — the document is already real and persisted; `jobId` lets the caller poll the background compose job that fills in its `pending` placeholders. */
+export interface CreateCarouselResponse {
+  document: CarouselDocument;
+  jobId: string;
+}
+
+/** Mirrors the server's `ComposeJob` shape (editor/server/src/compose/compose-job.ts). */
+export interface ComposeJobStatus {
+  id: string;
+  slug: string;
+  carouselId: string;
+  status: "queued" | "running" | "done" | "error" | "skipped";
+  message?: string;
+  totalPieces: number;
+  completedPieces: number;
+  costCentsSoFar: number;
+  counts: { fromLibrary: number; generated: number; drafted: number };
 }
 
 export interface OutputVersion {

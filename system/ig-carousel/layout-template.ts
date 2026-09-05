@@ -98,6 +98,12 @@ const layoutTemplateSchema = z.object({
   }),
   zones: zonesSchema,
   slides: z.record(slideKindSchema, z.object({ slots: z.array(slotSchema) })),
+  // Number of `step` slides to compose when the prompt names no explicit
+  // count (piece-generation spec's "the slide count is editable
+  // afterward"; editor-ui's "Composition from the prompt"). Optional so an
+  // older or minimal template still validates — callers fall back to a
+  // hardcoded default (3) when it's absent.
+  defaultSlideCount: z.number().int().positive().optional(),
 });
 
 export type LayoutTemplate = z.infer<typeof layoutTemplateSchema>;

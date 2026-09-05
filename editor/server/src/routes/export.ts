@@ -3,7 +3,13 @@ import { Router } from "express";
 import { renderCarouselDocument } from "../../../../system/ig-carousel/render-batch.js";
 
 import { DocumentStoreError } from "../document-store.js";
-import { enqueueExport, getExportJob, listOutputVersions, type RenderFn } from "../export/export-queue.js";
+import {
+  enqueueExport,
+  ExportHasPendingPiecesError,
+  getExportJob,
+  listOutputVersions,
+  type RenderFn,
+} from "../export/export-queue.js";
 import { getSharedBrowser } from "../browser.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
 
@@ -18,9 +24,14 @@ export function exportRouter(): Router {
   router.post("/api/profiles/:slug/carousels/:id/export", (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
-      const jobId = enqueueExport(store, req.params.id, productionRender);
+      const allowPending = (req.body as { allowPending?: boolean } | undefined)?.allowPending === true;
+      const jobId = enqueueExport(store, req.params.id, productionRender, { allowPending });
       res.status(202).json({ jobId });
     } catch (error) {
+      if (error instanceof ExportHasPendingPiecesError) {
+        res.status(409).json({ error: error.message });
+        return;
+      }
       const status =
         error instanceof ProfileStoreError || error instanceof DocumentStoreError ? 400 : 500;
       res.status(status).json({ error: (error as Error).message });
