@@ -46,7 +46,24 @@ writeFileSync(
   `outputs:\n  base_dir: "${outputsDir}"\n`,
 );
 
-const { ProfileStore, ProfileStoreError } = await import("./profile-store.js");
+// A profile whose directory under the profiles root is a symlink to a real
+// directory living elsewhere — the shape a symlinked `profiles/<slug>` takes
+// in the real repo (`profiles/<slug> -> ~/profiles/<slug>`), which the
+// `Dirent.isDirectory()` listing check used to drop silently since it
+// reflects the link's own type, not its target's.
+const LINKED_SLUG = "linked-brand";
+const linkedTargetDir = mkdtempSync(join(tmpdir(), "editor-server-linked-profile-"));
+mkdirSync(join(linkedTargetDir, "carousels"), { recursive: true });
+symlinkSync(linkedTargetDir, join(root, LINKED_SLUG));
+
+// A symlink inside that linked profile pointing outside its real root — must
+// still be rejected even though the profile root itself is a symlink.
+const linkedOutsideDir = mkdtempSync(join(tmpdir(), "editor-server-linked-outside-"));
+writeFileSync(join(linkedOutsideDir, "secret.txt"), "not yours either");
+mkdirSync(join(linkedTargetDir, "assets"), { recursive: true });
+symlinkSync(linkedOutsideDir, join(linkedTargetDir, "assets", "escape-link"));
+
+const { listProfiles, ProfileStore, ProfileStoreError } = await import("./profile-store.js");
 
 const tests: Array<[string, () => void]> = [
   [
@@ -119,6 +136,30 @@ const tests: Array<[string, () => void]> = [
       assert.ok(!existsSync(join(root, "..", "pwned")));
     },
   ],
+  [
+    "a profile dir that is a symlink to a directory outside the repo is listed, and reads/writes land in the target",
+    () => {
+      assert.ok(listProfiles().some((p) => p.slug === LINKED_SLUG));
+
+      const store = new ProfileStore(LINKED_SLUG);
+      store.writeJson("carousels/demo/carousel.json", { hello: "linked" });
+      const read = store.readJson<{ hello: string }>("carousels/demo/carousel.json");
+      assert.equal(read.hello, "linked");
+      assert.ok(existsSync(join(linkedTargetDir, "carousels", "demo", "carousel.json")));
+    },
+  ],
+  [
+    "a symlink inside a symlinked profile pointing outside its real root is still rejected",
+    () => {
+      const store = new ProfileStore(LINKED_SLUG);
+      assert.throws(() => store.readFile("assets/escape-link/secret.txt"), ProfileStoreError);
+      assert.throws(
+        () => store.writeFile("assets/escape-link/written-through-escape.txt", "nope"),
+        ProfileStoreError,
+      );
+      assert.ok(!existsSync(join(linkedOutsideDir, "written-through-escape.txt")));
+    },
+  ],
 ];
 
 let failed = 0;
@@ -137,6 +178,8 @@ rmSync(root, { recursive: true, force: true });
 rmSync(fakeSystemDir, { recursive: true, force: true });
 rmSync(outsideDir, { recursive: true, force: true });
 rmSync(outputsDir, { recursive: true, force: true });
+rmSync(linkedTargetDir, { recursive: true, force: true });
+rmSync(linkedOutsideDir, { recursive: true, force: true });
 
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed.`);

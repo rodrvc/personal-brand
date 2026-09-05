@@ -41,3 +41,18 @@
   color: var(--ui-head);
   box-shadow: var(--ui-shadow-sm);
 }
+
+.picker-card-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.picker-card-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ui-ink-3);
+}

@@ -35,7 +35,7 @@
   padding: 4px 12px 4px 5px;
   border-radius: var(--ui-radius-pill);
   background: var(--ui-accent-soft);
-  border: 1px solid var(--ui-p200);
+  border: 1px solid var(--ui-accent-line);
 }
 
 .topbar-brand-dot {
@@ -49,7 +49,7 @@
 .topbar-brand-name {
   font-size: 12px;
   font-weight: 600;
-  color: var(--ui-p700);
+  color: var(--ui-accent-ink);
 }
 
 .topbar-title {

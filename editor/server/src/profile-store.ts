@@ -4,6 +4,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
@@ -225,11 +226,39 @@ export class ProfileStore {
   }
 }
 
-export function listProfiles(): string[] {
+/**
+ * True when `entry` (a top-level child of the profiles root) is a directory
+ * — following one level of symlink if `entry` itself is one. A real profile
+ * lives outside the repo (see `resolveProfilesRoot`'s doc comment) and is
+ * linked in as `profiles/<slug> -> /path/to/it`; `Dirent.isDirectory()`
+ * reports the *link's* type, not its target's, so a symlinked profile would
+ * otherwise be silently dropped from the listing. `statSync` (which follows
+ * symlinks, unlike `lstatSync`) gives the target's type instead. A dangling
+ * symlink makes `statSync` throw, which is treated as "not a directory"
+ * rather than a listing failure.
+ */
+function isProfileDirectory(root: string, entry: Dirent): boolean {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return statSync(join(root, entry.name)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export interface ProfileListingEntry {
+  slug: string;
+  /** False when the profile directory has no `brand.json` yet — the route layer (profiles.ts) uses this to disable it in the picker rather than let every other endpoint fail on it one at a time. */
+  hasBrand: boolean;
+}
+
+/** Every profile directory under the profiles root, flagging which ones are missing `brand.json` (editor-api spec's brand-missing handling) rather than throwing — a profile mid-setup should still show up, just disabled. */
+export function listProfiles(): ProfileListingEntry[] {
   const root = resolveProfilesRoot();
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && SLUG.test(entry.name))
-    .map((entry) => entry.name)
-    .sort();
+    .filter((entry) => SLUG.test(entry.name) && isProfileDirectory(root, entry))
+    .map((entry) => ({ slug: entry.name, hasBrand: existsSync(join(root, entry.name, "brand.json")) }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
 }

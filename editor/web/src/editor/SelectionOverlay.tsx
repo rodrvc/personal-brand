@@ -217,7 +217,7 @@ export function SelectionOverlay({
       {zoneBoxes.map((zone) => (
         <div
           key={zone.id}
-          className="overlay-zone"
+          className={`overlay-zone ${zone.label === "background" && slide.background.pending ? "pending" : ""}`}
           style={{ left: zone.x * scale, top: zone.y * scale, width: zone.w * scale, height: zone.h * scale }}
         >
           <span className="overlay-zone-label">{zone.label.toUpperCase()}</span>
@@ -250,7 +250,7 @@ export function SelectionOverlay({
         return (
           <div
             key={object.id}
-            className={`overlay-object ${isSelected ? "selected" : ""} ${object.pinned ? "pinned" : ""}`}
+            className={`overlay-object ${isSelected ? "selected" : ""} ${object.pinned ? "pinned" : ""} ${object.pending ? "pending" : ""}`}
             style={{
               left: box.x * scale,
               top: box.y * scale,

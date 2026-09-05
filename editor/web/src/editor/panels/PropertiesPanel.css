@@ -166,7 +166,7 @@
 
 .layer-row.on {
   background: var(--ui-accent-soft);
-  color: var(--ui-p700);
+  color: var(--ui-accent-ink);
   font-weight: 600;
 }
 
@@ -231,7 +231,7 @@
 
 .origin-badge.ai {
   background: var(--ui-accent-soft);
-  color: var(--ui-p600);
+  color: var(--ui-accent-ink);
 }
 
 .origin-badge.manual {
@@ -247,12 +247,12 @@
   color: var(--ui-ink-2);
   padding: 8px 10px;
   background: var(--ui-accent-soft);
-  border: 1px solid var(--ui-p200);
+  border: 1px solid var(--ui-accent-line);
   border-radius: var(--ui-radius-sm);
 }
 
 .bucket-path b {
-  color: var(--ui-p700);
+  color: var(--ui-accent-ink);
   font-weight: 600;
   font-family: var(--ui-mono);
   font-size: 11px;
@@ -317,7 +317,7 @@
   left: 3px;
   font-size: 8px;
   font-weight: 600;
-  background: rgb(255 255 255 / 0.94);
+  background: var(--ui-overlay-badge-soft);
   color: var(--ui-g700);
   padding: 1px 4px;
   border-radius: 4px;
@@ -329,7 +329,7 @@
   right: 3px;
   font-size: 7.5px;
   font-weight: 700;
-  background: rgb(255 255 255 / 0.94);
+  background: var(--ui-overlay-badge-soft);
   color: var(--ui-p600);
   padding: 1px 4px;
   border-radius: 4px;
@@ -382,8 +382,8 @@
 }
 
 .output-copy-btn:hover {
-  background: var(--ui-p50);
-  color: var(--ui-p600);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-ink);
 }
 
 .upload-dropzone {
@@ -400,7 +400,7 @@
 .upload-dropzone.dragover {
   border-color: var(--ui-accent);
   color: var(--ui-accent);
-  background: var(--ui-p50);
+  background: var(--ui-accent-soft);
 }
 
 .contrast-row {

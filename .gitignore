@@ -87,3 +87,13 @@ app/src-tauri/gen/
 # ahí vive en system/skills/*/references/, sin marca.
 docs/referencia/
 docs/CONTEXTO-FEATURE-VOZ.md
+# editor/: caches and per-session artifacts the fixture profiles pick up
+# just from running the test suite or opening the app against them. All
+# rebuildable — index.json is regenerated from the files on disk
+# (system/assets/index.ts), meta/ is per-asset sidecars derived the same
+# way, and carousels/*/versions/ is document snapshots the editor writes
+# before a destructive operation. Without this, `pnpm test` against
+# profiles/example*/ leaves the fixture dirty in `git status`.
+profiles/example*/assets/index.json
+profiles/example*/assets/meta/
+profiles/example*/carousels/*/versions/

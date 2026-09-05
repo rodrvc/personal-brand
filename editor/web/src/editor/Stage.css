@@ -146,5 +146,5 @@
 .stage-add-thumb:hover {
   border-color: var(--ui-accent);
   color: var(--ui-accent);
-  background: var(--ui-p50);
+  background: var(--ui-accent-soft);
 }
