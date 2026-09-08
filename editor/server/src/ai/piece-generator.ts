@@ -16,9 +16,25 @@ export interface DraftCopyPlanSlide {
   limits: { headline: number; body?: number };
 }
 
+/**
+ * Brand-voice context injected into every `draftCopy` call (piece-generation
+ * spec's "Brand style context in every generation"), sourced from
+ * `system/ig-carousel/brand-style.ts`'s `loadBrandStyle`. Every field is
+ * optional — a profile with no style files still drafts copy, just without
+ * this steering.
+ */
+export interface DraftCopyBrandContext {
+  toneStyle: string[];
+  toneAvoid: string[];
+  positioning?: string;
+  /** e.g. "es" — the copy must be written in this language. */
+  language?: string;
+}
+
 export interface DraftCopyPlan {
   carouselPrompt: string;
   slides: DraftCopyPlanSlide[];
+  brand?: DraftCopyBrandContext;
 }
 
 export interface DraftedSlideCopy {
@@ -34,12 +50,28 @@ export interface DraftCopyResult {
   costCents: number;
 }
 
+/**
+ * Brand-voice context injected into every `generateImage` call (same spec
+ * requirement as `DraftCopyBrandContext`). `paletteWords` and
+ * `styleKeywords` are already brand-agnostic prose by the time they reach
+ * here — `paletteWords` never carries a hex value, only words derived from
+ * one (`core/color.js`'s `describePaletteInWords`).
+ */
+export interface GenerateImageBrandContext {
+  imageDirection?: string;
+  styleKeywords: string[];
+  /** e.g. "a warm palette of amber and cream" — never a raw hex. */
+  paletteWords?: string;
+  logoRules?: string;
+}
+
 export interface GenerateImageSpec {
   /** Plain description of the desired background/figure/decoration. MUST NOT ask for text — the caller (planner) is responsible for stripping any headline/body wording out of this before it reaches here. */
   prompt: string;
   kind: "background" | "character" | "photo" | "decoration";
   /** Target canvas the image will be placed into, for aspect-ratio guidance only — the provider is not asked to crop precisely. */
   canvas: { w: number; h: number };
+  brand?: GenerateImageBrandContext;
 }
 
 export interface GeneratedImage {

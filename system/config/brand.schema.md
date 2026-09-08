@@ -114,6 +114,43 @@ El `.md` es la fuente de verdad: es el único que puede explicar *por qué* un
 color es el que es. El `.json` es su forma compilada. Al cambiar algo, se
 edita primero el `.md` y luego se refleja en el `.json`.
 
+## Qué secciones de `brand-spec.md` lee el editor
+
+El editor (`system/ig-carousel/brand-style.ts`, `loadBrandStyle()`) inyecta
+esta guía de marca en cada prompt de generación (copy e imagen) y la muestra
+de forma read-only en su pestaña "Marca". No parsea el `.md` como una
+gramática fija: busca **encabezados cuyo texto contenga** ciertas palabras
+clave (en español o inglés, sin distinguir mayúsculas) y toma el cuerpo de
+esa sección — hasta el siguiente encabezado del mismo nivel o superior —
+como texto libre para el prompt.
+
+| Encabezado (ejemplos que calzan) | Campo resultante | Para qué se usa |
+|---|---|---|
+| `## Estilo visual`, `## Dirección de imagen`, `## Foto`, `## Photo` | `imageDirection` | se agrega al prompt de `generateImage` |
+| `## Posicionamiento`, `## Identidad`, `## Dirección de marca` | `positioning` | se agrega al prompt de `draftCopy` |
+| `## Logo` | `logoRules` | reemplaza el "never draw text or logos" por defecto si el perfil documenta su propia regla |
+| `## Vibe keywords`, `## Tono`, `## Palabras clave` | `styleKeywords` | una lista (por línea o separada por comas) que se muestra como chips y se agrega al prompt de imagen |
+
+Un encabezado bien específico importa: la palabra suelta "dirección" cuenta
+para `positioning` solo como "Dirección de marca" — un "## Dirección de
+imagen" siempre resuelve a `imageDirection`, nunca a `positioning`, porque
+ambos podrían calzar con un patrón más laxo. Igual de deliberado: "estilo"
+solo, sin "vibe"/"tono"/"palabras clave", no basta para `styleKeywords` —
+"Estilo visual" es `imageDirection`, no una lista de keywords.
+
+`profile.md` se lee igual, como respaldo: solo llena `positioning` /
+`imageDirection` si `brand-spec.md` no los trajo ya. `config.yaml` aporta
+`tone.style` / `tone.avoid` (ya documentados arriba) con el mismo parser
+mínimo por regex que usa `outputs.*` — sin dependencia de YAML.
+
+Cada campo se recorta a ~1500 caracteres (por límite de párrafo cuando se
+puede) porque va directo a un prompt, no a una vista para humanos. Un
+perfil sin ninguno de estos encabezados no falla: `loadBrandStyle()` nunca
+lanza, solo devuelve campos vacíos — la pestaña "Marca" del editor muestra
+entonces "Esta marca no tiene guía de estilo todavía" nombrando los
+archivos a crear. Ver `profiles/example/brand-spec.md` para un ejemplo
+completo y ficticio de las cuatro secciones.
+
 ## Estructura de `brand.json`
 
 ```json

@@ -127,3 +127,15 @@ export interface ExportJob {
   error?: string;
   version?: number;
 }
+
+/** Mirrors `system/ig-carousel/brand-style.ts`'s `BrandStyle` — the read-only guide shown in the "Marca" tab. */
+export interface BrandStyle {
+  palette: Array<{ key: string; hex: string; role?: string }>;
+  fonts: { logo?: string; body?: string; handwritten?: string };
+  styleKeywords: string[];
+  tone: { style: string[]; avoid: string[] };
+  positioning?: string;
+  imageDirection?: string;
+  logoRules?: string;
+  sources: string[];
+}

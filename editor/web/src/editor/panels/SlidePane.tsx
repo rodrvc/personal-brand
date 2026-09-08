@@ -158,6 +158,7 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
             estimatedCostCents={pricing}
             onSubmit={handleGenerateBackground}
             error={regenError}
+            previewTarget={{ slug, carouselId: doc.id, target: { slideId: slide.id, objectId: "background" } }}
           />
         )}
         {bgMode === "ai" && slide.background.pinned && (

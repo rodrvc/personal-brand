@@ -86,6 +86,23 @@ Generation SHALL be implemented behind a `PieceGenerator` interface with `draftC
 - **WHEN** `OPENAI_API_KEY` doesn't exist
 - **THEN** the editor opens, allows composing and exporting, and the generate buttons explain which variable is missing
 
+### Requirement: Brand style context in every generation
+Every `draftCopy` and `generateImage` call SHALL be steered by the profile's optional brand-style guide, loaded via `system/ig-carousel/brand-style.ts`'s `loadBrandStyle()` from whichever of `brand-spec.md`, `profile.md`, `config.yaml` and `brand.json` the profile actually has. `draftCopy` MUST receive the tone's `style`/`avoid` keywords, the positioning text and the profile's `primary_language`; `generateImage` MUST receive the image direction text, style keywords, a words-only description of the palette (never a raw hex value or the brand's name) and the logo rule (the brand's own, or "never draw text or logos" as a fallback). A profile with none of these files SHALL still generate normally, with an empty style — this MUST NOT throw or block generation. The exact prompt sent to the provider SHALL be logged at debug level, without the API key.
+
+When the user submits an empty prompt for an image (a fresh `awaitingImage` placeholder or a per-piece regenerate with a blank field), the system decides on its own: the composed prompt is the carousel prompt, the slot's name, and the brand's image direction — never a generic, brand-blind guess.
+
+#### Scenario: Profile with a full style guide
+- **WHEN** a profile has `brand-spec.md` with an "Estilo visual" section and `config.yaml` with `tone.style`
+- **THEN** `draftCopy`'s prompt includes the tone keywords and `generateImage`'s prompt includes the image-direction text and a palette description in words
+
+#### Scenario: Profile with no style files
+- **WHEN** a profile has no `brand-spec.md` and no `tone:` block in `config.yaml`
+- **THEN** `loadBrandStyle` returns an all-empty style, generation proceeds normally, and the prompt carries only the hard-coded fallback (e.g. "never draw text or logos")
+
+#### Scenario: Empty user text — the AI decides
+- **WHEN** the user opens "Generar imagen…" for a slot and submits with the prompt field left empty
+- **THEN** the server composes the prompt from the carousel prompt, the slot, and the brand's own image direction, and that composed prompt is what the provider receives
+
 ### Requirement: Color assignment from the palette
 When the AI creates text objects, the color SHALL be assigned by the slot's role (the template's `colorRole`) resolved to a `brand.colors` key, and contrast SHALL be checked against the real background with `core/color.js`; if it fails AA, the palette key with the best contrast is chosen instead. The AI MUST NOT invent colors.
 

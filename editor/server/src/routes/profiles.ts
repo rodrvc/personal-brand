@@ -4,6 +4,7 @@ import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { updateEntry } from "../../../../system/assets/index.js";
+import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
 import {
   documentExists,
@@ -61,6 +62,23 @@ export function profilesRouter(): Router {
         res.status(422).json({ error: `El perfil "${req.params.slug}" no tiene brand.json.` });
         return;
       }
+      handleStoreError(error, res);
+    }
+  });
+
+  /**
+   * The brand's optional style guide (piece-generation spec's "Brand style
+   * context in every generation"): palette/fonts/keywords/tone/positioning/
+   * image direction/logo rules, plus which files actually contributed —
+   * consumed by the web app's read-only "Marca" tab. Never 404s or 422s on
+   * a profile with no style files: an all-empty style with `sources: []` is
+   * a valid, expected answer (the UI shows "no hay guía todavía" for that).
+   */
+  router.get("/api/profiles/:slug/style", (req, res) => {
+    try {
+      const store = new ProfileStore(req.params.slug);
+      res.json(loadBrandStyle(store.roots.profileDir));
+    } catch (error) {
       handleStoreError(error, res);
     }
   });

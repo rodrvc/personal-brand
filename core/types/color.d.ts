@@ -40,3 +40,9 @@ export function checkFixedLogo(logoHex: string, bgHex: string): FixedLogoResult
 
 /** Tinta legible sobre un fondo: elige entre la tinta de marca y un fallback. */
 export function readableInk(bgHex: string, candidates?: string[]): ReadableInkResult
+
+/** [r,g,b] (0-255) -> [h,s,l] con h en grados (0-360) y s/l en 0-1. */
+export function rgbToHsl(rgb: RGB): [number, number, number]
+
+/** Describe una paleta de colores hex en palabras en inglés (p. ej. "a warm palette of amber and cream"), para un prompt de imagen. `undefined` si la lista está vacía o no trae hex válidos. */
+export function describePaletteInWords(hexes: string[]): string | undefined

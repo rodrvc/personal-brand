@@ -7,9 +7,16 @@ import type {
 } from "../../../../system/ig-carousel/carousel-document.js";
 import type { LayoutTemplate, LayoutSlot } from "../../../../system/ig-carousel/layout-template.js";
 import { hashContent, loadIndex, registerFile, type AssetEntry } from "../../../../system/assets/index.js";
-import { contrast, passesAA } from "@personal-brand/core/color";
+import { contrast, passesAA, describePaletteInWords } from "@personal-brand/core/color";
+import { loadBrandStyle, type BrandStyle } from "../../../../system/ig-carousel/brand-style.js";
+import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
 
-import type { PieceGenerator, DraftCopyPlanSlide } from "../ai/piece-generator.js";
+import type {
+  PieceGenerator,
+  DraftCopyPlanSlide,
+  DraftCopyBrandContext,
+  GenerateImageBrandContext,
+} from "../ai/piece-generator.js";
 import type { ProfileStore } from "../profile-store.js";
 
 /** Absolute fallback step count when a template declares no `defaultSlideCount` at all. */
@@ -332,7 +339,11 @@ export async function applyCompositionPlan(
   const uniqueBySlide = new Map<string, DraftCopyPlanSlide>();
   for (const s of draftPlanSlides) uniqueBySlide.set(s.slideId, s);
   const draftResult = uniqueBySlide.size > 0
-    ? await generator.draftCopy({ carouselPrompt: plan.promptText, slides: [...uniqueBySlide.values()] })
+    ? await generator.draftCopy({
+        carouselPrompt: plan.promptText,
+        slides: [...uniqueBySlide.values()],
+        brand: draftCopyBrandContext(loadBrandStyle(store.roots.profileDir), readProfilePrimaryLanguage(store.roots.profileDir)),
+      })
     : { slides: [], model: "none", costCents: 0 };
 
   const draftedBySlide = new Map(draftResult.slides.map((s) => [s.slideId, s]));
@@ -528,9 +539,50 @@ export function buildImmediateDocument(
  * is never automatic. Deliberately simple string composition, not an AI
  * call itself: the actual generation only happens when the user submits
  * (possibly edited) this same shape of prompt via the per-piece endpoint.
+ *
+ * When `style` is given, its `imageDirection` is folded in too — this is
+ * what "the AI decides" means when the user leaves the field empty (owner
+ * feedback): the suggestion is not just the bare carousel prompt, it is the
+ * carousel prompt + this slot + the brand's own image direction, so an
+ * unedited submit still reflects the brand, not a generic guess.
  */
-export function suggestionForSlot(carouselPrompt: string, slot: string): string {
-  return `${carouselPrompt} — ${slot}`;
+export function suggestionForSlot(carouselPrompt: string, slot: string, style?: BrandStyle): string {
+  const base = `${carouselPrompt} — ${slot}`;
+  return style?.imageDirection ? `${base}. ${style.imageDirection}` : base;
+}
+
+/**
+ * Turns the engine's `BrandStyle` (piece-generation spec's "Brand style
+ * context in every generation") plus the profile's `primary_language` into
+ * the shape `draftCopy` consumes. Kept here rather than inside
+ * `brand-style.ts` because the target shape (`DraftCopyBrandContext`) is an
+ * editor/AI concept, not an engine one.
+ */
+export function draftCopyBrandContext(style: BrandStyle, language: string | undefined): DraftCopyBrandContext {
+  return {
+    toneStyle: style.tone.style,
+    toneAvoid: style.tone.avoid,
+    positioning: style.positioning,
+    language,
+  };
+}
+
+/**
+ * Turns `BrandStyle` into the shape `generateImage` consumes: `paletteWords`
+ * is derived from the hex values via `describePaletteInWords` (never a raw
+ * hex reaching the prompt), and `logoRules` falls back to the hard "never
+ * draw text or logos" instruction when the brand hasn't documented its own
+ * — `openai.ts` applies that same fallback, this mirrors it so a caller
+ * inspecting the context (e.g. the "Ver prompt final" preview) sees the
+ * actual rule that will be used.
+ */
+export function generateImageBrandContext(style: BrandStyle): GenerateImageBrandContext {
+  return {
+    imageDirection: style.imageDirection,
+    styleKeywords: style.styleKeywords,
+    paletteWords: describePaletteInWords(style.palette.map((p) => p.hex)),
+    logoRules: style.logoRules || "Never draw text or logos.",
+  };
 }
 
 /**
@@ -545,7 +597,11 @@ export async function generateForSlot(
 ): Promise<AssetEntry> {
   const generateKind =
     spec.kind === "font" || spec.kind === "logo" || spec.kind === "unclassified" ? "background" : spec.kind;
-  const image = await generator.generateImage({ prompt: spec.prompt, kind: generateKind, canvas: spec.canvas });
+  // Brand style is loaded fresh per call (cheap: a handful of small file
+  // reads, no caching needed) rather than threaded through every route call
+  // site — this is the one place every image generation funnels through.
+  const brand = generateImageBrandContext(loadBrandStyle(store.roots.profileDir));
+  const image = await generator.generateImage({ prompt: spec.prompt, kind: generateKind, canvas: spec.canvas, brand });
   // registerFile identifies the file by its own content hash (design.md
   // D7's `assets/generated/<hash>.<ext>`); this file's destination path
   // must be derived from that same hash, not an unrelated random id, so a

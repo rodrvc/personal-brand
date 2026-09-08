@@ -64,6 +64,17 @@ SHALL show the slide's type (cover, step, closing), the template's locked struct
 - **WHEN** the user picks "Color" and a swatch
 - **THEN** the background becomes `{mode:'color', colorKey}`, the contrast is recalculated, and it is shown
 
+### Requirement: "Marca" tab
+The properties panel SHALL offer a fourth, read-only tab "Marca" (alongside "Selección" / "Bucket" / "Lámina") showing the brand-style guide the server folds into every generation: palette swatches with each color's key and role, fonts (rendered in their own face where the face is available), style keywords as chips, tone ("estilo"/"evitar"), positioning text, image-direction text, logo rules, and a "Fuentes:" line naming which of `brand-spec.md`/`profile.md`/`config.yaml`/`brand.json` actually contributed something, with a hint (in Spanish) that this is edited in the profile's own files — the editor only consumes the brand, never writes it. A profile with none of these files SHALL show "Esta marca no tiene guía de estilo todavía" naming the files to create, instead of an empty panel.
+
+#### Scenario: Brand with a style guide
+- **WHEN** the user opens the "Marca" tab for a profile with a `brand-spec.md` and a `tone:` block
+- **THEN** they see the palette, keywords, tone and positioning read from those files, plus "Fuentes: brand-spec.md, config.yaml"
+
+#### Scenario: Brand with no style files yet
+- **WHEN** the user opens the "Marca" tab for a profile with only `brand.json`
+- **THEN** they see the palette (from `brand.json`) and, for everything else, "Esta marca no tiene guía de estilo todavía" naming `brand-spec.md`/`profile.md`/`config.yaml`
+
 ### Requirement: Composition from the prompt
 The new-carousel screen SHALL ask for the prompt, the brand, the template, and optionally library pieces to use, with a single "Crear" action and no mandatory plan-approval step. Submitting SHALL take the user directly into the editor at `/:slug/carousels/:id`: the carousel already exists as a document — every library-sourced piece placed, every piece that needs AI standing in as a `pending` placeholder — and composition continues in the background from there. Slide count is not a field on this screen: it is read from an explicit number in the prompt (e.g. "en 4 pasos", "6 láminas") when present, or otherwise from the template's own default. The prompt header SHALL show ongoing progress ("Generando... X/Y piezas") and the accumulated cost while the background composition runs, and SHALL surface an error or a "no AI configured" message inline, in Spanish, rather than swallowing it. A read-only plan view remains available on demand, never blocking, via a "Ver plan" control in the prompt header. "Regenerar lo no fijado" from the header SHALL respect pinned pieces and warn how many it's about to touch.
 

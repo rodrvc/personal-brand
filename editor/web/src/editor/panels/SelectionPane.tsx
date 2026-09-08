@@ -99,6 +99,7 @@ function VisualGenerateControl({
       estimatedCostCents={estimatedCostCents}
       onSubmit={handleSubmit}
       error={error}
+      previewTarget={{ slug, carouselId: doc.id, target }}
     />
   );
 }

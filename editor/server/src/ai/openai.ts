@@ -42,6 +42,40 @@ const COPY_SYSTEM_PROMPT = [
 const NO_TEXT_INSTRUCTION =
   "Do not include any letters, words, numbers, or text of any kind in the image. No logos, no watermarks, no typography. Purely visual: background, characters, or decorative shapes only.";
 
+/**
+ * Logs the final prompt actually sent to the provider, gated behind
+ * `DEBUG_AI_PROMPTS` (never the API key) — piece-generation spec's "Brand
+ * style context in every generation" asks for this to be inspectable
+ * without printing it unconditionally on every call.
+ */
+function logPrompt(label: string, prompt: string): void {
+  if (process.env.DEBUG_AI_PROMPTS !== "1") return;
+  // eslint-disable-next-line no-console
+  console.debug(`[ai:${label}]`, prompt);
+}
+
+/** Turns a `DraftCopyBrandContext` into the extra system-prompt lines steering tone, positioning and language — omits any clause whose field is empty rather than emitting a hollow instruction. */
+function brandContextForCopy(brand?: DraftCopyPlan["brand"]): string {
+  if (!brand) return "";
+  const lines: string[] = [];
+  if (brand.toneStyle.length > 0) lines.push(`Write in this tone: ${brand.toneStyle.join(", ")}.`);
+  if (brand.toneAvoid.length > 0) lines.push(`Avoid: ${brand.toneAvoid.join(", ")}.`);
+  if (brand.positioning) lines.push(`Brand positioning/context: ${brand.positioning}`);
+  if (brand.language) lines.push(`Write the copy in this language: ${brand.language}.`);
+  return lines.length > 0 ? " " + lines.join(" ") : "";
+}
+
+/** Turns a `GenerateImageBrandContext` into the extra prompt clauses steering direction, style keywords, palette and the no-logo rule. */
+function brandContextForImage(brand?: GenerateImageSpec["brand"]): string {
+  if (!brand) return "";
+  const clauses: string[] = [];
+  if (brand.imageDirection) clauses.push(brand.imageDirection);
+  if (brand.styleKeywords.length > 0) clauses.push(`Style: ${brand.styleKeywords.join(", ")}.`);
+  if (brand.paletteWords) clauses.push(`Use ${brand.paletteWords}.`);
+  clauses.push(brand.logoRules || "Never draw text or logos.");
+  return clauses.length > 0 ? "\n\n" + clauses.join(" ") : "";
+}
+
 async function readJsonOrThrow(response: Response, context: string): Promise<any> {
   const text = await response.text();
   if (!response.ok) {
@@ -62,6 +96,8 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       carouselPrompt: plan.carouselPrompt,
       slides: plan.slides,
     });
+    const systemPrompt = COPY_SYSTEM_PROMPT + brandContextForCopy(plan.brand);
+    logPrompt("draftCopy", `${systemPrompt}\n\n${userPrompt}`);
 
     const response = await fetch(CHAT_COMPLETIONS_URL, {
       method: "POST",
@@ -72,7 +108,7 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       body: JSON.stringify({
         model: TEXT_MODEL,
         messages: [
-          { role: "system", content: COPY_SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
         response_format: { type: "json_object" },
@@ -98,7 +134,8 @@ export class OpenAiPieceGenerator implements PieceGenerator {
   }
 
   async generateImage(spec: GenerateImageSpec): Promise<GeneratedImage> {
-    const prompt = `${spec.prompt}\n\n${NO_TEXT_INSTRUCTION}`;
+    const prompt = `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}`;
+    logPrompt("generateImage", prompt);
     const response = await fetch(IMAGES_GENERATIONS_URL, {
       method: "POST",
       headers: {

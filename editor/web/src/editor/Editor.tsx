@@ -19,7 +19,7 @@ const COMPOSE_POLL_MS = 1200;
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
 
 export type Tool = "select" | "text" | "asset";
-export type PanelTab = "sel" | "bucket" | "lam";
+export type PanelTab = "sel" | "bucket" | "lam" | "marca";
 
 interface EditorProps {
   slug: string;

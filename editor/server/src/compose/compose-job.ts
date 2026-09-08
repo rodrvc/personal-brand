@@ -1,10 +1,12 @@
 import type { CarouselDocument, Slide, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
+import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
+import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
 
 import { readValidatedDocument, writeDocument } from "../document-store.js";
 import { NonePieceGenerator } from "../ai/none.js";
 import type { PieceGenerator } from "../ai/piece-generator.js";
 import type { ProfileStore } from "../profile-store.js";
-import { suggestionForSlot } from "./planner.js";
+import { suggestionForSlot, draftCopyBrandContext } from "./planner.js";
 
 /**
  * Background job that fills in every `pending: true` placeholder a
@@ -268,6 +270,10 @@ async function runComposeJob(
 ): Promise<void> {
   job.status = "running";
 
+  const brandStyle = loadBrandStyle(store.roots.profileDir);
+  const language = readProfilePrimaryLanguage(store.roots.profileDir);
+  const brandContext = draftCopyBrandContext(brandStyle, language);
+
   // The set of pieces this job will attempt is fixed from the document as
   // it looked the moment the job was created — `slideIndex`/`objectId` are
   // structural references, stable even if the user edits other pieces
@@ -297,6 +303,7 @@ async function runComposeJob(
       const draft = await generator.draftCopy({
         carouselPrompt: promptText,
         slides: [{ slideId: slide.id, kind: slide.kind, brief: promptText, limits: { headline: 200 } }],
+        brand: brandContext,
       });
       job.costCentsSoFar += draft.costCents;
       const drafted = draft.slides[0];
@@ -338,7 +345,7 @@ async function runComposeJob(
   // state is only consulted per-piece, inside `persistPiece`.
   const { visuals } = collectPending(doc);
   for (const ref of visuals) {
-    const suggestion = suggestionForSlot(promptText, ref.slot);
+    const suggestion = suggestionForSlot(promptText, ref.slot, brandStyle);
     persistPiece(store, job.carouselId, ref, (fresh) => clearVisualPending(fresh, ref, suggestion));
     job.completedPieces += 1;
   }

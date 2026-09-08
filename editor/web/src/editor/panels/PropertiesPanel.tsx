@@ -4,6 +4,7 @@ import type { Selection } from "../geometry";
 import { SelectionPane } from "./SelectionPane";
 import { BucketPane } from "./BucketPane";
 import { SlidePane } from "./SlidePane";
+import { BrandPane } from "./BrandPane";
 import "./PropertiesPanel.css";
 
 interface PropertiesPanelProps {
@@ -27,6 +28,7 @@ const TABS: Array<{ id: PanelTab; label: string }> = [
   { id: "sel", label: "Selección" },
   { id: "bucket", label: "Bucket" },
   { id: "lam", label: "Lámina" },
+  { id: "marca", label: "Marca" },
 ];
 
 export function PropertiesPanel(props: PropertiesPanelProps) {
@@ -82,6 +84,7 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
             onDocReplace={props.onDocReplace}
           />
         )}
+        {panelTab === "marca" && <BrandPane slug={props.slug} />}
       </div>
     </aside>
   );

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { previewRegeneratePrompt } from "../api/client";
+import type { RegenerateTarget } from "../api/client";
 import "./GenerateImageField.css";
 
 interface GenerateImageFieldProps {
@@ -11,6 +13,8 @@ interface GenerateImageFieldProps {
   disabled?: boolean;
   onSubmit: (prompt: string) => Promise<void>;
   error?: string | null;
+  /** Enables the "Ver prompt final" preview, which asks the server what it would actually send (suggestion/override + brand style) without spending anything. Omitted where the caller has no stable target yet. */
+  previewTarget?: { slug: string; carouselId: string; target: RegenerateTarget };
 }
 
 function formatCents(cents: number): string {
@@ -37,14 +41,49 @@ export function GenerateImageField({
   disabled,
   onSubmit,
   error,
+  previewTarget,
 }: GenerateImageFieldProps) {
   const [expanded, setExpanded] = useState(false);
   const [prompt, setPrompt] = useState(initialPrompt);
   const [busy, setBusy] = useState(false);
+  const [showFinalPrompt, setShowFinalPrompt] = useState(false);
+  const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
+  const [finalPromptError, setFinalPromptError] = useState<string | null>(null);
+  const [loadingFinalPrompt, setLoadingFinalPrompt] = useState(false);
 
   useEffect(() => {
     setPrompt(initialPrompt);
   }, [initialPrompt]);
+
+  useEffect(() => {
+    // Collapses and forgets any previously fetched preview whenever the
+    // field itself collapses or the underlying prompt changes — a stale
+    // "prompt final" for a since-edited draft would be misleading.
+    setShowFinalPrompt(false);
+    setFinalPrompt(null);
+    setFinalPromptError(null);
+  }, [expanded, prompt]);
+
+  async function handleToggleFinalPrompt() {
+    const next = !showFinalPrompt;
+    setShowFinalPrompt(next);
+    if (!next || !previewTarget || finalPrompt !== null || loadingFinalPrompt) return;
+    setLoadingFinalPrompt(true);
+    setFinalPromptError(null);
+    try {
+      const res = await previewRegeneratePrompt(
+        previewTarget.slug,
+        previewTarget.carouselId,
+        previewTarget.target,
+        prompt.trim() || undefined,
+      );
+      setFinalPrompt(res.prompt);
+    } catch (err) {
+      setFinalPromptError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingFinalPrompt(false);
+    }
+  }
 
   if (!expanded) {
     return (
@@ -71,11 +110,16 @@ export function GenerateImageField({
         rows={2}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Describe la imagen que querés generar…"
+        placeholder="Déjalo vacío y la IA decide según la guía de la marca"
         disabled={busy}
       />
       <div className="generate-image-actions">
         {estimatedCostCents !== null && <span className="generate-image-cost">{formatCents(estimatedCostCents)}</span>}
+        {previewTarget && (
+          <button className="generate-image-preview-toggle" onClick={() => void handleToggleFinalPrompt()} disabled={busy}>
+            Ver prompt final
+          </button>
+        )}
         <button className="ui-btn" onClick={() => setExpanded(false)} disabled={busy}>
           Cancelar
         </button>
@@ -83,6 +127,13 @@ export function GenerateImageField({
           {busy ? "Generando…" : "Generar"}
         </button>
       </div>
+      {showFinalPrompt && (
+        <div className="generate-image-final-prompt">
+          {loadingFinalPrompt && <p className="props-hint">Componiendo…</p>}
+          {finalPromptError && <p className="generate-image-error">{finalPromptError}</p>}
+          {finalPrompt && <pre>{finalPrompt}</pre>}
+        </div>
+      )}
       {error && <p className="generate-image-error">{error}</p>}
     </div>
   );

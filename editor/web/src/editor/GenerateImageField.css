@@ -44,3 +44,34 @@
   font-size: 11px;
   color: var(--ui-danger);
 }
+
+.generate-image-preview-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--ui-accent-ink);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.generate-image-preview-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.generate-image-final-prompt {
+  border: 1px dashed var(--ui-line);
+  border-radius: var(--ui-radius-btn);
+  padding: 8px;
+  background: var(--ui-surface);
+}
+
+.generate-image-final-prompt pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ui-ink-2);
+}

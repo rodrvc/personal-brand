@@ -1,5 +1,6 @@
 import type {
   AssetEntry,
+  BrandStyle,
   BrandTokens,
   CarouselDocument,
   CarouselSummary,
@@ -50,6 +51,11 @@ export function listProfiles(): Promise<{ profiles: ProfileListingEntry[] }> {
 
 export function getBrand(slug: string): Promise<BrandTokens> {
   return request(`/profiles/${slug}/brand`);
+}
+
+/** The brand's optional style guide (palette/fonts/keywords/tone/positioning/image direction/logo rules) — always returns a (possibly all-empty) style, never 404s for a profile with no style files. */
+export function getBrandStyle(slug: string): Promise<BrandStyle> {
+  return request(`/profiles/${slug}/style`);
 }
 
 export function getTemplate(slug: string, id: string, params?: Record<string, unknown>): Promise<LayoutTemplate> {
@@ -145,6 +151,24 @@ export function regenerate(
   return request(`/profiles/${slug}/carousels/${carouselId}/regenerate`, {
     method: "POST",
     body: JSON.stringify({ target, ...(prompt !== undefined ? { prompt } : {}) }),
+  });
+}
+
+/**
+ * "Ver prompt final" preview: returns the exact prompt `POST .../regenerate`
+ * would send to the provider for this target (planner suggestion, or
+ * `promptOverride` if given, plus brand style folded in) without spending
+ * anything.
+ */
+export function previewRegeneratePrompt(
+  slug: string,
+  carouselId: string,
+  target: RegenerateTarget,
+  promptOverride?: string,
+): Promise<{ prompt: string }> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({ target, preview: true, ...(promptOverride !== undefined ? { prompt: promptOverride } : {}) }),
   });
 }
 

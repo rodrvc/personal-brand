@@ -4,13 +4,17 @@ import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/bran
 import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadIndex, type AssetEntry } from "../../../../system/assets/index.js";
+import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
+import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
 
 import {
   applyCompositionPlan,
   assignTextColorKeys,
   buildCompositionPlan,
   buildImmediateDocument,
+  draftCopyBrandContext,
   generateForSlot,
+  generateImageBrandContext,
   suggestionForSlot,
 } from "../compose/planner.js";
 import { enqueueComposeJob, getComposeJob } from "../compose/compose-job.js";
@@ -235,6 +239,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         target?: { slideId: string; objectId?: string; scope?: "unpinned" };
         /** Overrides the planner's `suggestion` for this one piece — the text the user edited into the "Generar imagen…"/"Regenerar" field. Only meaningful for a single-piece image target; ignored for text objects and for `scope: "unpinned"`. */
         prompt?: string;
+        /** When true, composes and returns the prompt the provider would actually receive (planner suggestion, or the user's override, plus brand style) without calling the AI or writing anything — the "Ver prompt final" preview. */
+        preview?: boolean;
       };
       const target = body?.target;
       if (!target?.slideId) {
@@ -245,6 +251,31 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const slideIndex = doc.slides.findIndex((s) => s.id === target.slideId);
       if (slideIndex === -1) {
         res.status(404).json({ error: `No slide "${target.slideId}"` });
+        return;
+      }
+
+      const isDryRun = req.query.dryRun === "true" || body.preview === true;
+      if (isDryRun) {
+        const slide = doc.slides[slideIndex]!;
+        const style = loadBrandStyle(store.roots.profileDir);
+        if (target.objectId === "background" || target.objectId) {
+          const slotName =
+            target.objectId === "background"
+              ? `background for ${slide.kind}`
+              : slide.objects.find((o) => o.id === target.objectId)?.slot ?? target.objectId!;
+          const suggestion = body.prompt?.trim() || suggestionForSlot(doc.prompt.text, slotName, style);
+          const brand = generateImageBrandContext(style);
+          const clauses = [
+            suggestion,
+            brand.imageDirection,
+            brand.styleKeywords.length > 0 ? `Style: ${brand.styleKeywords.join(", ")}.` : undefined,
+            brand.paletteWords ? `Use ${brand.paletteWords}.` : undefined,
+            brand.logoRules,
+          ].filter(Boolean);
+          res.json({ prompt: clauses.join("\n\n") });
+          return;
+        }
+        res.status(400).json({ error: `Preview is only meaningful for an image target (objectId).` });
         return;
       }
 
@@ -361,7 +392,9 @@ async function regenerateBackground(
   if (slide.background.pinned) {
     throw new RegenerateBlockedError(`Slide "${slide.id}"'s background is pinned — regenerate refused.`);
   }
-  const prompt = promptOverride?.trim() || suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`);
+  const prompt =
+    promptOverride?.trim() ||
+    suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`, loadBrandStyle(store.roots.profileDir));
   const entry = await generateForSlot(store, generator, {
     prompt,
     kind: "background",
@@ -408,6 +441,7 @@ async function regenerateObject(
     const draft = await generator.draftCopy({
       carouselPrompt: doc.prompt.text,
       slides: [{ slideId: slide.id, kind: slide.kind, brief: doc.prompt.text, limits: { headline: 200 } }],
+      brand: draftCopyBrandContext(loadBrandStyle(store.roots.profileDir), readProfilePrimaryLanguage(store.roots.profileDir)),
     });
     const newText = draft.slides[0]?.headline ?? object.text;
     const slides = doc.slides.map((s, i) => {
@@ -425,7 +459,9 @@ async function regenerateObject(
     return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents: draft.costCents };
   }
 
-  const prompt = promptOverride?.trim() || suggestionForSlot(doc.prompt.text, object.slot ?? objectId);
+  const prompt =
+    promptOverride?.trim() ||
+    suggestionForSlot(doc.prompt.text, object.slot ?? objectId, loadBrandStyle(store.roots.profileDir));
   const entry = await generateForSlot(store, generator, {
     prompt,
     kind: "photo",
