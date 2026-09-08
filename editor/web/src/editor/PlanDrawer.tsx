@@ -13,6 +13,8 @@ interface PlanRow {
   kindLabel: string;
   origin: "library" | "ai" | "manual";
   pending: boolean;
+  /** No library candidate; waiting on an explicit "Generar imagen…" request (owner decision: image generation is never automatic) — see SelectionPane/SlidePane for that control. */
+  awaitingImage: boolean;
 }
 
 /**
@@ -40,12 +42,14 @@ export function PlanDrawer({ doc, onClose }: PlanDrawerProps) {
                 kindLabel: slide.background.mode === "color" ? "color" : "imagen",
                 origin: slide.background.source,
                 pending: Boolean(slide.background.pending),
+                awaitingImage: Boolean(slide.background.awaitingImage),
               },
               ...slide.objects.map((object) => ({
                 slot: object.slot ?? object.id,
                 kindLabel: object.kind === "text" ? "texto" : "imagen",
                 origin: object.source,
                 pending: Boolean(object.pending),
+                awaitingImage: object.kind === "asset" && Boolean(object.awaitingImage),
               })),
             ];
             return (
@@ -58,10 +62,11 @@ export function PlanDrawer({ doc, onClose }: PlanDrawerProps) {
                     <span
                       key={i}
                       className={`plan-origin ${row.origin === "library" ? "library" : "generate"}`}
-                      title={row.pending ? "Pendiente de generar" : undefined}
+                      title={row.pending ? "Redactando…" : row.awaitingImage ? "Por generar" : undefined}
                     >
                       {row.slot} ({row.kindLabel}): {originLabel(row.origin)}
-                      {row.pending ? " · generando…" : ""}
+                      {row.pending ? " · redactando…" : ""}
+                      {row.awaitingImage ? " · por generar" : ""}
                     </span>
                   ))}
                 </div>

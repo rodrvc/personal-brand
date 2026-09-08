@@ -16,9 +16,16 @@ function summarize(doc: CarouselDocument) {
   let libraryPieces = 0;
   let generatedBackgrounds = 0;
   let draftedTexts = 0;
+  // Owner decision: image generation is never automatic, so every visual
+  // slot with no library candidate sits at `awaitingImage: true` until the
+  // user submits a per-piece "Generar imagen…" request — counted here
+  // instead of a "Generando…" progress line, since there is no background
+  // work left to wait on for these.
+  let awaitingImages = 0;
   const pieces = doc.slides.flatMap((s) => [s.background, ...s.objects]);
   for (const piece of pieces) {
     if (piece.source === "library") libraryPieces += 1;
+    if ("awaitingImage" in piece && piece.awaitingImage) awaitingImages += 1;
   }
   for (const object of doc.slides.flatMap((s) => s.objects)) {
     if (object.kind === "text" && object.source === "ai" && !object.pending && object.text) draftedTexts += 1;
@@ -26,7 +33,7 @@ function summarize(doc: CarouselDocument) {
   for (const s of doc.slides) {
     if (s.background.mode === "asset" && s.background.source === "ai") generatedBackgrounds += 1;
   }
-  return { slideCount, libraryPieces, generatedBackgrounds, draftedTexts };
+  return { slideCount, libraryPieces, generatedBackgrounds, draftedTexts, awaitingImages };
 }
 
 function formatCents(cents: number): string {
@@ -55,7 +62,7 @@ export function PromptHeader({
   composeJob,
   onShowPlan,
 }: PromptHeaderProps) {
-  const { slideCount, libraryPieces, generatedBackgrounds, draftedTexts } = summarize(doc);
+  const { slideCount, libraryPieces, generatedBackgrounds, draftedTexts, awaitingImages } = summarize(doc);
   const isRunning = composeJob?.status === "queued" || composeJob?.status === "running";
   const jobFailed = composeJob?.status === "error" || composeJob?.status === "skipped";
 
@@ -78,6 +85,11 @@ export function PromptHeader({
             <i className="prompt-check">✓</i> {generatedBackgrounds} fondos generados
             {composeJob && composeJob.costCentsSoFar > 0 ? ` · ${formatCents(composeJob.costCentsSoFar)}` : ""}
           </span>
+          {awaitingImages > 0 && (
+            <span className="prompt-awaiting-images">
+              {awaitingImages} {awaitingImages === 1 ? "imagen por generar" : "imágenes por generar"}
+            </span>
+          )}
           <span className="prompt-updated">{relativeTime(doc.updatedAt || doc.createdAt)}</span>
           {stats && (
             <span className="prompt-savings">
@@ -91,7 +103,7 @@ export function PromptHeader({
         </div>
         {isRunning && (
           <p className="prompt-progress">
-            Generando… {composeJob.completedPieces}/{composeJob.totalPieces} piezas
+            Redactando textos… {composeJob.completedPieces}/{composeJob.totalPieces} piezas
           </p>
         )}
         {jobFailed && composeJob?.message && <p className="prompt-error">{composeJob.message}</p>}

@@ -161,6 +161,28 @@ export function assetsRouter(): Router {
   });
 
   /**
+   * Returns the generation sidecar (`assets/generated/<id>.json`) for an
+   * AI-origin asset, if one exists — specifically its `prompt`, so the
+   * editor's "Regenerar" field can prefill with what was actually asked for
+   * last time rather than re-deriving a fresh suggestion (piece-generation
+   * spec: the user edits from what they already got, not from scratch).
+   * 404 for a manual/library asset, which never had a sidecar to begin with.
+   */
+  router.get("/api/profiles/:slug/assets/:assetId/generation", (req, res) => {
+    try {
+      const store = new ProfileStore(req.params.slug);
+      const sidecar = store.readJson<{ prompt?: string; model?: string; costCents?: number }>(
+        `assets/generated/${req.params.assetId}.json`,
+      );
+      res.json(sidecar);
+    } catch (error) {
+      const message = (error as Error).message;
+      const status = error instanceof ProfileStoreError ? 400 : 404;
+      res.status(status).json({ error: status === 404 ? `No generation record for asset "${req.params.assetId}"` : message });
+    }
+  });
+
+  /**
    * Read-only, confined static serving of `assets/**` (editor-api spec's
    * "Asset and font serving"). `req.params.splat` is Express 5's named
    * wildcard capture for `*splat` (path-to-regexp v8 no longer allows a

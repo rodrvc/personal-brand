@@ -40,8 +40,12 @@ export interface ResolvedObject {
     // `AssetObject` (carousel-document.ts): a `pending: true` placeholder
     // created by the immediate-build compose flow has no image yet. The
     // renderer (templates/free-layout.ts) treats a missing `assetId` as an
-    // empty placeholder box rather than throwing.
-    | { kind: "asset"; assetId?: string; fit: AssetObject["fit"] };
+    // empty placeholder box rather than throwing. `awaitingImage` carries
+    // through so the renderer can tell "still working" (`pending`) apart
+    // from "no library candidate, waiting on an explicit generate request"
+    // (`awaitingImage`) — the two render as the same empty box shape but
+    // the latter also gets a `data-awaiting="true"` marker and label.
+    | { kind: "asset"; assetId?: string; fit: AssetObject["fit"]; awaitingImage?: boolean };
 }
 
 export interface ResolvedSlide {
@@ -101,7 +105,7 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
     }
     return {
       ...base,
-      content: { kind: "asset", assetId: object.assetId, fit: object.fit },
+      content: { kind: "asset", assetId: object.assetId, fit: object.fit, awaitingImage: object.awaitingImage },
     };
   });
 

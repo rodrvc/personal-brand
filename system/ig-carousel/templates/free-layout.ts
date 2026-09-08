@@ -140,11 +140,21 @@ function renderAssetObject(object: ResolvedObject, ctx: FreeLayoutRenderContext)
     `display: block`,
   ].join("; ");
 
-  // No `assetId` yet: this is a pending placeholder (immediate-build
-  // compose flow) awaiting AI generation. Render an empty box instead of an
-  // `<img>` with nothing to point at — the editor overlays its own shimmer
-  // on top of `[data-object-id]` elements regardless of what's inside.
+  // No `assetId` yet: either still `pending` (compose job hasn't reached
+  // this slot) or `awaitingImage` (reached it, found no library candidate,
+  // and — per the owner's decision that image generation is never
+  // automatic — stopped there for an explicit per-piece request). Render
+  // an empty box instead of an `<img>` with nothing to point at; the
+  // editor overlays its own shimmer for `pending` on top of
+  // `[data-object-id]` elements, and `awaitingImage` gets its own dashed
+  // "Por generar" placeholder plus a `data-awaiting="true"` marker the UI
+  // uses to place its "Generar imagen…" button.
   if (!content.assetId) {
+    if (content.awaitingImage) {
+      return `<div class="obj obj-asset obj-asset-awaiting" data-object-id="${escapeHtml(
+        object.id,
+      )}" data-awaiting="true" style="${wrapperStyle}"><div class="obj-asset-awaiting-inner" style="position: absolute; inset: 8px; border: 2px dashed currentColor; opacity: 0.5; display: flex; align-items: center; justify-content: center; box-sizing: border-box;"><span style="font-size: 14px; opacity: 0.8;">Por generar</span></div></div>`;
+    }
     return `<div class="obj obj-asset obj-asset-pending" data-object-id="${escapeHtml(object.id)}" style="${wrapperStyle}"></div>`;
   }
 
@@ -165,6 +175,17 @@ function renderBackgroundZone(
   if (background.mode === "color") {
     const bg = colorFromKey(brand, background.colorKey);
     style.push(`background-color: ${bg}`);
+    // `awaitingImage: true` means the compose job found no library
+    // candidate for this background and stopped rather than generating one
+    // automatically (owner decision) — the color fill stands in, plus the
+    // same dashed "Por generar" placeholder an asset object gets, so the
+    // editor can offer its "Generar imagen…" button here too.
+    if (background.awaitingImage) {
+      const placeholder = `<div class="obj-asset-awaiting-inner" style="position: absolute; inset: 24px; border: 2px dashed currentColor; opacity: 0.5; display: flex; align-items: center; justify-content: center; box-sizing: border-box;"><span style="font-size: 14px; opacity: 0.8;">Por generar</span></div>`;
+      return `<div class="zone zone-background" data-zone="background" data-awaiting="true" style="${style.join(
+        "; ",
+      )}">${placeholder}</div>`;
+    }
     return `<div class="zone zone-background" data-zone="background" style="${style.join("; ")}"></div>`;
   }
 

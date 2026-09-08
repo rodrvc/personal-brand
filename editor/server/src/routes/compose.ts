@@ -11,6 +11,7 @@ import {
   buildCompositionPlan,
   buildImmediateDocument,
   generateForSlot,
+  suggestionForSlot,
 } from "../compose/planner.js";
 import { enqueueComposeJob, getComposeJob } from "../compose/compose-job.js";
 import {
@@ -22,6 +23,7 @@ import {
   writeDocument,
 } from "../document-store.js";
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
+import { estimateImageCostCents, IMAGE_MODEL } from "../ai/pricing.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
 
 /**
@@ -37,6 +39,18 @@ const pendingPlans = new Map<string, ReturnType<typeof buildCompositionPlan>>();
 
 export function composeRouter(getGenerator: (slug: string) => PieceGenerator): Router {
   const router = Router();
+
+  /**
+   * Not profile-scoped: the per-image cost estimate is the same flat number
+   * regardless of brand (pricing.ts's `estimateImageCostCents` takes no
+   * per-call inputs). Lets the UI show "~0,4¢" next to every "Generar
+   * imagen…" field before the user commits to spending it (owner decision:
+   * image generation is never automatic, so the user always sees the cost
+   * up front).
+   */
+  router.get("/api/ai/pricing", (_req, res) => {
+    res.json({ imageModel: IMAGE_MODEL, estimatedImageCostCents: estimateImageCostCents() });
+  });
 
   /**
    * Creates a new carousel from a prompt.
@@ -116,7 +130,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       writeDocument(store, document);
 
       const generator = getGenerator(req.params.slug);
-      const jobId = enqueueComposeJob(store, brand, carouselId, document, generator, body.prompt);
+      const jobId = enqueueComposeJob(store, carouselId, document, generator, body.prompt);
 
       res.status(201).json({ document, jobId });
     } catch (error) {
@@ -217,9 +231,12 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
     try {
       const store = new ProfileStore(req.params.slug);
       const doc = readValidatedDocument(store, req.params.id);
-      const target = (req.body as {
+      const body = req.body as {
         target?: { slideId: string; objectId?: string; scope?: "unpinned" };
-      })?.target;
+        /** Overrides the planner's `suggestion` for this one piece — the text the user edited into the "Generar imagen…"/"Regenerar" field. Only meaningful for a single-piece image target; ignored for text objects and for `scope: "unpinned"`. */
+        prompt?: string;
+      };
+      const target = body?.target;
       if (!target?.slideId) {
         res.status(400).json({ error: `"target.slideId" is required` });
         return;
@@ -236,11 +253,16 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const generator = getGenerator(req.params.slug);
       const brand = loadBrand(store.roots.profileDir);
       let nextDoc = doc;
+      let costCents = 0;
 
       if (target.objectId === "background") {
-        nextDoc = await regenerateBackground(store, generator, nextDoc, slideIndex, req.params.id, brand);
+        const result = await regenerateBackground(store, generator, nextDoc, slideIndex, req.params.id, brand, body.prompt);
+        nextDoc = result.document;
+        costCents = result.costCents;
       } else if (target.objectId) {
-        nextDoc = await regenerateObject(store, generator, nextDoc, slideIndex, target.objectId, req.params.id, brand);
+        const result = await regenerateObject(store, generator, nextDoc, slideIndex, target.objectId, req.params.id, brand, body.prompt);
+        nextDoc = result.document;
+        costCents = result.costCents;
       } else if (target.scope === "unpinned") {
         nextDoc = await regenerateUnpinned(store, generator, nextDoc, slideIndex, req.params.id, brand);
       } else {
@@ -249,7 +271,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       }
 
       writeDocument(store, nextDoc);
-      res.json(nextDoc);
+      res.json({ document: nextDoc, costCents });
     } catch (error) {
       handlePlanError(error, res);
     }
@@ -319,6 +341,12 @@ function attachGeneratedAsset(
   return { ...doc, slides, updatedAt: new Date().toISOString() };
 }
 
+/** The document plus the cost (if any) the regeneration call just spent — surfaced to the client so the UI can show what it actually paid, not just the estimate it showed before the click. */
+interface RegenerateResult {
+  document: CarouselDocument;
+  costCents: number;
+}
+
 async function regenerateBackground(
   store: ProfileStore,
   generator: PieceGenerator,
@@ -326,18 +354,22 @@ async function regenerateBackground(
   slideIndex: number,
   carouselId: string,
   brand: BrandTokens,
-): Promise<CarouselDocument> {
+  /** Overrides the planner's own `suggestionForSlot` idea — the text the user typed into the "Generar imagen…" field, per the owner's decision that every generation is an explicit, editable-prompt request. */
+  promptOverride?: string,
+): Promise<RegenerateResult> {
   const slide = doc.slides[slideIndex]!;
   if (slide.background.pinned) {
     throw new RegenerateBlockedError(`Slide "${slide.id}"'s background is pinned — regenerate refused.`);
   }
+  const prompt = promptOverride?.trim() || suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`);
   const entry = await generateForSlot(store, generator, {
-    prompt: `${doc.prompt.text} — background for ${slide.kind}`,
+    prompt,
     kind: "background",
     canvas: doc.canvas,
     carouselId,
     slot: "background",
   });
+  const costCents = readGeneratedAssetCostCents(store, entry.id);
   const slides = doc.slides.map((s, i) => {
     if (i !== slideIndex) return s;
     const withNewBackground = {
@@ -350,7 +382,7 @@ async function regenerateBackground(
     // background's assignment was.
     return assignTextColorKeys(brand, withNewBackground);
   });
-  return { ...doc, slides, updatedAt: new Date().toISOString() };
+  return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents };
 }
 
 async function regenerateObject(
@@ -361,7 +393,8 @@ async function regenerateObject(
   objectId: string,
   carouselId: string,
   brand: BrandTokens,
-): Promise<CarouselDocument> {
+  promptOverride?: string,
+): Promise<RegenerateResult> {
   const slide = doc.slides[slideIndex]!;
   const object = slide.objects.find((o) => o.id === objectId);
   if (!object) {
@@ -389,29 +422,51 @@ async function regenerateObject(
       // when there is no explicit one yet).
       return assignTextColorKeys(brand, withNewText);
     });
-    return { ...doc, slides, updatedAt: new Date().toISOString() };
+    return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents: draft.costCents };
   }
 
+  const prompt = promptOverride?.trim() || suggestionForSlot(doc.prompt.text, object.slot ?? objectId);
   const entry = await generateForSlot(store, generator, {
-    prompt: `${doc.prompt.text} — ${object.slot ?? objectId}`,
+    prompt,
     kind: "photo",
     canvas: doc.canvas,
     carouselId,
     slot: object.slot ?? objectId,
   });
+  const costCents = readGeneratedAssetCostCents(store, entry.id);
   const slides = doc.slides.map((s, i) =>
     i === slideIndex
       ? {
           ...s,
           objects: s.objects.map((o) =>
-            o.id === objectId && o.kind === "asset" ? { ...o, assetId: entry.id, source: "ai" as const } : o,
+            o.id === objectId && o.kind === "asset"
+              ? { ...o, assetId: entry.id, source: "ai" as const, awaitingImage: false, suggestion: undefined }
+              : o,
           ),
         }
       : s,
   );
-  return { ...doc, slides, updatedAt: new Date().toISOString() };
+  return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents };
 }
 
+/** Reads back the cost an image generation call just recorded in its own sidecar — `generateForSlot`/`AssetEntry` itself carries no cost field (system/assets/index.ts), so this is the one place the number survives past the call, same reasoning as compose-job.ts's own read of it. */
+function readGeneratedAssetCostCents(store: ProfileStore, assetId: string): number {
+  try {
+    const sidecar = store.readJson<{ costCents?: number }>(`assets/generated/${assetId}.json`);
+    return sidecar.costCents ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Owner decision: image generation is NEVER automatic, so "Regenerar lo no
+ * fijado" — a bulk, no-per-piece-prompt action — only redrafts unpinned
+ * TEXT objects. An unpinned background or asset object with no image
+ * (`awaitingImage`) stays exactly as it is; the user regenerates each of
+ * those individually via the per-piece "Generar imagen…" field, which is
+ * the only place a prompt (and its cost) is ever confirmed.
+ */
 async function regenerateUnpinned(
   store: ProfileStore,
   generator: PieceGenerator,
@@ -422,12 +477,9 @@ async function regenerateUnpinned(
 ): Promise<CarouselDocument> {
   let next = doc;
   const slide = next.slides[slideIndex]!;
-  if (!slide.background.pinned) {
-    next = await regenerateBackground(store, generator, next, slideIndex, carouselId, brand);
-  }
   for (const object of slide.objects) {
-    if (object.pinned) continue;
-    next = await regenerateObject(store, generator, next, slideIndex, object.id, carouselId, brand);
+    if (object.pinned || object.kind !== "text") continue;
+    next = (await regenerateObject(store, generator, next, slideIndex, object.id, carouselId, brand)).document;
   }
   return next;
 }

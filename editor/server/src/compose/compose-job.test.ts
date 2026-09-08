@@ -33,11 +33,9 @@ cpSync(EXAMPLE_PROFILE, profileDir, { recursive: true });
 
 const { ProfileStore } = await import("../profile-store.js");
 const { writeDocument, readValidatedDocument } = await import("../document-store.js");
-const { loadBrand } = await import("../../../../system/ig-carousel/brand-schema.js");
 const { enqueueComposeJob, getComposeJob } = await import("./compose-job.js");
 
 const store = new ProfileStore(SLUG);
-const brand = loadBrand(store.roots.profileDir);
 
 const CAROUSEL_ID = "compose-job-carousel";
 const now = new Date().toISOString();
@@ -143,7 +141,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       const initial = resetDocument();
       const generator = makeSlowFakeGenerator(150);
 
-      const jobId = enqueueComposeJob(store, brand, CAROUSEL_ID, initial as never, generator as never, initial.prompt.text);
+      const jobId = enqueueComposeJob(store, CAROUSEL_ID, initial as never, generator as never, initial.prompt.text);
 
       // Simulate a concurrent PUT (same primitive routes/profiles.ts's PUT
       // handler uses) landing on the ALREADY-PERSISTED "other" object's
@@ -192,7 +190,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       const generator = makeSlowFakeGenerator(150);
       const initial = readValidatedDocument(store, CAROUSEL_ID);
 
-      const jobId = enqueueComposeJob(store, brand, CAROUSEL_ID, initial, generator as never, initial.prompt.text);
+      const jobId = enqueueComposeJob(store, CAROUSEL_ID, initial, generator as never, initial.prompt.text);
 
       // Concurrently, the user finishes editing slide-2's title by hand
       // (a PUT clearing `pending`) before the job gets to it.

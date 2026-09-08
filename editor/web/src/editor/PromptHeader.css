@@ -59,6 +59,11 @@
   font-weight: 600;
 }
 
+.prompt-awaiting-images {
+  color: var(--ui-warn, #b45309);
+  font-weight: 600;
+}
+
 .prompt-error {
   margin: 7px 0 0;
   font-size: 11.5px;

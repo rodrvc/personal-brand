@@ -13,6 +13,13 @@ import type { AddressInfo } from "node:net";
  * Covers piece-generation spec's "Regeneration per piece": a pinned piece
  * on the target slide is untouched byte-for-byte, and no other slide is
  * modified.
+ *
+ * Owner decision: image generation is never automatic, so `scope:
+ * "unpinned"` only redrafts unpinned TEXT objects — an unpinned visual
+ * piece (background or asset object) is left exactly as it is, same as a
+ * pinned one. `fakeGenerator.generateImage` below is defined but never
+ * actually called by this scope; it exists only so the fixture's
+ * `pinnedAsset`/library wiring stays realistic.
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -156,7 +163,7 @@ async function regenerateUnpinned(slideId: string) {
   if (!res.ok) {
     throw new Error(`regenerate failed: ${res.status} ${JSON.stringify(body)}`);
   }
-  return body as ReturnType<typeof makeDocument>;
+  return (body as { document: ReturnType<typeof makeDocument> }).document;
 }
 
 const tests: Array<[string, () => Promise<void>]> = [

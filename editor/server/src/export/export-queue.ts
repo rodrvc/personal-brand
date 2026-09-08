@@ -118,12 +118,25 @@ function collectAssetIds(doc: CarouselDocument): string[] {
   return [...ids];
 }
 
-/** True when at least one piece (a slide's background or any object) is still `pending: true` — the compose job hasn't filled it in yet. */
-function hasPendingPieces(doc: CarouselDocument): boolean {
-  return doc.slides.some((slide) => slide.background.pending || slide.objects.some((o) => o.pending));
+/**
+ * True when at least one piece (a slide's background or any object) is
+ * still `pending: true` (the compose job hasn't reached it yet) OR
+ * `awaitingImage: true` (the compose job reached it, found no library
+ * candidate, and — per the owner's decision that image generation is
+ * never automatic — stopped there instead of calling the AI provider).
+ * Both states mean "this piece has no final content yet", so both block
+ * export the same way unless the caller explicitly overrides it.
+ */
+function hasUnfinishedPieces(doc: CarouselDocument): boolean {
+  return doc.slides.some(
+    (slide) =>
+      slide.background.pending ||
+      slide.background.awaitingImage ||
+      slide.objects.some((o) => o.pending || (o.kind === "asset" && o.awaitingImage)),
+  );
 }
 
-/** Thrown by `enqueueExport` when the document still has pending pieces and the caller didn't pass `allowPending: true` — routed to a 409 by the export route (piece-generation/editor-api: exporting mid-compose is refused unless explicitly overridden). */
+/** Thrown by `enqueueExport` when the document still has pending/awaiting-image pieces and the caller didn't pass `allowPending: true` — routed to a 409 by the export route (piece-generation/editor-api: exporting mid-compose, or with an ungenerated image, is refused unless explicitly overridden). */
 export class ExportHasPendingPiecesError extends Error {}
 
 /**
@@ -147,9 +160,9 @@ export function enqueueExport(
   options?: { allowPending?: boolean },
 ): string {
   const doc = readValidatedDocument(store, carouselId);
-  if (!options?.allowPending && hasPendingPieces(doc)) {
+  if (!options?.allowPending && hasUnfinishedPieces(doc)) {
     throw new ExportHasPendingPiecesError(
-      `Carousel "${carouselId}" still has pending pieces — export refused unless "allowPending" is set.`,
+      `Carousel "${carouselId}" still has pending or awaiting-image pieces — export refused unless "allowPending" is set.`,
     );
   }
   const jobId = `${store.slug}-${carouselId}-${Date.now()}`;

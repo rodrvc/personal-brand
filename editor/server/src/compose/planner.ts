@@ -522,6 +522,18 @@ export function buildImmediateDocument(
 }
 
 /**
+ * Derives the planner's own image-prompt idea for a visual slot that has no
+ * library candidate — shown pre-filled (and editable) in the UI's
+ * "Generar imagen…" field, per the owner's decision that image generation
+ * is never automatic. Deliberately simple string composition, not an AI
+ * call itself: the actual generation only happens when the user submits
+ * (possibly edited) this same shape of prompt via the per-piece endpoint.
+ */
+export function suggestionForSlot(carouselPrompt: string, slot: string): string {
+  return `${carouselPrompt} — ${slot}`;
+}
+
+/**
  * Generates the image for one missing visual slot and registers it into the
  * library as an AI-origin `candidate` (design.md D7): the file always lands
  * on disk with a sidecar, even before anyone approves it.

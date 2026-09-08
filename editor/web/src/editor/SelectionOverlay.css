@@ -88,6 +88,20 @@
   }
 }
 
+/*
+ * `awaitingImage: true` (no library candidate, waiting on an explicit
+ * per-piece generate request — see free-layout.ts's `data-awaiting`
+ * placeholder, which already paints the dashed box and "Por generar"
+ * label inside the iframe) gets a lighter outline than `.pending`: this is
+ * a resting state, not "still working", so no shimmer animation.
+ */
+.overlay-object.awaiting-image,
+.overlay-zone.awaiting-image {
+  outline: 1.5px dashed var(--ui-ink-3);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
 .overlay-lock-badge {
   position: absolute;
   top: 2px;
@@ -108,6 +122,33 @@
   display: grid;
   place-items: center;
   font-size: 9px;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+/*
+ * Small button shown on top of an `awaitingImage` placeholder (owner
+ * decision: image generation is never automatic, so every such placeholder
+ * needs an explicit way to ask for the image). Clicking it only selects
+ * the piece — the actual editable-prompt field lives in the properties
+ * panel (SelectionPane/SlidePane), never here in the canvas itself.
+ * `pointer-events: auto` overrides the zone's own `pointer-events: none`
+ * (the background zone is otherwise click-through so drag/select on the
+ * canvas keeps working).
+ */
+.overlay-generate-image-btn {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  padding: 5px 10px;
+  border-radius: var(--ui-radius-btn);
+  border: 1px solid var(--ui-p400);
+  background: var(--ui-surface);
+  color: var(--ui-accent-ink);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
   box-shadow: var(--ui-shadow-sm);
 }
 

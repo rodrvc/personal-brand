@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { getContrast, regenerate } from "../../api/client";
+import { getAiPricing, getAssetGeneration, getContrast, regenerate } from "../../api/client";
 import type { BrandTokens, CarouselDocument, ContrastMeasurement, Slide, SlideKind } from "../../api/types";
+import { GenerateImageField } from "../GenerateImageField";
 import { setBackgroundColor, setSlideKind } from "../mutations";
 
 interface SlidePaneProps {
@@ -24,8 +25,31 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
   const [measurements, setMeasurements] = useState<ContrastMeasurement[] | null>(null);
   const [contrastError, setContrastError] = useState<string | null>(null);
   const [bgMode, setBgMode] = useState<BackgroundMode>(slide.background.mode === "color" ? "color" : "library");
-  const [regenBusy, setRegenBusy] = useState(false);
   const [regenError, setRegenError] = useState<string | null>(null);
+  const [pricing, setPricing] = useState<number | null>(null);
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAiPricing()
+      .then((p) => setPricing(p.estimatedImageCostCents))
+      .catch(() => setPricing(null));
+  }, []);
+
+  useEffect(() => {
+    setLastPrompt(null);
+    if (slide.background.mode !== "asset") return;
+    let alive = true;
+    getAssetGeneration(slug, slide.background.assetId)
+      .then((sidecar) => {
+        if (alive && sidecar.prompt) setLastPrompt(sidecar.prompt);
+      })
+      .catch(() => {
+        // No sidecar (manual/library background) — falls back to `suggestion`.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [slug, slide.background]);
 
   useEffect(() => {
     let alive = true;
@@ -47,16 +71,14 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
     setBgMode(slide.background.mode === "color" ? "color" : "library");
   }, [slide.id, slide.background.mode]);
 
-  async function handleRegenerateBackground() {
-    setRegenBusy(true);
+  async function handleGenerateBackground(prompt: string) {
     setRegenError(null);
     try {
-      const next = await regenerate(slug, doc.id, { slideId: slide.id, objectId: "background" });
-      onDocReplace(next);
+      const { document } = await regenerate(slug, doc.id, { slideId: slide.id, objectId: "background" }, prompt);
+      onDocReplace(document);
     } catch (err) {
       setRegenError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRegenBusy(false);
+      throw err;
     }
   }
 
@@ -125,17 +147,22 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
           </div>
         )}
         {bgMode === "library" && <p className="props-hint">Elige una pieza desde la pestaña Bucket para usarla como fondo.</p>}
-        {bgMode === "ai" && (
-          <button
-            className="ui-btn"
-            style={{ justifyContent: "center" }}
-            onClick={() => void handleRegenerateBackground()}
-            disabled={slide.background.pinned || regenBusy}
-          >
-            {regenBusy ? "Generando…" : "Regenerar fondo con IA"}
-          </button>
+        {bgMode === "ai" && !slide.background.pinned && (
+          <GenerateImageField
+            mode={slide.background.mode === "asset" ? "regenerate" : "generate"}
+            initialPrompt={
+              slide.background.mode === "asset"
+                ? lastPrompt ?? slide.background.suggestion ?? `${doc.prompt.text} — background for ${slide.kind}`
+                : slide.background.suggestion ?? `${doc.prompt.text} — background for ${slide.kind}`
+            }
+            estimatedCostCents={pricing}
+            onSubmit={handleGenerateBackground}
+            error={regenError}
+          />
         )}
-        {regenError && <p className="props-hint" style={{ color: "var(--ui-danger)" }}>{regenError}</p>}
+        {bgMode === "ai" && slide.background.pinned && (
+          <p className="props-hint">Fijado: no se puede regenerar hasta que lo liberes.</p>
+        )}
         <p className="props-note">
           La IA hace solo el fondo. No dibuja letras sobre la imagen: eso lo pone el template encima, porque un
           modelo de imagen las deforma.

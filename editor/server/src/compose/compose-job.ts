@@ -1,11 +1,10 @@
-import type { BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument, Slide, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 
 import { readValidatedDocument, writeDocument } from "../document-store.js";
 import { NonePieceGenerator } from "../ai/none.js";
 import type { PieceGenerator } from "../ai/piece-generator.js";
 import type { ProfileStore } from "../profile-store.js";
-import { assignTextColorKeys, generateForSlot } from "./planner.js";
+import { suggestionForSlot } from "./planner.js";
 
 /**
  * Background job that fills in every `pending: true` placeholder a
@@ -16,6 +15,13 @@ import { assignTextColorKeys, generateForSlot } from "./planner.js";
  * pending pieces just shimmer until this job reaches them). Mirrors the
  * in-memory job-map pattern of `export/export-queue.ts`: per-process state
  * is fine here for the same reason (design.md D13, local-first/single-user).
+ *
+ * Owner decision: this job NEVER calls `generateImage`. Text is cheap
+ * enough to draft automatically, but an image slot with no library
+ * candidate is left as an `awaitingImage: true` placeholder carrying the
+ * planner's `suggestion` — only an explicit, per-piece request from the UI
+ * (with an editable, cost-shown prompt) triggers actual generation
+ * (piece-generation spec, "Library first, generate later").
  */
 export interface ComposeJob {
   id: string;
@@ -117,48 +123,46 @@ function clearTextPending(doc: CarouselDocument, ref: PendingTextRef, text: stri
 }
 
 /**
- * Clears `pending` on a visual slot (background or asset object),
- * optionally attaching a freshly generated `assetId`. `brand` is only
- * needed (and only read) when `assetId` is given — the "just clear
- * pending, no image" skip path never touches it, which is why it's
- * optional rather than a value every caller must fabricate.
+ * Clears `pending` on a visual slot (background or asset object). This job
+ * never generates an image (owner decision — see this file's top comment),
+ * so when the slot has no library candidate it becomes an
+ * `awaitingImage: true` placeholder carrying `suggestion` for the UI's
+ * per-piece "Generar imagen…" field, instead of ever getting an `assetId`
+ * here.
  */
 function clearVisualPending(
-  brand: BrandTokens | undefined,
   doc: CarouselDocument,
   ref: PendingVisualRef,
-  assetId?: string,
+  suggestion: string,
 ): CarouselDocument {
   const slides = doc.slides.map((slide, index) => {
     if (index !== ref.slideIndex) return slide;
     if (!ref.objectId) {
       // The slide's background itself.
-      // A user who pinned this background while the job was still running
-      // has said "keep what is here" — carry `pinned` across instead of
-      // resetting it to false, and don't overwrite a pinned background with
-      // a generated asset at all (same rule the regenerate scope honors).
-      if (assetId && slide.background.pinned) {
-        return { ...slide, background: { ...slide.background, pending: false } };
-      }
-      const nextBackground: Slide["background"] = assetId
-        ? { mode: "asset", assetId, pinned: slide.background.pinned, source: "ai" as const }
-        : { ...slide.background, pending: false };
-      const next = { ...slide, background: nextBackground };
-      // A newly attached background changes what "best contrast" means for
-      // this slide's text — same reasoning as compose.ts's
-      // `attachGeneratedAsset` for the old plan/apply flow.
-      return assetId ? assignTextColorKeys(brand!, next) : next;
+      const nextBackground: Slide["background"] = {
+        ...slide.background,
+        pending: false,
+        awaitingImage: true,
+        suggestion,
+      };
+      return { ...slide, background: nextBackground };
     }
     const objects: SlideObject[] = slide.objects.map((o) =>
-      o.id === ref.objectId
-        ? // Pinned while the job was running means "keep what is here":
-          // clear the placeholder but don't attach the generated asset over
-          // the user's choice.
-          assetId && !o.pinned
-          ? { ...o, assetId, source: "ai" as const, pending: false }
-          : { ...o, pending: false }
-        : o,
+      o.id === ref.objectId ? { ...o, pending: false, awaitingImage: true, suggestion } : o,
     );
+    return { ...slide, objects };
+  });
+  return { ...doc, slides, updatedAt: new Date().toISOString() };
+}
+
+/** Same as `clearVisualPending` but with no suggestion — the "skipped" (no AI key) path, where there is no planner call to derive one from either. */
+function clearVisualPendingNoSuggestion(doc: CarouselDocument, ref: PendingVisualRef): CarouselDocument {
+  const slides = doc.slides.map((slide, index) => {
+    if (index !== ref.slideIndex) return slide;
+    if (!ref.objectId) {
+      return { ...slide, background: { ...slide.background, pending: false } };
+    }
+    const objects: SlideObject[] = slide.objects.map((o) => (o.id === ref.objectId ? { ...o, pending: false } : o));
     return { ...slide, objects };
   });
   return { ...doc, slides, updatedAt: new Date().toISOString() };
@@ -175,7 +179,6 @@ function clearVisualPending(
  */
 export function enqueueComposeJob(
   store: ProfileStore,
-  brand: BrandTokens,
   carouselId: string,
   initialDocument: CarouselDocument,
   generator: PieceGenerator,
@@ -209,16 +212,22 @@ export function enqueueComposeJob(
     return jobId;
   }
 
-  void runComposeJob(store, brand, job, initialDocument, generator, promptText);
+  void runComposeJob(store, job, initialDocument, generator, promptText);
   return jobId;
 }
 
-/** Flips every pending placeholder's `pending` to `false` with no AI call — the "skipped" (no API key) path. */
+/**
+ * Flips every pending placeholder's `pending` to `false` with no AI call —
+ * the "skipped" (no API key) path. Visual slots get no `suggestion` here
+ * either (deriving one is the planner's job, and the planner is never
+ * invoked on this path): they simply stop being `pending`, exactly like
+ * the compose job's own "generator threw" fallback for an image slot.
+ */
 function skipAllPending(doc: CarouselDocument): CarouselDocument {
   const { texts, visuals } = collectPending(doc);
   let next = doc;
   for (const ref of texts) next = clearTextPending(next, ref, "");
-  for (const ref of visuals) next = clearVisualPending(undefined, next, ref);
+  for (const ref of visuals) next = clearVisualPendingNoSuggestion(next, ref);
   return next;
 }
 
@@ -252,7 +261,6 @@ function persistPiece(
 
 async function runComposeJob(
   store: ProfileStore,
-  brand: BrandTokens,
   job: ComposeJob,
   initialDocument: CarouselDocument,
   generator: PieceGenerator,
@@ -319,47 +327,20 @@ async function runComposeJob(
     }
   }
 
-  // Visual pieces: one at a time, per the task's explicit instruction —
-  // each is paid for individually and there's no batched multi-image call
-  // to make here the way there is for text. Read fresh off the job's
-  // original `doc` (not off disk again here): the text loop above never
-  // mutates this in-memory `doc`, and a slide's background pending flag is
-  // untouched by that loop, so this still finds every visual placeholder
-  // this job is responsible for — the actual current state is only
-  // consulted per-piece, inside `persistPiece`.
+  // Visual pieces: this job never generates an image (owner decision — see
+  // this file's top comment). Every pending visual slot with no library
+  // candidate simply becomes an `awaitingImage: true` placeholder carrying
+  // the planner's `suggestion`, with no AI call and no cost. Read fresh off
+  // the job's original `doc` (not off disk again here): the text loop
+  // above never mutates this in-memory `doc`, and a slide's background
+  // pending flag is untouched by that loop, so this still finds every
+  // visual placeholder this job is responsible for — the actual current
+  // state is only consulted per-piece, inside `persistPiece`.
   const { visuals } = collectPending(doc);
   for (const ref of visuals) {
-    try {
-      const entry = await generateForSlot(store, generator, {
-        prompt: `${promptText} — ${ref.slot}`,
-        kind: ref.objectId ? "photo" : "background",
-        canvas: doc.canvas,
-        carouselId: job.carouselId,
-        slot: ref.slot,
-      });
-      // `AssetEntry` itself carries no cost field (system/assets/index.ts) —
-      // `generateForSlot` records it in the sidecar it just wrote
-      // (`assets/generated/<id>.json`), which is the one place the number
-      // survives past this call.
-      try {
-        const sidecar = store.readJson<{ costCents?: number }>(`assets/generated/${entry.id}.json`);
-        job.costCentsSoFar += sidecar.costCents ?? 0;
-      } catch {
-        // Sidecar unreadable for some reason — cost display degrades to
-        // undercounting rather than failing the whole piece.
-      }
-      persistPiece(store, job.carouselId, ref, (fresh) => clearVisualPending(brand, fresh, ref, entry.id));
-      job.completedPieces += 1;
-      job.counts.generated += 1;
-    } catch (error) {
-      // Same reasoning as the text loop above: one failed image must not
-      // sink every other piece. The slot is left without an image
-      // (pending: false, so the UI shows an empty box, not a stuck
-      // spinner) and the job accumulates the error message.
-      persistPiece(store, job.carouselId, ref, (fresh) => clearVisualPending(brand, fresh, ref));
-      job.completedPieces += 1;
-      job.message = `Fallo generando imagen: ${(error as Error).message}`;
-    }
+    const suggestion = suggestionForSlot(promptText, ref.slot);
+    persistPiece(store, job.carouselId, ref, (fresh) => clearVisualPending(fresh, ref, suggestion));
+    job.completedPieces += 1;
   }
 
   job.status = job.message ? "error" : "done";

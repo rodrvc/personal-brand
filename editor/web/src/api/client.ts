@@ -122,11 +122,34 @@ export interface RegenerateTarget {
   scope?: "unpinned";
 }
 
-export function regenerate(slug: string, carouselId: string, target: RegenerateTarget): Promise<CarouselDocument> {
+export interface RegenerateResponse {
+  document: CarouselDocument;
+  /** Actual cost this call just spent — 0 for a text redraft's negligible/untracked case or when nothing was generated. */
+  costCents: number;
+}
+
+/**
+ * `prompt` overrides the planner's own `suggestion` for a single-piece
+ * image target (background or an asset object) — the text the user typed
+ * or edited into the "Generar imagen…"/"Regenerar" field. Ignored for text
+ * objects and for `scope: "unpinned"` (owner decision: image generation is
+ * never automatic, so the bulk "Regenerar lo no fijado" button only
+ * redrafts text — see routes/compose.ts's `regenerateUnpinned`).
+ */
+export function regenerate(
+  slug: string,
+  carouselId: string,
+  target: RegenerateTarget,
+  prompt?: string,
+): Promise<RegenerateResponse> {
   return request(`/profiles/${slug}/carousels/${carouselId}/regenerate`, {
     method: "POST",
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, ...(prompt !== undefined ? { prompt } : {}) }),
   });
+}
+
+export function getAiPricing(): Promise<{ imageModel: string; estimatedImageCostCents: number }> {
+  return request(`/ai/pricing`);
 }
 
 export function getStats(slug: string, carouselId: string): Promise<StatsResponse> {
@@ -179,6 +202,11 @@ export async function uploadAsset(slug: string, file: File): Promise<AssetEntry>
 
 export function assetFileUrl(slug: string, relPathUnderAssets: string): string {
   return `/api/profiles/${slug}/assets/files/${relPathUnderAssets}`;
+}
+
+/** The generation sidecar's `prompt` for an AI-origin asset — used to prefill the "Regenerar" field with what was actually asked for last time. 404s for a manual/library asset. */
+export function getAssetGeneration(slug: string, assetId: string): Promise<{ prompt?: string; model?: string; costCents?: number }> {
+  return request(`/profiles/${slug}/assets/${assetId}/generation`);
 }
 
 /**

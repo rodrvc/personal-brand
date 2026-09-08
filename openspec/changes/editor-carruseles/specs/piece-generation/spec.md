@@ -16,10 +16,10 @@ Creating the carousel is immediate and has no mandatory plan/approval step: `POS
 - **WHEN** the user writes "un carrusel que explique X paso a paso, con el template explicativo, usando las fotos de los assets" ("a carousel explaining X step by step, with the explicativo template, using the photos from the assets")
 - **THEN** they get N slides with a cover, steps and a closing, each starting as a `pending` placeholder that becomes an editable headline and body as the background job reaches it, and the slide count is editable afterward
 
-### Requirement: Library first, generate after
-For each visual slot in the plan (background, figure, decoration) the system SHALL search the brand's approved library first by `kind` and `tags` and propose the best candidate. It SHALL only generate with AI if there's no candidate, if the user asks for one, or if the prompt explicitly requests it. Composing from the library MUST be a first-class path in the UI, not a fallback.
+### Requirement: Library first, generate later
+For each visual slot in the plan (background, figure, decoration) the system SHALL search the brand's approved library first by `kind` and `tags` and propose the best candidate. Composing from the library MUST be a first-class path in the UI, not a fallback.
 
-Library-sourced pieces are placed synchronously, at document-creation time — there is no `pending` phase for them, since no AI call and no wait is needed. Only pieces the plan marked for AI generation start as `pending: true` placeholders for the background compose job to fill in.
+Library-sourced pieces are placed synchronously, at document-creation time — there is no `pending` phase for them, since no AI call and no wait is needed. Image generation MUST NEVER happen automatically, for any piece, at any point — not at document creation, not in the background compose job, and not from a bulk action. A visual slot with no library candidate becomes an `awaitingImage: true` placeholder carrying a `suggestion` (the planner's own prompt idea, derived from the carousel prompt and the slot) instead of a generated image. The UI SHALL offer a button on every such placeholder that opens an editable text field, prefilled with `suggestion` and showing the estimated cost; only submitting that field — an explicit, per-piece, user-approved request — actually calls the AI provider and attaches the resulting image. Text drafting is exempt from this: it is cheap enough to run automatically, exactly as before.
 
 #### Scenario: Character already approved
 - **WHEN** the library has approved characters with the requested tag
@@ -27,31 +27,43 @@ Library-sourced pieces are placed synchronously, at document-creation time — t
 
 #### Scenario: Empty library
 - **WHEN** the brand has no approved background
-- **THEN** the plan generates the backgrounds, saves them as candidates, and shows their cost
+- **THEN** the background stays an `awaitingImage: true` placeholder (rendered as a dashed "Por generar" box) with a "Generar imagen…" button; no image is generated and no cost is spent until the user opens that field and confirms
 
 ### Requirement: Regeneration per piece
 Regeneration SHALL be requestable for a single piece (this background, this character, this headline) or for "lo no fijado" ("what's not pinned") on a slide. A regeneration MUST NOT touch any piece with `pinned: true`, nor any other slide. There is no "redo" that replaces the whole carousel while ignoring pinned pieces.
 
+Every per-piece image request — whether attaching a first image to an `awaitingImage` placeholder or regenerating one that already has one — goes through an editable prompt field the user must submit explicitly, and the request MAY override the planner's `suggestion`/the piece's last prompt with the user's own text. "Lo no fijado" ("what's not pinned") is a bulk, no-per-piece-prompt action: since it cannot show or confirm a per-piece prompt or cost, it MUST NOT generate or regenerate any image — it only redrafts unpinned text objects. An unpinned visual piece (background or asset object) is left exactly as it is by this action, whether or not it already has an image.
+
 #### Scenario: Change only the character
 - **WHEN** the user liked the background and the copy but not the character, and asks to regenerate the character
-- **THEN** only that object changes; background and text stay the same, and the previous character remains as a candidate in the library
+- **THEN** they get a field prefilled with the character's last prompt and its cost; only after they confirm does that object change — background and text stay the same, and the previous character remains as a candidate in the library
 
 #### Scenario: Regenerate a headline
 - **WHEN** the user asks for another wording of a slide's headline
-- **THEN** they receive up to three text alternatives to choose from, and the object keeps its geometry, color and font
+- **THEN** the text redrafts immediately (no per-piece prompt/cost confirmation — text drafting is exempt from the explicit-request rule) and the object keeps its geometry, color and font
+
+#### Scenario: "Regenerar lo no fijado" with an ungenerated background
+- **WHEN** a slide has an unpinned `awaitingImage` background and an unpinned headline, and the user clicks "Regenerar lo no fijado"
+- **THEN** the headline redrafts but the background stays exactly as it is — still `awaitingImage: true`, no image generated
 
 ### Requirement: Cost recorded and visible
 Every call to the AI provider SHALL record `model`, tokens or size, `costCents` and date: in the asset's sidecar if it produced an image, and in the document's `prompt.runs[]` if it produced text. The status bar and the prompt header SHALL show the carousel's accumulated cost and how many pieces came from the library.
 
-While the background compose job is still running, cost and piece counters are the job's own numbers (`costCentsSoFar`, `completedPieces`/`totalPieces`, and `counts.fromLibrary`/`counts.generated`/`counts.drafted` from `GET .../compose/:jobId`) rather than a recount of the document — the prompt header polls the job and shows these live as pieces land, not only once the job finishes.
+While the background compose job is still running, cost and piece counters are the job's own numbers (`costCentsSoFar`, `completedPieces`/`totalPieces`, and `counts.fromLibrary`/`counts.generated`/`counts.drafted` from `GET .../compose/:jobId`) rather than a recount of the document — the prompt header polls the job and shows these live as pieces land, not only once the job finishes. Since the compose job never generates an image, its counters and progress line describe text drafting only; the prompt header additionally shows a count of pieces still `awaitingImage`, with no progress bar for them (there is nothing running in the background to show progress on).
+
+Before a per-piece image request is submitted, the UI SHALL show its estimated cost (`GET /api/ai/pricing`, a flat per-image estimate from `pricing.ts`) next to the editable prompt field; the actual `costCents` the request spent comes back in the `POST .../regenerate` response.
 
 #### Scenario: Carousel composed with no generation
 - **WHEN** every visual piece came from the library and only text was drafted
 - **THEN** the cost shown is the text's cost, and the header shows "N piezas de biblioteca · 0 fondos generados" ("N pieces from the library · 0 generated backgrounds")
 
 #### Scenario: Compose job still running
-- **WHEN** the background compose job has filled in 3 of 7 pending pieces
-- **THEN** the prompt header shows "3/7 piezas" and the cost accumulated so far, updating as each subsequent piece completes
+- **WHEN** the background compose job has drafted 3 of 7 pending text pieces
+- **THEN** the prompt header shows "3/7 piezas" for text drafting, updating as each subsequent piece completes
+
+#### Scenario: Cost shown before spending it
+- **WHEN** the user opens the "Generar imagen…" field for an `awaitingImage` background
+- **THEN** the field shows the estimated cost (e.g. "~0,4¢") before the user clicks "Generar", and the response after clicking carries the actual `costCents` spent
 
 ### Requirement: Every piece is marked with its origin
 Every visual object in the document (background, figure, photo) SHALL record its origin: `source: 'ai'` if it came from a generation, or `source: 'library'` with the library's `assetId` if it was composed from an already-approved piece. The origin MUST persist in the document and be available for the UI to show per piece, not only as a carousel-level aggregate.

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { regenerate } from "../../api/client";
-import type { BrandTokens, CarouselDocument, Slide } from "../../api/types";
+import { getAiPricing, getAssetGeneration, regenerate } from "../../api/client";
+import type { AssetObject, BrandTokens, CarouselDocument, Slide } from "../../api/types";
 import type { Selection } from "../geometry";
+import { GenerateImageField } from "../GenerateImageField";
 import {
   resetObjectToSlot,
   setObjectPinned,
@@ -24,20 +25,102 @@ interface SelectionPaneProps {
 
 const ORIGIN_LABEL: Record<string, string> = { ai: "IA", library: "Biblioteca", manual: "Manual" };
 
+/**
+ * The generate/regenerate control only makes sense for a piece that is
+ * either waiting on an explicit image request (`awaitingImage: true`) or
+ * already has an AI-generated image to redo. A piece that never went
+ * through AI at all — a plain color background, a library-sourced asset —
+ * has nothing to generate: showing the button there would suggest an
+ * action that silently replaces a deliberate manual/library choice.
+ */
+function canOfferGenerate(piece: { awaitingImage?: boolean; source: string }): boolean {
+  return Boolean(piece.awaitingImage) || piece.source === "ai";
+}
+
+/**
+ * Piece-generation UI for one visual slot (background or asset object):
+ * "Generar imagen…" when it's `awaitingImage` (no library candidate yet,
+ * no image), "Regenerar…" when it already has one — both expand into the
+ * shared `GenerateImageField` with an editable, cost-shown prompt. Owner
+ * decision: image generation is never automatic, so this is the only path
+ * that can attach or replace an image on this piece.
+ */
+function VisualGenerateControl({
+  slug,
+  doc,
+  target,
+  suggestion,
+  existingAssetId,
+  estimatedCostCents,
+  onDocReplace,
+}: {
+  slug: string;
+  doc: CarouselDocument;
+  target: { slideId: string; objectId?: string };
+  suggestion: string;
+  existingAssetId?: string;
+  estimatedCostCents: number | null;
+  onDocReplace: (next: CarouselDocument) => void;
+}) {
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLastPrompt(null);
+    if (!existingAssetId) return;
+    let alive = true;
+    getAssetGeneration(slug, existingAssetId)
+      .then((sidecar) => {
+        if (alive && sidecar.prompt) setLastPrompt(sidecar.prompt);
+      })
+      .catch(() => {
+        // No sidecar (e.g. a manual/library asset) — falls back to `suggestion` below.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [slug, existingAssetId]);
+
+  async function handleSubmit(prompt: string) {
+    setError(null);
+    try {
+      const { document } = await regenerate(slug, doc.id, target, prompt);
+      onDocReplace(document);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
+  return (
+    <GenerateImageField
+      mode={existingAssetId ? "regenerate" : "generate"}
+      initialPrompt={existingAssetId ? lastPrompt ?? suggestion : suggestion}
+      estimatedCostCents={estimatedCostCents}
+      onSubmit={handleSubmit}
+      error={error}
+    />
+  );
+}
+
 export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionChange, onDocUpdate, onDocReplace }: SelectionPaneProps) {
+  const [pricing, setPricing] = useState<number | null>(null);
   const [regenerating, setRegenerating] = useState<string | null>(null);
   const [regenError, setRegenError] = useState<string | null>(null);
   const selectedObject = selection ? slide.objects.find((o) => o.id === selection.objectId) : undefined;
 
-  async function handleRegenerate(objectId: string | "background") {
+  useEffect(() => {
+    getAiPricing()
+      .then((p) => setPricing(p.estimatedImageCostCents))
+      .catch(() => setPricing(null));
+  }, []);
+
+  async function handleRegenerateText(objectId: string) {
     setRegenerating(objectId);
     setRegenError(null);
     try {
-      const next = await regenerate(slug, doc.id, {
-        slideId: slide.id,
-        ...(objectId === "background" ? {} : { objectId }),
-      });
-      onDocReplace(next);
+      const { document } = await regenerate(slug, doc.id, { slideId: slide.id, objectId });
+      onDocReplace(document);
     } catch (err) {
       setRegenError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -138,10 +221,36 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
         </div>
       )}
 
+      {selectedObject?.kind === "asset" && (
+        <div className="props-card">
+          <div className="props-card-heading">
+            {selectedObject.slot ?? "Asset"}
+            <span className={`origin-badge ${selectedObject.source}`} style={{ marginLeft: "auto" }}>
+              {selectedObject.pinned ? "fijado" : ORIGIN_LABEL[selectedObject.source]}
+            </span>
+          </div>
+          {!selectedObject.pinned && canOfferGenerate(selectedObject) && (
+            <VisualGenerateControl
+              slug={slug}
+              doc={doc}
+              target={{ slideId: slide.id, objectId: selectedObject.id }}
+              suggestion={(selectedObject as AssetObject).suggestion ?? `${doc.prompt.text} — ${selectedObject.slot ?? selectedObject.id}`}
+              existingAssetId={(selectedObject as AssetObject).assetId}
+              estimatedCostCents={pricing}
+              onDocReplace={onDocReplace}
+            />
+          )}
+          {selectedObject.pinned && <p className="props-hint">Fijado: no se puede regenerar hasta que lo liberes.</p>}
+          {!selectedObject.pinned && !canOfferGenerate(selectedObject) && (
+            <p className="props-hint">Esta pieza no pasó por IA — no hay imagen que generar ni regenerar.</p>
+          )}
+        </div>
+      )}
+
       <div className="props-card">
         <div className="props-card-heading">Piezas de la lámina</div>
         <p className="props-hint" style={{ marginBottom: 2 }}>
-          Fija <b>✓</b> lo que te gustó y regenera <b>↻</b> solo el resto.
+          Fija <b>✓</b> lo que te gustó y regenera <b>↻</b> el texto, o generá la imagen que falte.
         </p>
 
         <div
@@ -161,63 +270,81 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
             >
               ✓
             </button>
-            <button
-              className="regen-btn"
-              title="Regenerar"
-              disabled={slide.background.pinned || regenerating === "background"}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleRegenerate("background");
-              }}
-            >
-              ↻
-            </button>
           </span>
         </div>
+        {!slide.background.pinned && canOfferGenerate(slide.background) && (
+          <div className="layer-row-extra" onClick={(e) => e.stopPropagation()}>
+            <VisualGenerateControl
+              slug={slug}
+              doc={doc}
+              target={{ slideId: slide.id, objectId: "background" }}
+              suggestion={slide.background.suggestion ?? `${doc.prompt.text} — background for ${slide.kind}`}
+              existingAssetId={slide.background.mode === "asset" ? slide.background.assetId : undefined}
+              estimatedCostCents={pricing}
+              onDocReplace={onDocReplace}
+            />
+          </div>
+        )}
 
         {slide.objects.map((object) => (
-          <div
-            key={object.id}
-            className={`layer-row ${selection?.objectId === object.id ? "on" : ""}`}
-            onClick={() => onSelectionChange({ slideId: slide.id, objectId: object.id })}
-          >
-            <span className="layer-name">
-              {object.locked && <span className="layer-lock-icon">🔒 </span>}
-              {object.slot ?? (object.kind === "text" ? "Texto" : "Asset")}
-            </span>
-            <span className="layer-actions">
-              {!object.locked && <span className={`origin-badge ${object.source}`}>{ORIGIN_LABEL[object.source]}</span>}
-              {!object.locked && (
-                <>
-                  <button
-                    className={`pin-btn ${object.pinned ? "on" : ""}`}
-                    title="Fijar"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDocUpdate((prev) => setObjectPinned(prev, slide.id, object.id, !object.pinned));
-                    }}
-                  >
-                    ✓
-                  </button>
-                  <button
-                    className="regen-btn"
-                    title="Regenerar"
-                    disabled={object.pinned || regenerating === object.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleRegenerate(object.id);
-                    }}
-                  >
-                    ↻
-                  </button>
-                </>
-              )}
-            </span>
+          <div key={object.id}>
+            <div
+              className={`layer-row ${selection?.objectId === object.id ? "on" : ""}`}
+              onClick={() => onSelectionChange({ slideId: slide.id, objectId: object.id })}
+            >
+              <span className="layer-name">
+                {object.locked && <span className="layer-lock-icon">🔒 </span>}
+                {object.slot ?? (object.kind === "text" ? "Texto" : "Asset")}
+              </span>
+              <span className="layer-actions">
+                {!object.locked && <span className={`origin-badge ${object.source}`}>{ORIGIN_LABEL[object.source]}</span>}
+                {!object.locked && (
+                  <>
+                    <button
+                      className={`pin-btn ${object.pinned ? "on" : ""}`}
+                      title="Fijar"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDocUpdate((prev) => setObjectPinned(prev, slide.id, object.id, !object.pinned));
+                      }}
+                    >
+                      ✓
+                    </button>
+                    {object.kind === "text" && (
+                      <button
+                        className="regen-btn"
+                        title="Regenerar"
+                        disabled={object.pinned || regenerating === object.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleRegenerateText(object.id);
+                        }}
+                      >
+                        ↻
+                      </button>
+                    )}
+                  </>
+                )}
+              </span>
+            </div>
+            {object.kind === "asset" && !object.pinned && !object.locked && canOfferGenerate(object) && (
+              <div className="layer-row-extra" onClick={(e) => e.stopPropagation()}>
+                <VisualGenerateControl
+                  slug={slug}
+                  doc={doc}
+                  target={{ slideId: slide.id, objectId: object.id }}
+                  suggestion={object.suggestion ?? `${doc.prompt.text} — ${object.slot ?? object.id}`}
+                  existingAssetId={object.assetId}
+                  estimatedCostCents={pricing}
+                  onDocReplace={onDocReplace}
+                />
+              </div>
+            )}
           </div>
         ))}
 
         {regenError && <p className="props-hint" style={{ color: "var(--ui-danger)" }}>{regenError}</p>}
-        <p className="props-note">Fija lo que quieras conservar; "Regenerar lo no fijado" cambia solo el resto.</p>
+        <p className="props-note">Fija lo que quieras conservar; "Regenerar lo no fijado" redacta de nuevo solo los textos.</p>
       </div>
     </>
   );

@@ -55,6 +55,17 @@ const backgroundSchema = z.discriminatedUnion("mode", [
     // instead of the color as final. Cleared to `false` (never removed)
     // once the compose job either fills in the real asset or gives up.
     pending: z.boolean().optional(),
+    // Owner decision: image generation never happens automatically. When
+    // the compose job reaches a background slot with no library
+    // candidate, it stops here rather than calling the AI provider:
+    // `pending` clears to `false` (the placeholder is final, not "still
+    // working") and `awaitingImage: true` marks that this background
+    // still needs an explicit, user-approved generate call.
+    // `suggestion` carries the planner's own idea of what to generate,
+    // shown pre-filled in the editable prompt field the UI opens for it
+    // (piece-generation spec, "Library first, generate later").
+    awaitingImage: z.boolean().optional(),
+    suggestion: z.string().optional(),
   }),
   z.object({
     mode: z.literal("asset"),
@@ -62,6 +73,8 @@ const backgroundSchema = z.discriminatedUnion("mode", [
     pinned: z.boolean(),
     source: pieceSourceSchema,
     pending: z.boolean().optional(),
+    awaitingImage: z.boolean().optional(),
+    suggestion: z.string().optional(),
   }),
 ]);
 export type SlideBackground = z.infer<typeof backgroundSchema>;
@@ -83,6 +96,13 @@ const baseObjectFields = {
   // `false` (never removes it) on every object it touches, whether it
   // succeeded or gave up, so nothing is left showing a spinner forever.
   pending: z.boolean().optional(),
+  // Only meaningful on an `asset`-kind object (see the background schema's
+  // matching fields above for the full reasoning): owner decision that
+  // image generation never happens automatically. Set when this slot has
+  // no library candidate and needs an explicit, user-approved generate
+  // call; `suggestion` is the planner's prompt idea for it.
+  awaitingImage: z.boolean().optional(),
+  suggestion: z.string().optional(),
 };
 
 const textObjectSchema = z.object({

@@ -217,10 +217,23 @@ export function SelectionOverlay({
       {zoneBoxes.map((zone) => (
         <div
           key={zone.id}
-          className={`overlay-zone ${zone.label === "background" && slide.background.pending ? "pending" : ""}`}
+          className={`overlay-zone ${zone.label === "background" && slide.background.pending ? "pending" : ""} ${
+            zone.label === "background" && slide.background.awaitingImage ? "awaiting-image" : ""
+          }`}
           style={{ left: zone.x * scale, top: zone.y * scale, width: zone.w * scale, height: zone.h * scale }}
         >
           <span className="overlay-zone-label">{zone.label.toUpperCase()}</span>
+          {zone.label === "background" && slide.background.awaitingImage && (
+            <button
+              className="overlay-generate-image-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectionChange(null);
+              }}
+            >
+              Generar imagen…
+            </button>
+          )}
         </div>
       ))}
 
@@ -250,7 +263,9 @@ export function SelectionOverlay({
         return (
           <div
             key={object.id}
-            className={`overlay-object ${isSelected ? "selected" : ""} ${object.pinned ? "pinned" : ""} ${object.pending ? "pending" : ""}`}
+            className={`overlay-object ${isSelected ? "selected" : ""} ${object.pinned ? "pinned" : ""} ${
+              object.pending ? "pending" : ""
+            } ${object.kind === "asset" && object.awaitingImage ? "awaiting-image" : ""}`}
             style={{
               left: box.x * scale,
               top: box.y * scale,
@@ -269,6 +284,17 @@ export function SelectionOverlay({
             }}
           >
             {object.pinned && <span className="overlay-pin-badge" title="Fijado">✓</span>}
+            {object.kind === "asset" && object.awaitingImage && (
+              <button
+                className="overlay-generate-image-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectionChange({ slideId: slide.id, objectId: object.id });
+                }}
+              >
+                Generar imagen…
+              </button>
+            )}
             {isSelected && !editing && (
               <>
                 <span className="overlay-handle tl" onMouseDown={(e) => beginDrag(e, object.id, { kind: "scale", corner: "tl" })} />

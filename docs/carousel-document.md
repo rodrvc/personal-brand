@@ -70,6 +70,18 @@ Key rules:
 - `source` is `'ai' | 'library' | 'manual'` — where the piece came from,
   shown per-piece in the UI (see `specs/piece-generation`).
 - `objects[]` is stacking order: the last entry paints on top.
+- `pending?: boolean` marks a placeholder the background compose job hasn't
+  filled in yet (text drafting, or a library-sourced visual still being
+  placed). Cleared to `false` once the job reaches that piece.
+- `awaitingImage?: boolean` and `suggestion?: string` (background and asset
+  objects only): image generation is never automatic. When a visual slot
+  has no library candidate, the compose job stops there instead of calling
+  the AI provider — `pending` clears to `false`, `awaitingImage` is set to
+  `true`, and `suggestion` carries the planner's own prompt idea for that
+  slot. The UI shows a "Generar imagen…" button that opens an editable
+  field prefilled with `suggestion`; only an explicit per-piece request
+  (`POST .../regenerate` with a `prompt`) generates the image and clears
+  `awaitingImage`.
 
 Validate with `validateDocument(doc, { brand, assetExists })` from
 `system/ig-carousel/carousel-document.ts`. `assetExists` is an injected

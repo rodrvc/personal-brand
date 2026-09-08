@@ -18,13 +18,13 @@ import {
 export class NonePieceGenerator implements PieceGenerator {
   async draftCopy(_plan: DraftCopyPlan): Promise<DraftCopyResult> {
     throw new GenerationUnavailableError(
-      "AI copy drafting is unavailable: OPENAI_API_KEY is not configured.",
+      "La redacción con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
     );
   }
 
   async generateImage(_spec: GenerateImageSpec): Promise<GeneratedImage> {
     throw new GenerationUnavailableError(
-      "AI image generation is unavailable: OPENAI_API_KEY is not configured.",
+      "La generación de imágenes con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
     );
   }
 }

@@ -127,7 +127,7 @@ export function Editor({
     setShowRegenDialog(false);
     setRegenUnpinnedError(null);
     try {
-      const next = await regenerate(slug, doc.id, { slideId: activeSlide.id, scope: "unpinned" });
+      const { document: next } = await regenerate(slug, doc.id, { slideId: activeSlide.id, scope: "unpinned" });
       applyRemote(next);
     } catch (err) {
       setRegenUnpinnedError(err instanceof Error ? err.message : String(err));

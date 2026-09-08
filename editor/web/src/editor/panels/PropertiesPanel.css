@@ -189,6 +189,11 @@
   color: var(--ui-warn);
 }
 
+.layer-row-extra {
+  padding: 0 8px 8px;
+  cursor: default;
+}
+
 .pin-btn,
 .regen-btn {
   width: 21px;
