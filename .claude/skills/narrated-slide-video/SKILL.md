@@ -179,7 +179,12 @@ Not yours. You produce the shortlist, the owner picks.
   so they can be compared in one listen, hand it over, and **stop**. Do not
   synthesize the full deck against a voice nobody approved.
 
-Endpoint, filters and the comparison-file recipe:
+- **Pace is a casting criterion, not just tone.** Every clip is as long as its
+  own narration, so a slower voice does not desynchronize anything — it makes
+  the whole video longer, which compounds over a multi-minute deck.
+
+Endpoint, filters, a starting catalog of already-queried voices, and a
+copyable snippet that generates and concatenates the samples in one pass:
 [`references/voice-casting.md`](references/voice-casting.md).
 
 ## Normalize the text before it reaches the TTS
