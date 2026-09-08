@@ -59,13 +59,20 @@ Two things that help confirm the order fast:
 ### When the deck isn't a set of full-slide images
 
 A deck built from text boxes and shapes has no full-slide PNG to extract. Do
-not try to reassemble it. Export to PDF (LibreOffice, Keynote, PowerPoint) and
-use the PDF route — it renders exactly what the deck looks like, fonts
-included.
+not try to reassemble it. Export to PDF and use the PDF route — it renders
+exactly what the deck looks like, fonts included.
+
+`soffice` (LibreOffice) does it headless **if it is installed** — check first,
+because it is not present by default on macOS:
 
 ```bash
-soffice --headless --convert-to pdf --outdir "$OUT" <deck>.pptx
+command -v soffice && soffice --headless --convert-to pdf --outdir "$OUT" <deck>.pptx
 ```
+
+If it is missing, ask the owner to export the deck to PDF from PowerPoint or
+Keynote and hand that over. **Do not install LibreOffice to work around this:**
+it is a multi-gigabyte dependency for a one-line export the owner can do in
+five seconds.
 
 ## PDF
 

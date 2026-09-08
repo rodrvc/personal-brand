@@ -8,6 +8,23 @@ Synthesis itself — models, voice settings, the API call — is the
 duplicates it. What this stage adds is the search, the sample construction,
 and the approval gate.
 
+## Prerequisites
+
+**`ELEVENLABS_API_KEY` must be in the environment.** Every command on this page
+fails with an opaque API error without it.
+
+```bash
+[ -n "$ELEVENLABS_API_KEY" ] && echo ok
+```
+
+If the key lives in an `.env`, load it with `set -a; . <path>/.env; set +a` — a
+bare `source` will not export it into the environment the `curl` subprocess
+sees. See [`setup-api-key`](../../setup-api-key/SKILL.md).
+
+The snippets also assume `jq` (to build the JSON bodies), `ffmpeg`/`ffprobe`
+(to concatenate and measure), and a player — `afplay` on macOS, otherwise
+`ffplay -autoexit -nodisp`.
+
 ## Query the catalog
 
 The shared voice library, filtered:
@@ -129,6 +146,14 @@ not retried as though it had been an oversight:
    decision, not an engine capability. This skill is transportable precisely
    because it carries no catalog of one language and one vendor.
 
+**Why a table of one accent is allowed here and an MP3 is not.** Both look like
+production data. The difference is that a `voice_id` and a character note are
+cheap to re-derive and safe to be wrong about — a stale row costs one query —
+whereas an MP3 is licensed third-party audio and a cache that cannot detect its
+own staleness. This table is a bookmark into a public catalog, not a copy of
+it. Keep it that way: ids, notes and dates, never audio, and add rows for other
+accents as they come up rather than treating this one as the catalog.
+
 ### Cache the samples locally instead, ignored by git
 
 The benefit that motivated committing them — not paying for the same audio
@@ -194,10 +219,11 @@ cd "$OUT/casting"   # outside the repo
 # The REAL first paragraph of the script, already normalized.
 TXT='<first paragraph of the script>'
 
-for pair in "Olivia:lLsDvdl6OjtZfLJPM2HA" \
-            "Emma:GJid0jgRsqjUy21Avuex" \
-            "Angela:prblQcKOdF08ozhxP2mk" \
-            "Catalina:6Gr4AVmTax1pMJO0lHRK"; do
+# The four your query returned — ids and dates live in the table above.
+for pair in "<name>:<voice-id>" \
+            "<name>:<voice-id>" \
+            "<name>:<voice-id>" \
+            "<name>:<voice-id>"; do
   n="${pair%%:*}"; id="${pair##*:}"
   jq -n --arg t "$TXT" '{text:$t,model_id:"eleven_multilingual_v2",
       voice_settings:{stability:0.5,similarity_boost:0.75,style:0.15}}' \
@@ -208,11 +234,12 @@ for pair in "Olivia:lLsDvdl6OjtZfLJPM2HA" \
 done
 
 ffmpeg -v error -f lavfi -t 0.9 -i anullsrc=r=44100:cl=mono -y sil.mp3
-ffmpeg -v error -i Olivia.mp3 -i sil.mp3 -i Emma.mp3 -i sil.mp3 \
-       -i Angela.mp3 -i sil.mp3 -i Catalina.mp3 \
-  -filter_complex "[0][1][2][3][4][5][6]concat=n=7:v=0:a=1" -y comparativa-voces.mp3
+# Four samples interleaved with three silences: seven inputs, n=7.
+ffmpeg -v error -i "<name-1>.mp3" -i sil.mp3 -i "<name-2>.mp3" -i sil.mp3 \
+       -i "<name-3>.mp3" -i sil.mp3 -i "<name-4>.mp3" \
+  -filter_complex "[0][1][2][3][4][5][6]concat=n=7:v=0:a=1" -y comparison.mp3
 
-open comparativa-voces.mp3; echo "file://$PWD/comparativa-voces.mp3"
+open comparison.mp3; echo "file://$PWD/comparison.mp3"
 ```
 
 **Build the JSON with `jq`, not by interpolating into a quoted string.** A

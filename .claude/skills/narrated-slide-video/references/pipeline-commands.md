@@ -79,17 +79,35 @@ means two slides' text landed in one file. Both are cheap now.
 
 ## 5. Render one clip per slide
 
-The loop measures and renders in one pass, so no duration is ever transcribed
-by hand:
+**Check the counts before rendering anything.** A loop that walks slides and
+aborts halfway leaves `clips/` partly filled, and the next attempt's concat
+glob happily picks up the partial set. The reverse mismatch — a script with 12
+blocks against a deck of 11 slides — is invisible to a slide-driven loop
+entirely.
+
+```bash
+NS=$(ls "$OUT"/slides/slide-*.png | wc -l | tr -d ' ')
+NA=$(ls "$OUT"/audio/$SLUG-*.mp3 | wc -l | tr -d ' ')
+[ "$NS" -eq "$NA" ] || echo "slides=$NS audio=$NA — resolve before rendering"
+```
+
+Stop there if the counts differ. Do not render a partial set hoping to fill the
+gap afterwards: the concat glob in step 6 picks up whatever clips exist.
+
+Then measure and render in one pass, so no duration is ever transcribed by
+hand:
 
 ```bash
 TAIL=0.8
 for img in "$OUT"/slides/slide-*.png; do
   NN=$(basename "$img" .png); NN=${NN#slide-}
   AUD="$OUT/audio/$SLUG-$NN.mp3"
-  [ -f "$AUD" ] || { echo "missing audio for slide $NN"; exit 1; }
+  [ -f "$AUD" ] || { echo "missing audio for slide $NN"; break; }
 
   DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$AUD")
+  case "$DUR" in
+    ''|N/A) echo "ffprobe gave no duration for $AUD — corrupt or zero-byte audio"; break;;
+  esac
   TOT=$(python3 -c "print(f'{$DUR + $TAIL:.3f}')")
 
   ffmpeg -loop 1 -framerate 30 -i "$img" -i "$AUD" \
@@ -118,6 +136,15 @@ concat:
 | `-movflags +faststart` | moov atom first, so it plays while downloading |
 
 `-t` must equal the `apad` total. If you change the tail, change both.
+
+**An empty duration is a failure, not a zero.** If `ffprobe` returns nothing —
+a truncated or zero-byte MP3 — then `print(f'{$DUR + 0.8}')` evaluates a unary
+plus and yields `0.800`. The clip renders as a silent 0.8s flash, and the
+concat accepts it without complaint. That is precisely the silent drift this
+pipeline exists to prevent, which is why the `case` guard stops instead.
+It uses `break`, not `exit`, so pasting the loop into an interactive shell
+does not close the shell. **A `break` means the clip set is incomplete** —
+fix the audio and re-run the loop before going anywhere near step 6.
 
 ## 6. Concat
 
@@ -155,6 +182,9 @@ NN=06
 # 1. edit block 06 in $OUT/script.md
 # 2. re-synthesize -> $OUT/audio/$SLUG-$NN.mp3   (write -v2 alongside, never overwrite)
 DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/audio/$SLUG-$NN.mp3")
+case "$DUR" in
+  ''|N/A) echo "ffprobe gave no duration — corrupt or zero-byte audio";;
+esac
 TOT=$(python3 -c "print(f'{$DUR + 0.8:.3f}')")
 
 ffmpeg -loop 1 -framerate 30 -i "$OUT/slides/slide-$NN.png" -i "$OUT/audio/$SLUG-$NN.mp3" \
