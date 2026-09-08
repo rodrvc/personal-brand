@@ -28,6 +28,11 @@ Es el gemelo de `generar-carrusel-semana`: mismo perfil, misma fuente, misma
 curaduría. Lo que cambia es que un reel necesita **una ubicación por ítem**
 (hace zoom sobre el lugar) y produce un video en vez de PNGs.
 
+**Si lo que se pide es un video explicativo a partir de una presentación**
+(un PPT, un PDF o unas láminas narradas: onboarding, inducción, material de
+referencia), esta skill no es. Es `narrated-slide-video`: horizontal, láminas
+fijas, y la duración de cada una sale de medir su propio audio.
+
 ## Paso 0 — Resolver el perfil y cargar sus reglas
 
 **Invoca `usar-perfil` primero.** Resuelve de qué marca se trata y carga sus

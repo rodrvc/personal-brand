@@ -24,6 +24,11 @@ perfil resuelto. Cuatro capas, y esta skill es la última:
 | el perfil resuelto | tokens, config y el recipe que llena los huecos |
 | esta skill | resuelve el perfil y ejecuta el recipe |
 
+**Si lo que se pide es un video explicativo a partir de una presentación**
+(un PPT, un PDF o unas láminas narradas: onboarding, inducción, material de
+referencia), esta skill no es. Es `narrated-slide-video`: produce un MP4
+horizontal con voz, no PNGs para publicar.
+
 ## Paso 0 — Resolver el perfil y cargar sus reglas
 
 **Invoca `usar-perfil` primero.** Resuelve de qué marca se trata y carga sus
