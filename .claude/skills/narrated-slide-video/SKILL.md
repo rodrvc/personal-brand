@@ -276,6 +276,11 @@ space; overwriting costs work that cannot be recovered.
 - **Verify by watching, not by listing files.** Play the master, or at minimum
   pull frames at each slide boundary and check the audio lands where the slide
   changes. A file that exists is not a video that works.
+- **No audio file is ever committed**, and none belongs under `.claude/` or
+  `system/` at all. Voice samples are cached in a git-ignored directory —
+  `profiles/<slug>/voice-samples/` or the commission's own folder. Committing
+  a vendor's voice audio is redistribution, and a committed sample is a cache
+  that cannot tell when its `voice_id` has gone stale.
 - **Nothing from a standalone commission enters the repo** — not the deck, not
   the script, not the audio, not the MP4.
 - **Publishing is always manual.** This flow leaves files ready; it never

@@ -62,16 +62,22 @@ A **starting point, not a closed list.** These were returned by
 so the next agent does not repeat the search from zero — and, more to the
 point, does not assert that voices for an accent do not exist without asking.
 
-| Voice ID | Name | Age | Catalog note |
-|---|---|---|---|
-| `lLsDvdl6OjtZfLJPM2HA` | Olivia Pro — Strategic Business & Tech | middle_aged | professional, vibrant |
-| `GJid0jgRsqjUy21Avuex` | Emma — Authoritative, Assured and Clear | middle_aged | the most formal of the set |
-| `prblQcKOdF08ozhxP2mk` | Angela — Warm, Calm and Assured | middle_aged | warm and calm, but **noticeably slower** — see the note below |
-| `6Gr4AVmTax1pMJO0lHRK` | Catalina — Chilean Spanish | young | "connects, does not just recite"; closer, less formal |
-| `oJIuRMopN0sojGjwD6rQ` | Camila | young | customer service and sales |
-| `Fd38GRHtJllY0CuguAy9` | Victoria | young | clear and confident |
-| `NxmJt7aR0FMgBqiYrcc0` | Esperanza | young | relaxed |
-| `JM2A9JbRp8XUJ7bdCXJc` | Fernanda Olea — Cheerful and Powerful | young | powerful, conversational |
+| Voice ID | Name | Age | Character | Model verified with | Verified |
+|---|---|---|---|---|---|
+| `lLsDvdl6OjtZfLJPM2HA` | Olivia Pro — Strategic Business & Tech | middle_aged | professional, vibrant | `eleven_multilingual_v2` | 2026-09-08 |
+| `GJid0jgRsqjUy21Avuex` | Emma — Authoritative, Assured and Clear | middle_aged | the most formal of the set | `eleven_multilingual_v2` | 2026-09-08 |
+| `prblQcKOdF08ozhxP2mk` | Angela — Warm, Calm and Assured | middle_aged | warm and calm, but **noticeably slower** — see the note below | `eleven_multilingual_v2` | 2026-09-08 |
+| `6Gr4AVmTax1pMJO0lHRK` | Catalina — Chilean Spanish | young | "connects, does not just recite"; closer, less formal | `eleven_multilingual_v2` | 2026-09-08 |
+| `oJIuRMopN0sojGjwD6rQ` | Camila | young | customer service and sales | `eleven_multilingual_v2` | 2026-09-08 |
+| `Fd38GRHtJllY0CuguAy9` | Victoria | young | clear and confident | `eleven_multilingual_v2` | 2026-09-08 |
+| `NxmJt7aR0FMgBqiYrcc0` | Esperanza | young | relaxed | `eleven_multilingual_v2` | 2026-09-08 |
+| `JM2A9JbRp8XUJ7bdCXJc` | Fernanda Olea — Cheerful and Powerful | young | powerful, conversational | `eleven_multilingual_v2` | 2026-09-08 |
+
+**The last two columns are the point of the table, not decoration.** A
+`voice_id` can leave the catalog or change hands, and the model it was judged
+with can be superseded. Without a date, a silently stale row looks exactly
+like a fresh one. When a row stops resolving, fix the row and move its date —
+do not delete the column.
 
 **Pace is a casting criterion, not just tone.** On the same sentence, Angela
 ran 2.6s longer than Emma. In this pipeline every clip is as long as its own
@@ -96,20 +102,89 @@ A starting point, not a mandate — a different register may want different
 values. Keep them identical across candidates while casting, or the comparison
 is not a comparison.
 
-### No audio samples are versioned in this repo
+### No audio file is ever committed
 
-This was considered and deliberately rejected. Do not reintroduce it:
+What goes in version control is the table above — the ids, the character
+notes, the settings. That is the expensive knowledge: the hard part was never
+generating audio, it was deciding which voices are worth listening to.
 
-1. **Samples must be generated with the real script text.** A generic
-   pre-recorded sample would have the owner choose on material that is not the
-   project's — exactly what this skill forbids.
-2. **They age badly.** A sample is only valid for that accent, that language
-   and that voice configuration.
-3. **They are binaries in git for no reason**, when regenerating them costs
-   seconds.
+**No audio file belongs anywhere under `.claude/`, in any folder.** This was
+raised, reviewed and rejected on three grounds. They are written down so it is
+not retried as though it had been an oversight:
 
-Generate them outside the repo — the scratchpad, or the commission's working
-directory — and hand over the comparison file.
+1. **Licensing.** `shared-voices` entries belong to third-party creators with
+   their own terms; some restrict commercial use or require attribution. Using
+   the audio in a video is *use* — committing the MP3s is *redistribution*.
+   This engine is meant to be publishable, and
+   `scripts/validate_commit_guardian.py` cannot catch the problem: it searches
+   for brand literals, and a licensing violation is not a literal.
+2. **A cache that cannot detect its own staleness.** A `voice_id` can vanish
+   from the catalog or change owner. A committed MP3 would keep sounding
+   perfect while the id behind it points at nothing — the owner listens,
+   chooses, and synthesis then fails or silently uses a different voice. A
+   cache that cannot tell it is out of date is a trap, not an optimization.
+3. **It would hardcode a language assumption into the engine.** An
+   `es-cl-*.mp3` under `.claude/` is a production literal, sibling to the
+   brand literal `CLAUDE.md` forbids. Which voices to cast is a production
+   decision, not an engine capability. This skill is transportable precisely
+   because it carries no catalog of one language and one vendor.
+
+### Cache the samples locally instead, ignored by git
+
+The benefit that motivated committing them — not paying for the same audio
+twice — is available without any of the cost. Synthesize only when the file is
+missing; replay it when it is there. The first run costs a few cents of
+credit, every later one costs nothing.
+
+| Case | Where the cache lives |
+|---|---|
+| Casting for a brand in this repo | `profiles/<slug>/voice-samples/` — already ignored by `profiles/*` |
+| A standalone commission | the commission's working directory, outside the repo |
+| Never | anywhere under `.claude/` or `system/` |
+
+Verify rather than assume the path is ignored, because `profiles/example*` is
+un-ignored and would track anything placed under it:
+
+```bash
+git check-ignore -v profiles/<slug>/voice-samples/probe.mp3   # must print a rule
+```
+
+```bash
+# The REAL paragraph the samples are judged on, already normalized.
+TXT='<first paragraph of the script>'
+
+CACHE="profiles/<slug>/voice-samples"        # or the commission's dir
+mkdir -p "$CACHE"
+f="$CACHE/<voice-name>-$(printf '%s' "$TXT" | shasum | cut -c1-8).mp3"
+
+if [ -s "$f" ]; then
+  echo "cached: $f"
+else
+  jq -n --arg t "$TXT" '{text:$t,model_id:"eleven_multilingual_v2",
+      voice_settings:{stability:0.5,similarity_boost:0.75,style:0.15}}' \
+  | curl -s -X POST "https://api.elevenlabs.io/v1/text-to-speech/<voice-id>" \
+      -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" \
+      -d @- -o "$f"
+fi
+afplay "$f"        # macOS; ffplay -autoexit -nodisp "$f" elsewhere
+```
+
+**Key the filename on the text, not just the voice.** Same voice, different
+script means a different sample — a cache keyed on the voice alone would
+replay audio of the wrong material, which is the one thing this section is
+trying to prevent. The `shasum` in the filename above is what keys it; eight
+characters is plenty.
+
+**The test is `-s`, not `-f`.** `curl -o` creates the file even when the
+request fails, so a failed synthesis leaves a zero-byte MP3 behind. `-f` would
+treat that as a hit and replay silence forever; `-s` (non-empty) treats it as
+a miss and retries.
+
+**The cache never changes what the owner compares.** The final samples are
+still generated from the **real script text**; caching only avoids paying
+twice for the same voice on the same words. Pace and tone shift with the
+material, so a generic phrase would have the owner judging something they are
+not buying.
 
 ### Generate and compare in one pass
 

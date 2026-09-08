@@ -153,7 +153,7 @@ Then **watch it**. Confirm the slide changes where the narration changes.
 ```bash
 NN=06
 # 1. edit block 06 in $OUT/script.md
-# 2. re-synthesize -> $OUT/audio/$SLUG-$NN.mp3   (versioned, not overwritten)
+# 2. re-synthesize -> $OUT/audio/$SLUG-$NN.mp3   (write -v2 alongside, never overwrite)
 DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/audio/$SLUG-$NN.mp3")
 TOT=$(python3 -c "print(f'{$DUR + 0.8:.3f}')")
 
