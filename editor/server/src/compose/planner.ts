@@ -480,9 +480,16 @@ export function buildEmptyDocument(
  * feedback): the suggestion is not just the bare carousel prompt, it is the
  * carousel prompt + this slot + the brand's own image direction, so an
  * unedited submit still reflects the brand, not a generic guess.
+ *
+ * `carouselPrompt` is `doc.prompt.text`, which is empty on a fresh document
+ * now that composition never runs on create (editor-usable-baseline's "New
+ * carousel opens empty"). `title` is the fallback for that case — the
+ * carousel's own title, still better context than nothing. When both are
+ * empty, the slot name stands alone rather than leaving a stray "— slot".
  */
-export function suggestionForSlot(carouselPrompt: string, slot: string, style?: BrandStyle): string {
-  const base = `${carouselPrompt} — ${slot}`;
+export function suggestionForSlot(carouselPrompt: string, slot: string, style?: BrandStyle, title?: string): string {
+  const lead = carouselPrompt.trim() || title?.trim();
+  const base = lead ? `${lead} — ${slot}` : slot;
   return style?.imageDirection ? `${base}. ${style.imageDirection}` : base;
 }
 

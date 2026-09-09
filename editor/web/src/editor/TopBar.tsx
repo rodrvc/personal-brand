@@ -10,6 +10,7 @@ interface TopBarProps {
   doc: CarouselDocument;
   tool: Tool;
   onToolChange: (tool: Tool) => void;
+  onAddText: () => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -31,6 +32,7 @@ export function TopBar({
   doc,
   tool,
   onToolChange,
+  onAddText,
   canUndo,
   canRedo,
   onUndo,
@@ -66,7 +68,7 @@ export function TopBar({
       >
         ▲
       </button>
-      <button className={`topbar-tool ${tool === "text" ? "on" : ""}`} title="Texto" onClick={() => onToolChange("text")}>
+      <button className="topbar-tool" title="Añadir texto" onClick={onAddText}>
         T
       </button>
       <button

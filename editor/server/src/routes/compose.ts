@@ -239,7 +239,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
             target.objectId === "background"
               ? `background for ${slide.kind}`
               : slide.objects.find((o) => o.id === target.objectId)?.slot ?? target.objectId!;
-          const suggestion = body.prompt?.trim() || suggestionForSlot(doc.prompt.text, slotName, style);
+          const suggestion = body.prompt?.trim() || suggestionForSlot(doc.prompt.text, slotName, style, doc.title);
           const brand = generateImageBrandContext(style);
           const clauses = [
             suggestion,
@@ -370,7 +370,7 @@ async function regenerateBackground(
   }
   const prompt =
     promptOverride?.trim() ||
-    suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`, loadBrandStyle(store.roots.profileDir));
+    suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`, loadBrandStyle(store.roots.profileDir), doc.title);
   const entry = await generateForSlot(store, generator, {
     prompt,
     kind: "background",
@@ -437,7 +437,7 @@ async function regenerateObject(
 
   const prompt =
     promptOverride?.trim() ||
-    suggestionForSlot(doc.prompt.text, object.slot ?? objectId, loadBrandStyle(store.roots.profileDir));
+    suggestionForSlot(doc.prompt.text, object.slot ?? objectId, loadBrandStyle(store.roots.profileDir), doc.title);
   const entry = await generateForSlot(store, generator, {
     prompt,
     kind: "photo",

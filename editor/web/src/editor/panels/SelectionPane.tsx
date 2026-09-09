@@ -38,6 +38,20 @@ function canOfferGenerate(piece: { awaitingImage?: boolean; source: string }): b
 }
 
 /**
+ * Client-side mirror of the server's `suggestionForSlot` (planner.ts):
+ * used only until the piece gets a real `suggestion` from the server
+ * (which never happens today — composing on create was removed, and
+ * regeneration only sets `suggestion` on objects it already touched).
+ * `doc.prompt.text` is empty on a fresh document, so this falls back to
+ * `doc.title`, and to the bare slot name when both are empty — never a
+ * stray leading "— slot".
+ */
+function suggestionFallback(doc: CarouselDocument, slot: string): string {
+  const lead = doc.prompt.text.trim() || doc.title.trim();
+  return lead ? `${lead} — ${slot}` : slot;
+}
+
+/**
  * Piece-generation UI for one visual slot (background or asset object):
  * "Generar imagen…" when it's `awaitingImage` (no library candidate yet,
  * no image), "Regenerar…" when it already has one — both expand into the
@@ -279,7 +293,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
               slug={slug}
               doc={doc}
               target={{ slideId: slide.id, objectId: "background" }}
-              suggestion={slide.background.suggestion ?? `${doc.prompt.text} — background for ${slide.kind}`}
+              suggestion={slide.background.suggestion ?? suggestionFallback(doc, `background for ${slide.kind}`)}
               existingAssetId={slide.background.mode === "asset" ? slide.background.assetId : undefined}
               estimatedCostCents={pricing}
               onDocReplace={onDocReplace}
@@ -334,7 +348,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
                   slug={slug}
                   doc={doc}
                   target={{ slideId: slide.id, objectId: object.id }}
-                  suggestion={object.suggestion ?? `${doc.prompt.text} — ${object.slot ?? object.id}`}
+                  suggestion={object.suggestion ?? suggestionFallback(doc, object.slot ?? object.id)}
                   existingAssetId={object.assetId}
                   estimatedCostCents={pricing}
                   onDocReplace={onDocReplace}
