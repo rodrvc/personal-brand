@@ -59,6 +59,15 @@ function baseDoc(): CarouselDocument {
   assert.equal(object!.kind, "text");
   assert.ok(object!.slot, "seeded from a template slot");
   assert.equal(object!.geometry, undefined, "no own geometry — inherits the slot's");
+  // Template text slots never declare an `h` (explicativo.json), so the
+  // renderer leaves `height` off the style and lets it come from content.
+  // With `text: ""` that lays out at zero height — invisible and
+  // unclickable in the editor. A non-empty placeholder is what keeps a
+  // freshly added object visible and selectable the moment it appears.
+  assert.ok(
+    object!.kind === "text" && object!.text.length > 0,
+    "seeded with non-empty placeholder text so it isn't zero-height",
+  );
 
   const resolved = resolveSlide(next, next.slides[0]!, template);
   const resolvedObject = resolved.objects[0]!;
@@ -68,6 +77,7 @@ function baseDoc(): CarouselDocument {
     assert.ok(resolvedObject.content.fontKey, "inherits fontKey from the slot");
     assert.ok(resolvedObject.content.fontSize, "inherits fontSize from the slot");
     assert.ok(resolvedObject.content.colorRole, "inherits colorRole from the slot");
+    assert.ok(resolvedObject.content.text.length > 0, "resolved content keeps the placeholder text");
   }
 }
 

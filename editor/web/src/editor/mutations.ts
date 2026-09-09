@@ -127,11 +127,20 @@ export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, as
  * template-authored object would. This is what makes new text land where
  * the template expects instead of at an arbitrary spot.
  *
+ * Template text slots never declare an `h` (see explicativo.json) — the
+ * renderer (`free-layout.ts`'s `renderTextObject`) leaves `height` off the
+ * style entirely and lets it come from content. With `text: ""` that lays
+ * out at zero height: invisible, and nothing for `SelectionOverlay` to
+ * measure or click. So the slotted path seeds a visible non-empty
+ * placeholder instead of "" — obviously a placeholder, not real copy, and
+ * the owner overwrites it the moment they start typing.
+ *
  * When no free text slot exists for this slide kind, falls back to a free
  * (unslotted) object: a default position inside the template's safe
  * margins, `brand.fonts.body` and the `onSurface` role's color key (a
  * `brand.colors` key, never a hex literal — carousel-document.ts's
- * `findHexLiterals` check would reject one).
+ * `findHexLiterals` check would reject one). That path already sets an
+ * explicit `h`, so it stays visible even with empty text.
  *
  * Takes `objectId` from the caller rather than generating one internally
  * (unlike `addLibraryAssetObject`) so the caller can select the new object
@@ -158,7 +167,7 @@ export function addTextObject(
     };
 
     if (freeTextSlot) {
-      const object: TextObject = { ...base, slot: freeTextSlot.name };
+      const object: TextObject = { ...base, text: "Texto", slot: freeTextSlot.name };
       return { ...slide, objects: [...slide.objects, object] };
     }
 
