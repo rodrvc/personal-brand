@@ -1,0 +1,162 @@
+/*
+ * Chrome-only design tokens (--ui-*). These never leak into the carousel
+ * canvas: the canvas is an <iframe srcdoc> whose colors come exclusively
+ * from the rendered HTML (brand.colors), never from this file
+ * (design.md D1, specs/editor-ui "Light and dark theme").
+ *
+ * Single-hue blue ramp at 205.7°, cool greys, Inter. Light is the default
+ * theme; dark is opted into via `data-theme="dark"` on <html>, toggled by
+ * the top-bar button and persisted in localStorage.
+ */
+
+:root {
+  --ui-hue: 205.7;
+
+  --ui-p900: hsl(var(--ui-hue) 62% 16%);
+  --ui-p800: hsl(var(--ui-hue) 58% 21%);
+  --ui-p700: hsl(var(--ui-hue) 55% 28%);
+  --ui-p600: hsl(var(--ui-hue) 52% 38%);
+  --ui-p500: hsl(var(--ui-hue) 48% 48%);
+  --ui-p400: hsl(var(--ui-hue) 52% 60%);
+  --ui-p300: hsl(var(--ui-hue) 60% 72%);
+  --ui-p200: hsl(var(--ui-hue) 62% 84%);
+  --ui-p100: hsl(var(--ui-hue) 65% 92%);
+  --ui-p50: hsl(var(--ui-hue) 68% 96%);
+
+  --ui-g50: #f8fafc;
+  --ui-g100: #f1f5f9;
+  --ui-g200: #e2e8f0;
+  --ui-g300: #cbd5e1;
+  --ui-g400: #94a3b8;
+  --ui-g500: #64748b;
+  --ui-g600: #475569;
+  --ui-g700: #334155;
+  --ui-g900: #0f172a;
+  --ui-white: #ffffff;
+
+  --ui-bg: var(--ui-g50);
+  --ui-surface: var(--ui-white);
+  --ui-line: var(--ui-g200);
+  --ui-line-soft: var(--ui-g100);
+  --ui-ink: var(--ui-g700);
+  --ui-ink-2: var(--ui-g500);
+  --ui-ink-3: var(--ui-g400);
+  --ui-head: var(--ui-p700);
+  --ui-accent: var(--ui-p600);
+  --ui-accent-soft: var(--ui-p50);
+  --ui-accent-ink: var(--ui-p600);
+  --ui-accent-line: var(--ui-p200);
+
+  --ui-ok: #1c6b4c;
+  --ui-ok-soft: #e6f4ee;
+  --ui-ok-strong: #1f7057;
+  --ui-warn: #c2792a;
+  --ui-warn-soft: #fdf6ec;
+  --ui-warn-line: #f2ddbe;
+  --ui-danger: #c8463f;
+  --ui-lock: #c2792a;
+
+  /*
+   * Marks painted on the SelectionOverlay, on top of the canvas <iframe>
+   * itself — not chrome UI. Always white/near-white in both themes so a
+   * resize/rotate handle or a badge stays legible against whatever
+   * brand.colors background the rendered slide happens to have; unlike
+   * --ui-surface/--ui-white, these never swap to the dark theme's navy
+   * (which would make a handle invisible against a light slide).
+   */
+  --ui-overlay-mark: #fff;
+  --ui-overlay-mark-soft: rgb(255 255 255 / 0.92);
+  --ui-overlay-badge-soft: rgb(255 255 255 / 0.94);
+
+  --ui-shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
+  --ui-shadow-md: 0 6px 16px -6px rgb(15 23 42 / 0.14), 0 2px 4px -2px rgb(15 23 42 / 0.08);
+  --ui-shadow-lg: 0 16px 32px -10px rgb(15 23 42 / 0.18), 0 4px 8px -4px rgb(15 23 42 / 0.1);
+
+  --ui-radius-btn: 10px;
+  --ui-radius-card: 16px;
+  --ui-radius-pill: 999px;
+  --ui-radius-sm: 8px;
+
+  --ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --ui-transition: 150ms ease;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --ui-g50: #16222c;
+  --ui-g100: #1b2933;
+  --ui-g200: #223140;
+  --ui-g300: #2c3d4d;
+  --ui-g400: #4b6478;
+  --ui-g500: #6b8598;
+  --ui-g600: #8fa7ba;
+  --ui-g700: #b8cbd8;
+  --ui-g900: #eef4f8;
+  --ui-white: #132330;
+
+  --ui-bg: #0d1720;
+  --ui-surface: #132330;
+  --ui-line: #1e3444;
+  --ui-line-soft: #182b39;
+  --ui-ink: #dce8f2;
+  --ui-ink-2: #8fa7ba;
+  --ui-ink-3: #647f94;
+  --ui-head: #a8cde8;
+  --ui-accent: var(--ui-p400);
+  --ui-accent-soft: #16303f;
+  --ui-accent-ink: var(--ui-head);
+  --ui-accent-line: #204862;
+  --ui-ok: #5cc296;
+  --ui-ok-soft: #123024;
+  --ui-ok-strong: #6fd6ab;
+  --ui-warn: #e0a458;
+  --ui-warn-soft: #2c2113;
+  --ui-warn-line: #4a3a1e;
+  --ui-danger: #e37b73;
+  --ui-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --ui-shadow-md: 0 6px 16px -6px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --ui-shadow-lg: 0 16px 32px -10px rgb(0 0 0 / 0.5), 0 4px 8px -4px rgb(0 0 0 / 0.3);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ui-bg);
+  color: var(--ui-ink);
+  font-family: var(--ui-font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

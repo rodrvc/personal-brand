@@ -1,0 +1,233 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import type { BrandTokens, CarouselDocument, ComposeJobStatus, LayoutTemplate, StatsResponse } from "../api/types";
+import type { useDocumentEditor } from "../hooks/useDocumentEditor";
+import { getCarousel, getComposeJob, regenerate } from "../api/client";
+import { TopBar } from "./TopBar";
+import { PromptHeader } from "./PromptHeader";
+import { PlanDrawer } from "./PlanDrawer";
+import { Stage } from "./Stage";
+import { PropertiesPanel } from "./panels/PropertiesPanel";
+import { StatusBar } from "./StatusBar";
+import type { Selection } from "./geometry";
+import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
+import { ExportDialog } from "./ExportDialog";
+import "./Editor.css";
+
+const COMPOSE_POLL_MS = 1200;
+
+const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
+
+export type Tool = "select" | "text" | "asset";
+export type PanelTab = "sel" | "bucket" | "lam" | "marca";
+
+interface EditorProps {
+  slug: string;
+  brand: BrandTokens;
+  template: LayoutTemplate;
+  editorState: ReturnType<typeof useDocumentEditor>;
+  stats: StatsResponse | null;
+  initialActiveSlide: number;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
+  /** A background compose job to poll immediately after landing here from a just-created carousel — see EditorRoute's comment. */
+  initialJobId?: string;
+}
+
+export function Editor({
+  slug,
+  brand,
+  template,
+  editorState,
+  stats: initialStats,
+  initialActiveSlide,
+  theme,
+  onToggleTheme,
+  initialJobId,
+}: EditorProps) {
+  const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion } = editorState;
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.min(initialActiveSlide, Math.max(0, doc.slides.length - 1)),
+  );
+  const [tool, setTool] = useState<Tool>("select");
+  const [selection, setSelection] = useState<Selection>(null);
+  const [panelTab, setPanelTab] = useState<PanelTab>("sel");
+  const [stats, setStats] = useState(initialStats);
+  const [showRegenDialog, setShowRegenDialog] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [showPlanDrawer, setShowPlanDrawer] = useState(false);
+  const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
+  const [composeJob, setComposeJob] = useState<ComposeJobStatus | null>(null);
+
+  // Polls the background compose job started by the immediate-build create
+  // call (editor-ui spec's "progress and cost are shown in the prompt
+  // header while composition runs in the background"). Stops once the job
+  // reaches a terminal status, or if this editor instance never had a
+  // jobId to begin with (a page reload after creation, per design: partial
+  // progress already persisted via writeDocument makes that safe to just
+  // not resume).
+  const applyRemoteRef = useRef(applyRemote);
+  applyRemoteRef.current = applyRemote;
+
+  useEffect(() => {
+    if (!initialJobId) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const job = await getComposeJob(slug, doc.id, initialJobId!);
+        if (!alive) return;
+        setComposeJob(job);
+        if (job.status === "queued" || job.status === "running") {
+          timer = setTimeout(poll, COMPOSE_POLL_MS);
+        } else {
+          // Terminal status: re-fetch the document once more so every
+          // piece the job touched (including the very last one, written
+          // just before the job flipped to its terminal status) is
+          // reflected — applyRemote bumps renderVersion, which is what
+          // clears the pending shimmer and refreshes the iframe HTML.
+          const fresh = await getCarousel(slug, doc.id);
+          if (alive) applyRemoteRef.current(fresh);
+        }
+      } catch {
+        // A 404 (stale jobId after some edge case) or a transient network
+        // error just stops polling silently — the document itself is not
+        // at risk, since every completed piece was already persisted.
+      }
+    }
+
+    void poll();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed only on slug/jobId: doc.id doesn't change for the life of one editor instance, and re-running this on every doc update would restart polling.
+  }, [slug, initialJobId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_SLIDE_STORAGE_PREFIX + doc.id, String(activeIndex));
+    } catch {
+      // best-effort
+    }
+  }, [doc.id, activeIndex]);
+
+  useEffect(() => {
+    setSelection(null);
+  }, [activeIndex]);
+
+  const activeSlide = doc.slides[activeIndex];
+
+  const pinnedCount = doc.slides.reduce((sum, s) => sum + s.objects.filter((o) => o.pinned).length + (s.background.pinned ? 1 : 0), 0);
+  const totalPieceCount = doc.slides.reduce((sum, s) => sum + s.objects.length + 1, 0);
+
+  const handleRegenerateUnpinned = useCallback(async () => {
+    if (!activeSlide) return;
+    setShowRegenDialog(false);
+    setRegenUnpinnedError(null);
+    try {
+      const { document: next } = await regenerate(slug, doc.id, { slideId: activeSlide.id, scope: "unpinned" });
+      applyRemote(next);
+    } catch (err) {
+      setRegenUnpinnedError(err instanceof Error ? err.message : String(err));
+    }
+  }, [slug, doc.id, activeSlide, applyRemote]);
+
+  if (!activeSlide) {
+    return <div className="editor-empty">Este carrusel no tiene láminas.</div>;
+  }
+
+  return (
+    <div className="editor-app">
+      <TopBar
+        slug={slug}
+        brand={brand}
+        doc={doc}
+        tool={tool}
+        onToolChange={setTool}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undo}
+        onRedo={redo}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        onExport={() => setShowExportDialog(true)}
+      />
+      <div className="editor-body">
+        <div className="editor-center">
+          <PromptHeader
+            doc={doc}
+            stats={stats}
+            onRegenerateUnpinned={() => setShowRegenDialog(true)}
+            regenerateUnpinnedError={regenUnpinnedError}
+            composeJob={composeJob}
+            onShowPlan={() => setShowPlanDrawer(true)}
+          />
+          <Stage
+            slug={slug}
+            doc={doc}
+            template={template}
+            brand={brand}
+            renderVersion={renderVersion}
+            activeIndex={activeIndex}
+            onActiveIndexChange={setActiveIndex}
+            selection={selection}
+            onSelectionChange={setSelection}
+            onDocUpdate={update}
+            fallbackColorKey={Object.keys(brand.colors)[0] ?? ""}
+            onAddSlide={(colorKey) => {
+              update((d) => {
+                const slides = [...d.slides];
+                slides.splice(activeIndex + 1, 0, {
+                  id: `slide-${Date.now()}`,
+                  kind: "step",
+                  background: { mode: "color", colorKey, pinned: false, source: "manual" },
+                  objects: [],
+                });
+                return { ...d, slides, updatedAt: new Date().toISOString() };
+              });
+              setActiveIndex(activeIndex + 1);
+            }}
+          />
+        </div>
+        <PropertiesPanel
+          slug={slug}
+          brand={brand}
+          template={template}
+          doc={doc}
+          renderVersion={renderVersion}
+          activeIndex={activeIndex}
+          selection={selection}
+          onSelectionChange={setSelection}
+          onDocUpdate={update}
+          onDocReplace={applyRemote}
+          panelTab={panelTab}
+          onPanelTabChange={setPanelTab}
+          stats={stats}
+          onStatsRefresh={setStats}
+        />
+      </div>
+      <StatusBar
+        doc={doc}
+        activeIndex={activeIndex}
+        selection={selection}
+        pinnedCount={pinnedCount}
+        totalPieceCount={totalPieceCount}
+        dirty={dirty}
+        saveError={saveError}
+      />
+      {showRegenDialog && (
+        <RegenerateUnpinnedDialog
+          slide={activeSlide}
+          onCancel={() => setShowRegenDialog(false)}
+          onConfirm={handleRegenerateUnpinned}
+        />
+      )}
+      {showExportDialog && (
+        <ExportDialog slug={slug} carouselId={doc.id} onClose={() => setShowExportDialog(false)} />
+      )}
+      {showPlanDrawer && <PlanDrawer doc={doc} onClose={() => setShowPlanDrawer(false)} />}
+    </div>
+  );
+}

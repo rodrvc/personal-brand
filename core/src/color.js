@@ -104,3 +104,71 @@ export function readableInk(bgHex, candidates = ['#000000', '#FFFFFF']) {
   }
   return { ink: best, ratio: bestRatio }
 }
+
+/** [r,g,b] (0-255) -> [h,s,l] con h en grados (0-360) y s/l en 0-1. */
+export function rgbToHsl([r, g, b]) {
+  r /= 255
+  g /= 255
+  b /= 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h
+  switch (max) {
+    case r: h = ((g - b) / d + (g < b ? 6 : 0)); break
+    case g: h = (b - r) / d + 2; break
+    default: h = (r - g) / d + 4
+  }
+  return [h * 60, s, l]
+}
+
+/** Nombre de familia de matiz en inglés, para componer un prompt de imagen (nunca para pintar nada). */
+function hueWord(h) {
+  if (h < 15 || h >= 345) return 'red'
+  if (h < 45) return 'orange'
+  if (h < 70) return 'amber'
+  if (h < 100) return 'yellow-green'
+  if (h < 150) return 'green'
+  if (h < 185) return 'teal'
+  if (h < 215) return 'cyan'
+  if (h < 255) return 'blue'
+  if (h < 290) return 'violet'
+  if (h < 320) return 'magenta'
+  return 'pink'
+}
+
+/**
+ * Describe una paleta de colores hex en palabras en inglés — "a warm palette
+ * of amber and cream" — para inyectarla en un prompt de generación de
+ * imagen sin nombrar nunca un valor hex ni el nombre propio de la marca.
+ * Cada hex se reduce a matiz+luminosidad y de ahí a dos o tres palabras;
+ * duplicados de matiz se colapsan. Con lista vacía devuelve `undefined` en
+ * vez de una frase vacía, para que el llamador pueda omitir la cláusula del
+ * todo.
+ */
+export function describePaletteInWords(hexes) {
+  const words = []
+  let warmCount = 0
+  let coolCount = 0
+  for (const hex of hexes) {
+    const rgb = hexToRgb(hex)
+    if (!rgb) continue
+    const [h, s, l] = rgbToHsl(rgb)
+    if (s < 0.08) {
+      words.push(l > 0.85 ? 'cream' : l < 0.2 ? 'charcoal' : 'gray')
+      continue
+    }
+    const isWarm = h < 90 || h >= 345
+    if (isWarm) warmCount++
+    else coolCount++
+    const lightnessWord = l > 0.8 ? 'pale ' : l < 0.3 ? 'deep ' : ''
+    words.push(`${lightnessWord}${hueWord(h)}`)
+  }
+  if (words.length === 0) return undefined
+  const unique = [...new Set(words)]
+  const temperature = warmCount > coolCount ? 'warm' : coolCount > warmCount ? 'cool' : 'balanced'
+  return `a ${temperature} palette of ${unique.join(' and ')}`
+}

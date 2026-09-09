@@ -1,0 +1,26 @@
+.status-bar {
+  height: 26px;
+  background: var(--ui-surface);
+  border-top: 1px solid var(--ui-line);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  font-size: 10.5px;
+  color: var(--ui-ink-3);
+}
+
+.status-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-ok);
+  display: inline-block;
+}

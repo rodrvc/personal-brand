@@ -1,0 +1,29 @@
+.editor-app {
+  display: grid;
+  grid-template-rows: 52px 1fr 26px;
+  height: 100vh;
+}
+
+.editor-body {
+  display: grid;
+  grid-template-columns: 1fr 288px;
+  overflow: hidden;
+}
+
+@media (max-width: 1040px) {
+  .editor-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.editor-center {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.editor-empty {
+  padding: 24px;
+  color: var(--ui-ink-3);
+}

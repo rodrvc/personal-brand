@@ -1,0 +1,9 @@
+.editor-route-error {
+  padding: 24px;
+  color: var(--ui-danger);
+}
+
+.editor-route-loading {
+  padding: 24px;
+  color: var(--ui-ink-3);
+}

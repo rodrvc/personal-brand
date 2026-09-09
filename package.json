@@ -8,15 +8,20 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "init:profile": "node scripts/init-profile.mjs",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx system/ig-carousel/verify-slides.test.ts && tsx system/ig-carousel/recipe.test.ts && tsx system/ig-reel/reel.test.ts",
+    "typecheck": "tsc --noEmit; pnpm --filter @personal-brand/editor-server run typecheck; pnpm --filter @personal-brand/editor-web run typecheck",
+    "test": "tsx system/ig-carousel/verify-slides.test.ts && tsx system/ig-carousel/recipe.test.ts && tsx system/ig-carousel/layout-template.test.ts && tsx system/ig-carousel/carousel-document.test.ts && tsx system/ig-carousel/brand-style.test.ts && tsx system/ig-carousel/templates/free-layout.test.ts && tsx system/ig-reel/reel.test.ts && tsx system/assets/assets.test.ts && pnpm --filter @personal-brand/editor-server test",
     "check": "pnpm run typecheck && pnpm run test",
-    "render:all": "tsx system/ig-carousel/render.ts --profile example"
+    "render:all": "tsx system/ig-carousel/render.ts --profile example",
+    "dev:editor": "node editor/dev.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "playwright": "^1.61.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@personal-brand/core": "workspace:*",
+    "zod": "^4.5.4"
   }
 }

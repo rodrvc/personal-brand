@@ -1,0 +1,26 @@
+{
+  "name": "@personal-brand/editor-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "tsx src/profile-store.test.ts && tsx src/export/export-versioning.test.ts && tsx src/compose/regenerate.test.ts && tsx src/compose/compose-job.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@personal-brand/core": "workspace:*",
+    "busboy": "^1.6.0",
+    "express": "^5.1.0",
+    "playwright": "^1.61.1",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

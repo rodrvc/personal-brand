@@ -104,6 +104,25 @@ export function resolveOutputSubfolder(profileDir: string, key: string): string 
 }
 
 /**
+ * Reads `profile.primary_language` from `config.yaml` with the same
+ * minimal-regex approach as `readOutputsKey` — anchored to the `profile:`
+ * block so a `primary_language` under an unrelated top-level key is never
+ * picked up. Returns `undefined` (not a hardcoded default) when the profile
+ * hasn't set it, since callers differ on what "no language declared" should
+ * mean for them.
+ */
+export function readProfilePrimaryLanguage(profileDir: string): string | undefined {
+  try {
+    const raw = readFileSync(join(profileDir, "config.yaml"), "utf-8");
+    const match = raw.match(/^profile:[^\n]*\n(?:(?!^\S)[\s\S])*?^\s+primary_language:[ \t]*(.+)$/m);
+    return match?.[1]?.trim().replace(/^["']|["']$/g, "") || undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/**
  * Absolute base directory for a profile's generated output. `base_dir` may be
  * relative (resolved against the profile's own folder) or absolute/"~"-prefixed
  * (e.g. "~/Pictures/<marca>/carruseles") to keep generated files entirely

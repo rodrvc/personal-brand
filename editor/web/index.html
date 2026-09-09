@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Editor de carruseles</title>
+    <!--
+      Sets `data-theme` on <html> synchronously, before the first paint —
+      `useTheme()` (src/hooks/useTheme.ts) only sets it from a React effect,
+      which runs after mount, so without this the page would paint once
+      with no `data-theme` attribute at all and once more when React
+      catches up (specs/editor-ui "Light and dark theme": light is always
+      the startup theme, with no flash). Reads the same localStorage key
+      `useTheme` uses, defaulting to "light" — never the OS preference —
+      so this and the hook can never disagree about the stored choice.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("editor-theme");
+          document.documentElement.setAttribute("data-theme", stored === "dark" ? "dark" : "light");
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

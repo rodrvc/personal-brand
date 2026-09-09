@@ -52,6 +52,49 @@ git.
 Creating a profile by hand instead skips the term registration — and a gate
 with no terms to search for reports success without checking anything.
 
+## Running the editor
+
+`editor/` is the local web editor for brand carousels (see
+[`../editor/ESTADO.md`](../editor/ESTADO.md) and
+[`../editor/README.md`](../editor/README.md)). It needs Playwright's
+Chromium, which the root `pnpm install` does not fetch on its own:
+
+```bash
+pnpm install
+npx playwright install chromium
+pnpm dev:editor
+```
+
+This starts `editor/server` on `http://127.0.0.1:4310` and the `editor/web`
+Vite dev server (URL printed by Vite). Both read a `.env` at the repo root,
+not one inside `editor/`:
+
+```bash
+OPENAI_API_KEY=sk-...   # optional — without it, AI-generation endpoints
+                          # return 503; composing from the asset library
+                          # still works
+```
+
+Before generating with AI, download a profile's brand fonts once so the
+editor never depends on a live Google Fonts request:
+
+```bash
+tsx system/assets/fetch-fonts.ts --profile <slug>
+```
+
+## Specs (OpenSpec)
+
+Architectural and module-design decisions are proposed and tracked as specs
+under `openspec/`:
+
+```bash
+openspec list        # changes in flight or archived, and their task progress
+openspec validate     # checks a change's proposal/design/tasks are well-formed
+```
+
+See `openspec/changes/editor-carruseles/` for an example: `proposal.md`,
+`design.md` and `tasks.md`.
+
 ## Everyday commands
 
 ```bash
