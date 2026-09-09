@@ -1,6 +1,182 @@
 # Editor de carruseles — estado del módulo
 
-Actualizado: 2026-09-04
+Actualizado: 2026-09-08
+
+## Design direction from the owner (2026-09-08)
+
+Decisions from the owner's review, to guide the next PR. Recorded as
+decisions with rationale, not as a task list.
+
+**Scope of this PR: stay on the carousel editor screen.** A per-brand
+library screen (assets/templates managed at brand level, never mixed
+between brands) is the eventual target but is explicitly out of scope here.
+The goal is a workflow a human can actually use end to end, not a polished
+one — polish comes after.
+
+**Single-screen editor layout** (from the owner's sketch): top shows the
+current work path and the carousel title. Left: the canvas with the
+carousel slide(s), and below it the layer list — the selected layer is
+where edits apply. Bottom-left: an AI advisor panel ("IA Consejos") that
+assists continuously, rather than a one-shot initial prompt. Right: a side
+panel with three tabs — Tools, Assets, Templates.
+
+**Drag and drop is the central interaction.** An item from the Assets or
+Templates panel can be dragged either (a) onto the canvas, to be used
+directly in the piece, or (b) onto the AI panel, to be used as a visual
+reference for generation. Same item, two destinations depending on where
+it's dropped. Neither exists today: assets are currently only selectable
+from a dropdown inside a slide, and there's no way to give the AI a visual
+reference.
+
+**Tools tab = the manual design controls that already exist and were
+judged good:** colors, fonts, and the other manual design affordances. No
+new concept needed there.
+
+**New carousel always starts empty.** There is no initial prompt that
+composes a whole carousel on entry — the user enters an empty canvas and
+builds with AI assistance. This settles the owner's complaint that "as soon
+as I enter the UI it's already trying to create content": the fix is this
+design change, not a bug fix. Investigation confirmed no code path
+generates on load; the only generation trigger is the explicit Crear
+button, which this design removes.
+
+**Template = grounding, not a starting point. This is the core idea.** A
+template is the set of constraints the AI is obliged to work within,
+always — both when generating a whole carousel and when changing a single
+piece. The AI fills the gaps; it never moves the walls. This differs from
+today's model in two ways:
+
+- Today `pinned` protects a piece, but that's a per-document decision the
+  user makes *after* seeing a result. A template is decided once at brand
+  level, *before*, and inherited by every carousel using it.
+- Today brand guidance is injected into prompts as text — a suggestion the
+  model may ignore. A template must be enforced by the system: if the model
+  returns something that violates it, the system does not apply it.
+
+A brand may have several templates.
+
+**What a template fixes, for now:** position (e.g. a logo that must not
+move), content (a slide that always says a given thing), and
+layout/disposition (e.g. cover always has title above, image below). Only
+these three for now.
+
+**Conflict handling:** when the AI attempts something the template
+forbids, the system must *tell* the user — not silently discard, not offer
+an override. The owner noted this may be split into a separate issue;
+recorded here as the decided behavior, flagged as possibly deferred.
+
+### Investigation findings (verified, do not re-investigate)
+
+- Assets do persist and are read correctly. The symlinked profile roots
+  (`profiles/<slug>` → outside the repo) do not defeat the confinement
+  guard, which realpaths the root before checking it. Endpoints return
+  correct data. The actual gap is that there is no assets view outside an
+  open carousel document — assets today live only in the Bucket tab of the
+  properties panel.
+- No per-brand template override directories exist on disk for any
+  profile, and only one system layout exists. There is no list-templates
+  endpoint. So "I can't see the templates" is nothing-to-show, not a read
+  failure.
+- No code path generates content on app load; the only trigger is the
+  explicit create button.
+
+### Follow-up decisions from the owner (same review, continued)
+
+**Template selection is explicit, never implicit.** A template is not a
+default property of a carousel; the user picks it from the UI and applies
+it. A brand may have several templates, and "no template" is itself a valid
+choice — in that case the piece is grounded only by the brand palette (and
+fonts), with no structural constraints. Consequence for the data model: the
+template is a selectable, swappable reference on the document, not baked in
+at creation time.
+
+**Two consumption fronts — this reframes the whole module.** The editor UI
+is not the product; it is the assisted mode of a composition engine that
+must be usable without a UI:
+
+- **Front 1 — agent/messaging.** An external agent (reachable over a
+  messaging channel, for example) receives the information the owner wants
+  presented, composes the carousel using the brand's templates, assets and
+  creative frame, and returns the finished carousel to the channel where it
+  was requested. No UI involved.
+- **Front 2 — assisted UI.** Used when the owner wants tighter control
+  (notably early in a brand's life), to interact with elements until the
+  carousel is right, while teaching/refining the guide.
+
+Consequence: the core must be invocable headlessly; the UI hangs on top of
+it, not the other way around.
+
+**Why this product exists (competitive rationale, worth preserving).**
+Existing tools each fail on one axis: one design tool gives insufficient
+freedom; a general chat model has no anchoring — asking for a modification
+returns a wholly different result; a design-tool-plus-chat integration is
+the closest but cannot be used outside that tool's own environment. The
+missing capability across all of them is **local editing**: changing one
+piece without disturbing the rest. That is the real product, and it is also
+the reason the template — as enforced grounding — exists at all.
+
+**Proposed three-layer model (discussed, to validate):**
+
+- **template** — non-negotiable constraints.
+- **plan** — the cheap, text-level structure of the carousel; what the AI
+  produces, and what can be discussed or corrected in conversation
+  (especially over messaging, before spending money on rendering).
+- **render** — deterministic, non-creative; takes plan + template and
+  draws.
+
+If the plan is a first-class artifact rather than an internal step, the
+same object serves both fronts: discussed in words over messaging, seen and
+manipulated in the UI. Local editing then falls out naturally — changing
+one piece means changing one part of the plan and redrawing only that.
+
+**Text/image relationship.** Text should stay untied from the image (it
+already is: text objects carry their own geometry over a background image),
+but must respect the image in positioning, disposition and contrast.
+Deciding text color/placement against the underlying image region is
+measurable and does not require AI.
+
+**Correction of an earlier assumption.** The owner had speculated that a
+well-known design tool achieves good text results by talking to an MCP that
+adjusts letters. That is not how it works. The realistic mechanism is that
+the image is generated leaving free space, and the text is measured against
+its box and adjusted until it fits — plain auto-fit, measurable in the
+browser, no AI needed.
+
+**Verified finding — nothing to salvage from the deprecated desktop app
+regarding fonts.** Investigation of `app/` found: three hardcoded generic
+system font stacks, no custom font file loading at all, a fixed per-role
+type-scale table, and a hand-rolled greedy canvas `measureText` word-wrap
+(which prevents words overflowing horizontally but does not make a block
+fit vertically — this is most likely what was remembered as "it made them
+fit"). The current stack is strictly ahead: real `@font-face` loading of
+fonts from the profile's asset index, waiting on `document.fonts.ready`
+before rasterizing, and native browser line-breaking. True gap on both
+sides: real shrink-to-fit/auto-sizing does not exist anywhere; font size is
+manual (numeric input, or proportional scaling on corner-drag). If wanted,
+it is net-new work, self-contained, best done by measuring `scrollHeight`
+against box height inside the render pass.
+
+### Agreed PR breakdown
+
+Close the current PR with a coherent, usable slice: empty canvas on entry
+(remove the compose-on-create prompt), the right-hand panel with its three
+tabs listing what exists, a list-templates endpoint (none exists today),
+and the i18n move (UI strings to a locale JSON file, technical prose to
+English).
+
+Deferred to later PRs, in order:
+
+1. drag-and-drop (asset to canvas, and asset to the AI panel as a visual
+   reference) plus text auto-fit.
+2. template enforced as a real constraint (touches the engine).
+3. the conversational AI panel.
+4. as a separate track, the headless composition API and the plan-as-
+   artifact work that enable the agent/messaging front.
+
+A hand-written SEED template is being added inside a profile folder purely
+so the Templates panel has something to show for testing. Templates are
+meant to be AI-generated from existing brand material and references —
+explicitly out of scope for the current PR.
 
 > **Esto es UN MÓDULO**, no el proyecto entero. El proyecto es una
 > plataforma de contenido: publicaciones, videos, guiones y seguimiento de
