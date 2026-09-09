@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadLayoutTemplate, LayoutTemplateError } from "./layout-template.js";
+import { listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "./layout-template.js";
 
 /** A throwaway profile dir with a `templates/<id>.json` override, cleaned up after `fn` runs. */
 function withTempProfile<T>(overrides: Record<string, unknown>, fn: (profileDir: string) => T): T {
@@ -96,6 +96,34 @@ const tests: Array<[string, () => void]> = [
         const template = loadLayoutTemplate(profileDir, "explicativo");
         assert.equal(template.zones.footer.logo, "none");
       });
+    },
+  ],
+
+  [
+    "listLayoutTemplates: a brand override with the same id as an engine default replaces it, not adds a second entry",
+    () => {
+      withTempProfile({ zones: { footer: { height: 140 } } }, (profileDir) => {
+        const templates = listLayoutTemplates(profileDir);
+        const explicativoEntries = templates.filter((t) => t.id === "explicativo");
+        assert.equal(explicativoEntries.length, 1, "override must replace the default, not duplicate it");
+        assert.equal(explicativoEntries[0]!.origin, "brand-override");
+        assert.equal(explicativoEntries[0]!.displayName, "Explicativo");
+      });
+    },
+  ],
+
+  [
+    "listLayoutTemplates: with no override, the engine default is listed with origin engine-default",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "layout-template-test-no-override-"));
+      try {
+        const templates = listLayoutTemplates(dir);
+        const explicativo = templates.find((t) => t.id === "explicativo");
+        assert.ok(explicativo, "engine default must be listed even with no profile override");
+        assert.equal(explicativo!.origin, "engine-default");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     },
   ],
 ];

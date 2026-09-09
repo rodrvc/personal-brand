@@ -9,6 +9,7 @@ import type {
   CreateCarouselResponse,
   ExportJob,
   LayoutTemplate,
+  LayoutTemplateSummary,
   OutputVersion,
   ProfileListingEntry,
   StatsResponse,
@@ -60,6 +61,11 @@ export function getBrandStyle(slug: string): Promise<BrandStyle> {
 export function getTemplate(slug: string, id: string, params?: Record<string, unknown>): Promise<LayoutTemplate> {
   const query = params ? `?params=${encodeURIComponent(JSON.stringify(params))}` : "";
   return request(`/profiles/${slug}/template/${id}${query}`);
+}
+
+/** Every template available to a brand: engine defaults merged with that profile's own overrides (ACU-230). */
+export function listTemplates(slug: string): Promise<{ templates: LayoutTemplateSummary[] }> {
+  return request(`/profiles/${slug}/templates`);
 }
 
 export function listCarousels(slug: string): Promise<{ carousels: CarouselSummary[] }> {

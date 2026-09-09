@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
+
 import { Router } from "express";
 
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
-import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
+import { listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { updateEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
@@ -78,6 +80,28 @@ export function profilesRouter(): Router {
     try {
       const store = new ProfileStore(req.params.slug);
       res.json(loadBrandStyle(store.roots.profileDir));
+    } catch (error) {
+      handleStoreError(error, res);
+    }
+  });
+
+  /**
+   * Listing endpoint (ACU-230): before this, a template could only be
+   * fetched by `GET .../template/:id`, which requires an id the caller
+   * already knows — there was no way to discover what templates a brand
+   * actually has. Checks the profile directory exists before touching
+   * anything else so an unresolvable slug answers 404 without `ProfileStore`
+   * ever reading outside the profiles root (a nonexistent slug still
+   * resolves to a syntactically valid path under it).
+   */
+  router.get("/api/profiles/:slug/templates", (req, res) => {
+    try {
+      const store = new ProfileStore(req.params.slug);
+      if (!existsSync(store.roots.profileDir)) {
+        res.status(404).json({ error: `No profile "${req.params.slug}"` });
+        return;
+      }
+      res.json({ templates: listLayoutTemplates(store.roots.profileDir) });
     } catch (error) {
       handleStoreError(error, res);
     }

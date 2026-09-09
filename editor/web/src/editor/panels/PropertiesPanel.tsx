@@ -5,6 +5,7 @@ import { SelectionPane } from "./SelectionPane";
 import { BucketPane } from "./BucketPane";
 import { SlidePane } from "./SlidePane";
 import { BrandPane } from "./BrandPane";
+import { TemplatesPane } from "./TemplatesPane";
 import "./PropertiesPanel.css";
 
 interface PropertiesPanelProps {
@@ -29,6 +30,7 @@ const TABS: Array<{ id: PanelTab; label: string }> = [
   { id: "bucket", label: "Bucket" },
   { id: "lam", label: "Lámina" },
   { id: "marca", label: "Marca" },
+  { id: "templates", label: "Templates" },
 ];
 
 export function PropertiesPanel(props: PropertiesPanelProps) {
@@ -85,6 +87,7 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           />
         )}
         {panelTab === "marca" && <BrandPane slug={props.slug} />}
+        {panelTab === "templates" && <TemplatesPane slug={props.slug} activeTemplateId={doc.template.id} />}
       </div>
     </aside>
   );

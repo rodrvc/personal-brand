@@ -18,7 +18,12 @@ export type {
   TextObject,
 } from "../../../../system/ig-carousel/carousel-document.ts";
 export type { BrandRoles, BrandTokens } from "../../../../system/ig-carousel/brand-schema.ts";
-export type { LayoutSlot, LayoutTemplate } from "../../../../system/ig-carousel/layout-template.ts";
+export type {
+  LayoutSlot,
+  LayoutTemplate,
+  LayoutTemplateOrigin,
+  LayoutTemplateSummary,
+} from "../../../../system/ig-carousel/layout-template.ts";
 
 import type { CarouselDocument, SlideKind } from "../../../../system/ig-carousel/carousel-document.ts";
 

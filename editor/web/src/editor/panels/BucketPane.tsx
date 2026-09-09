@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { assetFileUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
 import type { AssetEntry, AssetKind, CarouselDocument, OutputVersion, StatsResponse } from "../../api/types";
 import { addLibraryAssetObject, setBackgroundAsset } from "../mutations";
+import { ASSET_KIND_LABEL, groupAssetsByKind } from "./asset-grouping";
 
 interface BucketPaneProps {
   slug: string;
@@ -11,15 +12,6 @@ interface BucketPaneProps {
   onDocUpdate: (updater: (prev: CarouselDocument) => CarouselDocument) => void;
   stats: StatsResponse | null;
 }
-
-const KIND_LABEL: Record<AssetKind, string> = {
-  background: "Fondos",
-  character: "Personajes",
-  photo: "Fotos",
-  logo: "Logos",
-  decoration: "Decoraciones",
-  unclassified: "Sin clasificar",
-};
 
 function usedAssetIds(doc: CarouselDocument): Set<string> {
   const ids = new Set<string>();
@@ -115,12 +107,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
     }
   }
 
-  const grouped = new Map<AssetKind, AssetEntry[]>();
-  for (const entry of entries ?? []) {
-    if (entry.status === "hidden") continue;
-    if (!grouped.has(entry.kind)) grouped.set(entry.kind, []);
-    grouped.get(entry.kind)!.push(entry);
-  }
+  const grouped = groupAssetsByKind(entries ?? []);
   const candidates = (entries ?? []).filter((e) => e.status === "candidate");
 
   return (
@@ -144,7 +131,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
       {Array.from(grouped.entries()).map(([kind, kindEntries]) => (
         <div key={kind} className="props-card">
           <div className="props-card-heading">
-            {KIND_LABEL[kind]}
+            {ASSET_KIND_LABEL[kind]}
             <span style={{ marginLeft: "auto", fontWeight: 500, textTransform: "none", letterSpacing: 0, fontSize: 10.5, color: "var(--ui-ink-3)" }}>
               {kindEntries.length} archivos
             </span>
@@ -193,11 +180,11 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
             >
               <option value="">Reclasificar candidato…</option>
               {candidates.flatMap((c) =>
-                (Object.keys(KIND_LABEL) as AssetKind[])
+                (Object.keys(ASSET_KIND_LABEL) as AssetKind[])
                   .filter((k) => k !== "unclassified")
                   .map((k) => (
                     <option key={`${c.id}::${k}`} value={`${c.id}::${k}`}>
-                      {c.id.slice(0, 8)} → {KIND_LABEL[k]}
+                      {c.id.slice(0, 8)} → {ASSET_KIND_LABEL[k]}
                     </option>
                   )),
               )}
