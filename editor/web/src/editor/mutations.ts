@@ -1,4 +1,14 @@
-import type { AssetObject, CarouselDocument, Geometry, Slide, SlideKind, SlideObject, TextObject } from "../api/types";
+import type {
+  AssetObject,
+  BrandTokens,
+  CarouselDocument,
+  Geometry,
+  LayoutTemplate,
+  Slide,
+  SlideKind,
+  SlideObject,
+  TextObject,
+} from "../api/types";
 
 function mapSlide(doc: CarouselDocument, slideId: string, fn: (slide: Slide) => Slide): CarouselDocument {
   return {
@@ -99,6 +109,77 @@ export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, as
       assetId,
       fit: "cover",
       geometry: { x: 100, y: 100, w: 400, h: 400, rotation: 0 },
+    };
+    return { ...slide, objects: [...slide.objects, object] };
+  });
+}
+
+/**
+ * Adds a free-standing text object to a slide — the only path in the editor
+ * that can put text on a slide at all (mutations.ts had none before; the
+ * "T" tool button called nothing). Mirrors `addLibraryAssetObject`'s shape.
+ *
+ * Seeds from the active template: if the slide's kind declares a `text`
+ * slot not already used by another object, the new object references that
+ * `slot` and carries no geometry/style of its own — it inherits the slot's
+ * geometry, fontKey, fontSize, lineHeight, align and colorRole at resolve
+ * time (`resolveSlide`, carousel-document-resolve.ts), exactly like a
+ * template-authored object would. This is what makes new text land where
+ * the template expects instead of at an arbitrary spot.
+ *
+ * Template text slots never declare an `h` (see explicativo.json) — the
+ * renderer (`free-layout.ts`'s `renderTextObject`) leaves `height` off the
+ * style entirely and lets it come from content. With `text: ""` that lays
+ * out at zero height: invisible, and nothing for `SelectionOverlay` to
+ * measure or click. So the slotted path seeds a visible non-empty
+ * placeholder instead of "" — obviously a placeholder, not real copy, and
+ * the owner overwrites it the moment they start typing.
+ *
+ * When no free text slot exists for this slide kind, falls back to a free
+ * (unslotted) object: a default position inside the template's safe
+ * margins, `brand.fonts.body` and the `onSurface` role's color key (a
+ * `brand.colors` key, never a hex literal — carousel-document.ts's
+ * `findHexLiterals` check would reject one). That path already sets an
+ * explicit `h`, so it stays visible even with empty text.
+ *
+ * Takes `objectId` from the caller rather than generating one internally
+ * (unlike `addLibraryAssetObject`) so the caller can select the new object
+ * right after this returns, without having to re-derive or diff for it.
+ */
+export function addTextObject(
+  doc: CarouselDocument,
+  slideId: string,
+  objectId: string,
+  template: LayoutTemplate,
+  brand: BrandTokens,
+): CarouselDocument {
+  return mapSlide(doc, slideId, (slide) => {
+    const usedSlots = new Set(slide.objects.map((o) => o.slot).filter((s): s is string => Boolean(s)));
+    const freeTextSlot = template.slides[slide.kind]?.slots.find((s) => s.type === "text" && !usedSlots.has(s.name));
+
+    const base = {
+      id: objectId,
+      pinned: false,
+      locked: false,
+      source: "manual" as const,
+      kind: "text" as const,
+      text: "",
+    };
+
+    if (freeTextSlot) {
+      const object: TextObject = { ...base, text: "Texto", slot: freeTextSlot.name };
+      return { ...slide, objects: [...slide.objects, object] };
+    }
+
+    const margins = template.zones.margins;
+    const object: TextObject = {
+      ...base,
+      geometry: { x: margins.left, y: margins.top, w: template.canvas.w - margins.left - margins.right, h: 120, rotation: 0 },
+      fontKey: "body",
+      fontSize: 48,
+      lineHeight: 1.2,
+      align: "left",
+      colorKey: brand.roles.onSurface,
     };
     return { ...slide, objects: [...slide.objects, object] };
   });

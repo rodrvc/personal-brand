@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate } from "../api/client";
+import { addTextObject } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
@@ -68,6 +69,15 @@ export function Editor({
   const pinnedCount = doc.slides.reduce((sum, s) => sum + s.objects.filter((o) => o.pinned).length + (s.background.pinned ? 1 : 0), 0);
   const totalPieceCount = doc.slides.reduce((sum, s) => sum + s.objects.length + 1, 0);
 
+  const handleAddText = useCallback(() => {
+    if (!activeSlide) return;
+    const slideId = activeSlide.id;
+    const objectId = `obj-${slideId}-text-${Date.now()}`;
+    update((prev) => addTextObject(prev, slideId, objectId, template, brand));
+    setSelection({ slideId, objectId });
+    setPanelTab("sel");
+  }, [activeSlide, template, brand, update]);
+
   const handleRegenerateUnpinned = useCallback(async () => {
     if (!activeSlide) return;
     setShowRegenDialog(false);
@@ -92,6 +102,7 @@ export function Editor({
         doc={doc}
         tool={tool}
         onToolChange={setTool}
+        onAddText={handleAddText}
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={undo}
