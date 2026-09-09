@@ -16,7 +16,7 @@ import "./Editor.css";
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
 
 export type Tool = "select" | "text" | "asset";
-export type PanelTab = "sel" | "bucket" | "lam" | "marca";
+export type PanelTab = "sel" | "bucket" | "lam" | "marca" | "templates";
 
 interface EditorProps {
   slug: string;

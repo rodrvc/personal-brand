@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -203,4 +203,61 @@ export function loadLayoutTemplate(
     );
   }
   return result.data;
+}
+
+export type LayoutTemplateOrigin = "engine-default" | "brand-override";
+
+/** One entry in `listLayoutTemplates`'s result — enough for a picker to show and distinguish templates without loading each one's full geometry. */
+export interface LayoutTemplateSummary {
+  id: string;
+  /** Human-readable name. Templates carry no `name` field of their own (per design.md D5, no brand copy under `system/`), so this is always derived from `id` (e.g. "explicativo" -> "Explicativo"). */
+  displayName: string;
+  origin: LayoutTemplateOrigin;
+}
+
+/** "free-layout" -> "Free layout"; the id's only real content is its slug, so this is a mechanical humanization, not a translation. */
+function humanizeId(id: string): string {
+  const spaced = id.replace(/[-_]+/g, " ").trim();
+  return spaced.length > 0 ? spaced[0]!.toUpperCase() + spaced.slice(1) : id;
+}
+
+function idsFromJsonDir(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => basename(name, ".json"));
+}
+
+/**
+ * Lists every template available to a profile: the engine's own defaults
+ * (`system/ig-carousel/layouts/*.json`) merged with that profile's overrides
+ * (`profiles/<slug>/templates/*.json`). An override sharing an id with a
+ * default REPLACES it in the result — same id, `origin: "brand-override"` —
+ * rather than appearing twice, mirroring how `loadLayoutTemplate` treats an
+ * override as replacing (by deep merge) the default it names, not adding a
+ * second template.
+ *
+ * A brand-only id (a template the engine ships no default for) is listed
+ * too, with `origin: "brand-override"` — nothing here requires an engine
+ * default to exist first. Returns `[]`, never throws, when a profile has
+ * neither defaults (impossible in practice) nor overrides, so a caller can
+ * always render "no templates" rather than handle an exception.
+ */
+export function listLayoutTemplates(profileDir: string): LayoutTemplateSummary[] {
+  const engineDir = dirname(fileURLToPath(import.meta.url));
+  const defaultIds = idsFromJsonDir(join(engineDir, "layouts"));
+  const overrideIds = idsFromJsonDir(join(profileDir, "templates"));
+
+  const byId = new Map<string, LayoutTemplateSummary>();
+  for (const id of defaultIds) {
+    byId.set(id, { id, displayName: humanizeId(id), origin: "engine-default" });
+  }
+  for (const id of overrideIds) {
+    // Present in both -> the override replaces the default entry (same id,
+    // origin flips to brand-override), matching loadLayoutTemplate's merge
+    // rule instead of listing the same id twice.
+    byId.set(id, { id, displayName: humanizeId(id), origin: "brand-override" });
+  }
+
+  return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
 }

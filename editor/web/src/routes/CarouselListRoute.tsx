@@ -4,8 +4,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { listCarousels } from "../api/client";
 import type { CarouselSummary } from "../api/types";
 import { Button } from "../components/Button";
+import { AssetsPane } from "../editor/panels/AssetsPane";
+import { TemplatesPane } from "../editor/panels/TemplatesPane";
 import { NewCarouselDialog } from "./NewCarouselDialog";
 import "./CarouselListRoute.css";
+import "../editor/panels/PropertiesPanel.css";
+
+type SidePanelTab = "assets" | "templates";
 
 const STATUS_LABEL: Record<CarouselSummary["status"], string> = {
   draft: "Borrador",
@@ -19,6 +24,7 @@ export function CarouselListRoute() {
   const [carousels, setCarousels] = useState<CarouselSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("assets");
 
   useEffect(() => {
     if (!slug) return;
@@ -38,66 +44,99 @@ export function CarouselListRoute() {
   if (!slug) return null;
 
   return (
-    <div className="carousel-list">
-      <header className="carousel-list-header">
-        <div>
-          <Link to="/" className="carousel-list-back">
-            ← Perfiles
-          </Link>
-          <h1 className="carousel-list-title">{slug} · Carruseles</h1>
-        </div>
-        <Button variant="primary" onClick={() => setShowNew(true)}>
-          Nuevo carrusel
-        </Button>
-      </header>
+    <div className="carousel-list-page">
+      <div className="carousel-list">
+        <header className="carousel-list-header">
+          <div>
+            <Link to="/" className="carousel-list-back">
+              ← Perfiles
+            </Link>
+            <h1 className="carousel-list-title">{slug} · Carruseles</h1>
+          </div>
+          <Button variant="primary" onClick={() => setShowNew(true)}>
+            Nuevo carrusel
+          </Button>
+        </header>
 
-      {error && <p className="carousel-list-error">{error}</p>}
-      {!carousels && !error && <p className="carousel-list-hint">Cargando…</p>}
-      {carousels && carousels.length === 0 && (
-        <p className="carousel-list-hint">Este perfil aún no tiene carruseles.</p>
-      )}
+        {error && <p className="carousel-list-error">{error}</p>}
+        {!carousels && !error && <p className="carousel-list-hint">Cargando…</p>}
+        {carousels && carousels.length === 0 && (
+          <p className="carousel-list-hint">Este perfil aún no tiene carruseles.</p>
+        )}
 
-      <table className="carousel-table">
-        <thead>
-          <tr>
-            <th>Título</th>
-            <th>Estado</th>
-            <th>Actualizado</th>
-            <th>Láminas</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {carousels?.map((c) => (
-            <tr key={c.id}>
-              <td>{c.title || c.id}</td>
-              <td>
-                <span className={`carousel-status ${c.status}`}>{STATUS_LABEL[c.status]}</span>
-              </td>
-              <td>{new Date(c.updatedAt).toLocaleString()}</td>
-              <td>{c.slideCount}</td>
-              <td>
-                <Link to={`/${slug}/carousels/${c.id}`} className="carousel-open-link">
-                  Abrir
-                </Link>
-              </td>
+        <table className="carousel-table">
+          <thead>
+            <tr>
+              <th>Título</th>
+              <th>Estado</th>
+              <th>Actualizado</th>
+              <th>Láminas</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {carousels?.map((c) => (
+              <tr key={c.id}>
+                <td>{c.title || c.id}</td>
+                <td>
+                  <span className={`carousel-status ${c.status}`}>{STATUS_LABEL[c.status]}</span>
+                </td>
+                <td>{new Date(c.updatedAt).toLocaleString()}</td>
+                <td>{c.slideCount}</td>
+                <td>
+                  <Link to={`/${slug}/carousels/${c.id}`} className="carousel-open-link">
+                    Abrir
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
-      {showNew && (
-        <NewCarouselDialog
-          slug={slug}
-          onClose={() => setShowNew(false)}
-          onCreated={({ document }) =>
-            // Router state carries the just-created (empty) document
-            // straight to EditorRoute so it can skip its own
-            // fetch-and-flash — see EditorRoute's own comment.
-            navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document } })
-          }
-        />
-      )}
+        {showNew && (
+          <NewCarouselDialog
+            slug={slug}
+            onClose={() => setShowNew(false)}
+            onCreated={({ document }) =>
+              // Router state carries the just-created (empty) document
+              // straight to EditorRoute so it can skip its own
+              // fetch-and-flash — see EditorRoute's own comment.
+              navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document } })
+            }
+          />
+        )}
+      </div>
+
+      {/*
+       * ACU-230: assets and templates used to be reachable only from the
+       * properties panel of an already-open document — a brand with no
+       * carousel yet had no way to see either. This panel exists
+       * independently of any open carousel, right on the listing.
+       */}
+      <aside className="props-panel carousel-list-side-panel">
+        <div className="props-tabs" role="tablist">
+          <button
+            className="props-tab"
+            role="tab"
+            aria-selected={sidePanelTab === "assets"}
+            onClick={() => setSidePanelTab("assets")}
+          >
+            Assets
+          </button>
+          <button
+            className="props-tab"
+            role="tab"
+            aria-selected={sidePanelTab === "templates"}
+            onClick={() => setSidePanelTab("templates")}
+          >
+            Templates
+          </button>
+        </div>
+        <div className="props-body">
+          {sidePanelTab === "assets" && <AssetsPane slug={slug} />}
+          {sidePanelTab === "templates" && <TemplatesPane slug={slug} />}
+        </div>
+      </aside>
     </div>
   );
 }
