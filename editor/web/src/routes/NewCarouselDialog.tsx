@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { createCarouselFromPrompt } from "../api/client";
+import { createCarousel } from "../api/client";
 import type { CreateCarouselResponse } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
@@ -13,39 +13,29 @@ interface NewCarouselDialogProps {
 }
 
 /**
- * Composition-from-prompt screen (specs/editor-ui "Composition from the
- * prompt"): a single small form — prompt, template, an optional
- * collapsed-by-default library-pieces picker. Submitting builds the
- * carousel immediately (no plan-approval step in between); the caller
- * navigates straight into the editor with the returned document.
+ * New-carousel screen (specs/editor-ui "New carousel opens empty"): asks
+ * only for what identifies the piece — title, brand (fixed to `slug`, the
+ * profile this dialog was opened from) and an optional template. No
+ * prompt, no cost, no background work: submitting creates an empty
+ * document and the caller navigates straight into the editor with it.
  *
  * Only one template ships today (system/ig-carousel/layouts/explicativo.json
  * is the only file there, and profiles/example/templates/ has none) — a
  * free-text input defaulting to "explicativo" is honest about that; a
- * `<select>` with one option would just be theater until a second template
- * exists.
+ * `<select>` with real options is a separate issue (ACU-230/232) once a
+ * list-templates endpoint exists.
  */
 export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialogProps) {
-  const [prompt, setPrompt] = useState("");
+  const [title, setTitle] = useState("");
   const [templateId, setTemplateId] = useState("explicativo");
-  const [assetIdsText, setAssetIdsText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
-    if (!prompt.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const assetIds = assetIdsText
-        .split(/[\s,]+/)
-        .map((id) => id.trim())
-        .filter(Boolean);
-      const result = await createCarouselFromPrompt(slug, {
-        prompt,
-        templateId,
-        assetIds: assetIds.length > 0 ? assetIds : undefined,
-      });
+      const result = await createCarousel(slug, { title: title.trim() || undefined, templateId });
       onCreated(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -61,7 +51,7 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
       actions={
         <>
           <Button onClick={onClose}>Cancelar</Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={busy || !prompt.trim()}>
+          <Button variant="primary" onClick={handleSubmit} disabled={busy}>
             {busy ? "Creando…" : "Crear"}
           </Button>
         </>
@@ -69,35 +59,25 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
     >
       <div className="new-carousel-form">
         <label className="new-carousel-label">
-          Prompt
-          <textarea
+          Título
+          <input
             className="ui-input"
-            rows={4}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Un carrusel que explique X paso a paso, en 4 pasos, con el template explicativo, usando las fotos de los assets."
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="ej: Cómo armar tu primer carrusel"
             autoFocus
           />
         </label>
         <label className="new-carousel-label">
-          Template
+          Marca
+          <input className="ui-input" value={slug} disabled />
+        </label>
+        <label className="new-carousel-label">
+          Template (opcional)
           <input className="ui-input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} />
         </label>
-        <details className="new-carousel-assets">
-          <summary>Piezas de biblioteca (opcional)</summary>
-          <label className="new-carousel-label">
-            IDs de assets a usar, separados por coma o espacio
-            <input
-              className="ui-input"
-              value={assetIdsText}
-              onChange={(e) => setAssetIdsText(e.target.value)}
-              placeholder="ej: 3f2a9c1b8e4d5f60, 7c1d..."
-            />
-          </label>
-        </details>
         <p className="new-carousel-hint">
-          El carrusel se arma directo en el editor: la cantidad de láminas sale del prompt (ej. "en 4 pasos") o del
-          template si no la mencionás.
+          El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.
         </p>
         {error && <p className="new-carousel-error">{error}</p>}
       </div>

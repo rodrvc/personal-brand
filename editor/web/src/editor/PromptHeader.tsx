@@ -1,4 +1,4 @@
-import type { CarouselDocument, ComposeJobStatus, StatsResponse } from "../api/types";
+import type { CarouselDocument, StatsResponse } from "../api/types";
 import "./PromptHeader.css";
 
 interface PromptHeaderProps {
@@ -6,9 +6,6 @@ interface PromptHeaderProps {
   stats: StatsResponse | null;
   onRegenerateUnpinned: () => void;
   regenerateUnpinnedError: string | null;
-  /** Background compose job status, polled from Editor.tsx while it's running — null once there's nothing left to poll (no jobId, or polling already stopped). */
-  composeJob: ComposeJobStatus | null;
-  onShowPlan: () => void;
 }
 
 function summarize(doc: CarouselDocument) {
@@ -18,9 +15,7 @@ function summarize(doc: CarouselDocument) {
   let draftedTexts = 0;
   // Owner decision: image generation is never automatic, so every visual
   // slot with no library candidate sits at `awaitingImage: true` until the
-  // user submits a per-piece "Generar imagen…" request — counted here
-  // instead of a "Generando…" progress line, since there is no background
-  // work left to wait on for these.
+  // user submits a per-piece "Generar imagen…" request.
   let awaitingImages = 0;
   const pieces = doc.slides.flatMap((s) => [s.background, ...s.objects]);
   for (const piece of pieces) {
@@ -34,10 +29,6 @@ function summarize(doc: CarouselDocument) {
     if (s.background.mode === "asset" && s.background.source === "ai") generatedBackgrounds += 1;
   }
   return { slideCount, libraryPieces, generatedBackgrounds, draftedTexts, awaitingImages };
-}
-
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
 }
 
 /** "hace N min/h/d" from an ISO timestamp — no date library needed for a granularity this coarse. */
@@ -54,23 +45,14 @@ function relativeTime(iso: string): string {
   return `hace ${days} d`;
 }
 
-export function PromptHeader({
-  doc,
-  stats,
-  onRegenerateUnpinned,
-  regenerateUnpinnedError,
-  composeJob,
-  onShowPlan,
-}: PromptHeaderProps) {
+export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpinnedError }: PromptHeaderProps) {
   const { slideCount, libraryPieces, generatedBackgrounds, draftedTexts, awaitingImages } = summarize(doc);
-  const isRunning = composeJob?.status === "queued" || composeJob?.status === "running";
-  const jobFailed = composeJob?.status === "error" || composeJob?.status === "skipped";
 
   return (
     <div className="prompt-header">
       <span className="prompt-icon">✦</span>
       <div className="prompt-body">
-        <p className="prompt-text">{doc.prompt.text}</p>
+        <p className="prompt-text">{doc.title}</p>
         <div className="prompt-meta">
           <span>
             <i className="prompt-check">✓</i> {slideCount} láminas
@@ -83,7 +65,6 @@ export function PromptHeader({
           </span>
           <span>
             <i className="prompt-check">✓</i> {generatedBackgrounds} fondos generados
-            {composeJob && composeJob.costCentsSoFar > 0 ? ` · ${formatCents(composeJob.costCentsSoFar)}` : ""}
           </span>
           {awaitingImages > 0 && (
             <span className="prompt-awaiting-images">
@@ -97,16 +78,7 @@ export function PromptHeader({
               {stats.history.length > 0 && ` · hace un tiempo era ${stats.history[0]!.libraryRatio}%`}
             </span>
           )}
-          <button className="prompt-plan-link" onClick={onShowPlan}>
-            Ver plan
-          </button>
         </div>
-        {isRunning && (
-          <p className="prompt-progress">
-            Redactando textos… {composeJob.completedPieces}/{composeJob.totalPieces} piezas
-          </p>
-        )}
-        {jobFailed && composeJob?.message && <p className="prompt-error">{composeJob.message}</p>}
         {regenerateUnpinnedError && <p className="prompt-error">{regenerateUnpinnedError}</p>}
       </div>
       <button className="prompt-redo" onClick={onRegenerateUnpinned}>

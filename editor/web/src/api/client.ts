@@ -4,7 +4,6 @@ import type {
   BrandTokens,
   CarouselDocument,
   CarouselSummary,
-  ComposeJobStatus,
   CompositionPlanResponse,
   ContrastMeasurement,
   CreateCarouselResponse,
@@ -84,14 +83,13 @@ export function putCarousel(
 }
 
 /**
- * Immediate-build creation (editor-ui spec's "Composition from the
- * prompt"): the returned document is already real and persisted — no
- * plan-approval step. `jobId` is for `getComposeJob` polling while pending
- * placeholders are filled in the background.
+ * Creates a new, empty carousel (editor-ui spec's "New carousel opens
+ * empty"): inert — no AI call, no cost, no job id. `title` is optional;
+ * the server falls back to the carousel id when omitted.
  */
-export function createCarouselFromPrompt(
+export function createCarousel(
   slug: string,
-  body: { prompt: string; templateId?: string; id?: string; assetIds?: string[] },
+  body: { title?: string; templateId?: string; id?: string },
 ): Promise<CreateCarouselResponse> {
   return request(`/profiles/${slug}/carousels`, {
     method: "POST",
@@ -116,10 +114,6 @@ export function applyPlan(slug: string, carouselId: string, templateId?: string)
     method: "POST",
     body: JSON.stringify(templateId ? { templateId } : {}),
   });
-}
-
-export function getComposeJob(slug: string, carouselId: string, jobId: string): Promise<ComposeJobStatus> {
-  return request(`/profiles/${slug}/carousels/${carouselId}/compose/${jobId}`);
 }
 
 export interface RegenerateTarget {
