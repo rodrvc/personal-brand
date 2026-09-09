@@ -93,23 +93,9 @@ export interface CompositionPlanResponse {
   generatedPieces: number;
 }
 
-/** Response from the immediate-build `POST /carousels` (editor-ui spec's "Composition from the prompt": no plan-approval step) — the document is already real and persisted; `jobId` lets the caller poll the background compose job that fills in its `pending` placeholders. */
+/** Response from `POST /carousels` (editor-ui spec's "New carousel opens empty") — an inert create: the document has its slides' structure and no generated content, no job id. */
 export interface CreateCarouselResponse {
   document: CarouselDocument;
-  jobId: string;
-}
-
-/** Mirrors the server's `ComposeJob` shape (editor/server/src/compose/compose-job.ts). */
-export interface ComposeJobStatus {
-  id: string;
-  slug: string;
-  carouselId: string;
-  status: "queued" | "running" | "done" | "error" | "skipped";
-  message?: string;
-  totalPieces: number;
-  completedPieces: number;
-  costCentsSoFar: number;
-  counts: { fromLibrary: number; generated: number; drafted: number };
 }
 
 export interface OutputVersion {

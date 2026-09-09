@@ -24,10 +24,9 @@ interface EditorRouteProps {
   onToggleTheme: () => void;
 }
 
-/** Router state NewCarouselDialog/CarouselListRoute hand off on navigate — see that route's comment. Both fields are optional: a direct URL visit or a page reload has neither, and the effect below falls back to fetching. */
+/** Router state NewCarouselDialog/CarouselListRoute hand off on navigate — see that route's comment. Optional: a direct URL visit or a page reload has none, and the effect below falls back to fetching. */
 interface EditorRouteLocationState {
   doc?: CarouselDocument;
-  jobId?: string;
 }
 
 export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
@@ -94,7 +93,6 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
       initialActiveSlide={readStoredActiveSlide(id)}
       theme={theme}
       onToggleTheme={onToggleTheme}
-      initialJobId={locationState?.jobId}
     />
   );
 }
@@ -108,7 +106,6 @@ function EditorLoaded({
   initialActiveSlide,
   theme,
   onToggleTheme,
-  initialJobId,
 }: {
   slug: string;
   brand: BrandTokens;
@@ -118,8 +115,6 @@ function EditorLoaded({
   initialActiveSlide: number;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  /** A background compose job to poll immediately, from a just-created carousel (router state). Absent after a reload — the document already reflects whatever the job completed before, and polling simply doesn't resume (routes/compose.ts's task comment on this). */
-  initialJobId?: string;
 }) {
   const editorState = useDocumentEditor(slug, initialDoc);
   return (
@@ -132,7 +127,6 @@ function EditorLoaded({
       initialActiveSlide={initialActiveSlide}
       theme={theme}
       onToggleTheme={onToggleTheme}
-      initialJobId={initialJobId}
     />
   );
 }

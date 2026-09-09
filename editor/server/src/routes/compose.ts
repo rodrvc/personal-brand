@@ -11,13 +11,12 @@ import {
   applyCompositionPlan,
   assignTextColorKeys,
   buildCompositionPlan,
-  buildImmediateDocument,
+  buildEmptyDocument,
   draftCopyBrandContext,
   generateForSlot,
   generateImageBrandContext,
   suggestionForSlot,
 } from "../compose/planner.js";
-import { enqueueComposeJob, getComposeJob } from "../compose/compose-job.js";
 import {
   assertValidCarouselId,
   documentExists,
@@ -57,31 +56,26 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
   });
 
   /**
-   * Creates a new carousel from a prompt.
+   * Creates a new carousel. Owner decision (editor/ESTADO.md, 2026-09-08 —
+   * "New carousel always starts empty"): the editor never composes on
+   * entry. This handler is INERT — it builds the template's slide
+   * structure (cover/step*N/closing, same shape `planSlideKinds` would
+   * seed) with every slot empty and no `pending` placeholder anywhere, and
+   * returns it. No AI provider call, no library lookup, no cost, no job
+   * id. Composition happens afterward, per piece, through the existing
+   * per-piece generation controls (`POST .../regenerate`).
    *
-   * Default behavior (what the web UI always calls): IMMEDIATE BUILD, no
-   * approval step (editor-ui spec's "Composition from the prompt", design.md
-   * D6/D7's updated description) — every library-sourced piece is placed
-   * synchronously and every piece that needs AI becomes a `pending: true`
-   * placeholder; the resulting document is written to disk and returned
-   * together with a `jobId` for a background compose job that fills the
-   * placeholders in (`GET .../compose/:jobId` polls its status). This
-   * synchronous part never calls the AI provider, so it's fast with or
-   * without an API key configured.
-   *
-   * `?mode=plan` (or `{ preview: true }` in the body) reproduces the OLD
-   * two-phase behavior byte-for-byte: builds a plan and returns it without
-   * writing any document, for a caller that wants to preview cost/origin
-   * before anything is created. Chosen name: a query param (`mode=plan`)
-   * reads cleanly against the default's implicit "mode=build", and keeps
-   * the body shape identical between both modes (no extra field to filter
-   * out of `body` before it's used). This mode, and `plan/apply` below, are
-   * kept for API/script use only — nothing in editor/web calls either.
+   * `?mode=plan` (or `{ preview: true }` in the body) is kept for
+   * API/script callers that still want the OLD prompt-driven
+   * plan/apply flow — building a plan from a prompt and applying it in a
+   * second step. Nothing in editor/web calls either path; the web UI only
+   * ever sends `{ title, templateId }`.
    */
   router.post("/api/profiles/:slug/carousels", (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
       const body = req.body as {
+        title?: string;
         prompt?: string;
         templateId?: string;
         id?: string;
@@ -90,10 +84,6 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         slideCount?: number;
         preview?: boolean;
       };
-      if (!body.prompt || typeof body.prompt !== "string") {
-        res.status(400).json({ error: `"prompt" is required` });
-        return;
-      }
       const templateId = body.templateId ?? "explicativo";
       const carouselId = body.id ?? `carousel-${Date.now()}`;
       assertValidCarouselId(carouselId);
@@ -102,11 +92,14 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      const template = loadLayoutTemplate(store.roots.profileDir, templateId);
-      const plan = buildCompositionPlan(store, body.prompt, template, body.slideCount, body.assetIds);
-
       const isPreview = req.query.mode === "plan" || body.preview === true;
       if (isPreview) {
+        if (!body.prompt || typeof body.prompt !== "string") {
+          res.status(400).json({ error: `"prompt" is required for a plan preview` });
+          return;
+        }
+        const template = loadLayoutTemplate(store.roots.profileDir, templateId);
+        const plan = buildCompositionPlan(store, body.prompt, template, body.slideCount, body.assetIds);
         pendingPlans.set(`${req.params.slug}/${carouselId}`, plan);
 
         const estimatedCostCents = plan.visualSlots
@@ -124,32 +117,15 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      // Immediate build: pure library composition + placeholders, no AI
-      // call — see `buildImmediateDocument`'s own comment. Written to disk
-      // right away so the document exists the moment this responds, and
-      // the background job (started below) only ever mutates and re-writes
-      // it, never creates it.
+      const template = loadLayoutTemplate(store.roots.profileDir, templateId);
       const brand = loadBrand(store.roots.profileDir);
-      const document = buildImmediateDocument(brand, templateId, plan, carouselId);
+      const document = buildEmptyDocument(brand, template, templateId, carouselId, body.title);
       writeDocument(store, document);
 
-      const generator = getGenerator(req.params.slug);
-      const jobId = enqueueComposeJob(store, carouselId, document, generator, body.prompt);
-
-      res.status(201).json({ document, jobId });
+      res.status(201).json({ document });
     } catch (error) {
       handlePlanError(error, res);
     }
-  });
-
-  /** Polls a background compose job started by the immediate-build path above. Mirrors `GET .../export/:jobId`'s 404-if-mismatched behavior. */
-  router.get("/api/profiles/:slug/carousels/:id/compose/:jobId", (req, res) => {
-    const job = getComposeJob(req.params.jobId);
-    if (!job || job.slug !== req.params.slug || job.carouselId !== req.params.id) {
-      res.status(404).json({ error: `No compose job "${req.params.jobId}"` });
-      return;
-    }
-    res.json(job);
   });
 
   router.post("/api/profiles/:slug/carousels/:id/plan/apply", async (req, res) => {
@@ -485,7 +461,7 @@ async function regenerateObject(
   return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents };
 }
 
-/** Reads back the cost an image generation call just recorded in its own sidecar — `generateForSlot`/`AssetEntry` itself carries no cost field (system/assets/index.ts), so this is the one place the number survives past the call, same reasoning as compose-job.ts's own read of it. */
+/** Reads back the cost an image generation call just recorded in its own sidecar — `generateForSlot`/`AssetEntry` itself carries no cost field (system/assets/index.ts), so this is the one place the number survives past the call. */
 function readGeneratedAssetCostCents(store: ProfileStore, assetId: string): number {
   try {
     const sidecar = store.readJson<{ costCents?: number }>(`assets/generated/${assetId}.json`);

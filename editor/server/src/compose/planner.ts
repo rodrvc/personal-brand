@@ -429,104 +429,39 @@ export async function applyCompositionPlan(
 }
 
 /**
- * Builds the initial `CarouselDocument` for the immediate-build compose
- * flow (editor-ui spec's "Composition from the prompt"): assembles every
- * `library`-sourced visual piece exactly like `applyCompositionPlan` does,
- * but instead of calling the AI provider for a `generate`-sourced slot or a
- * text slot, it creates a `pending: true` placeholder — empty text, no
- * `assetId` yet, or a temporary color background — so the document is
- * immediately valid and paintable. This function makes NO network/AI call
- * of any kind; it's pure library composition, which is what keeps it fast
- * regardless of whether an API key is configured (routes/compose.ts's
- * `compose-job.ts` fills these placeholders in afterward, in the
- * background).
+ * Builds the `CarouselDocument` for a brand-new carousel (editor/ESTADO.md,
+ * 2026-09-08 — "New carousel always starts empty"). Every slide gets the
+ * template's structure (cover/step*N/closing, via `planSlideKinds` with no
+ * prompt text to parse — so always the template's own default step count)
+ * but NO objects and a plain surface-colored background: no library lookup,
+ * no AI call, no `pending` placeholder anywhere. Composition is something
+ * the user asks for afterward, per piece, via `POST .../regenerate`.
  */
-export function buildImmediateDocument(
+export function buildEmptyDocument(
   brand: BrandTokens,
+  template: LayoutTemplate,
   templateId: string,
-  plan: CompositionPlan,
   carouselId: string,
+  title?: string,
 ): CarouselDocument {
   const now = new Date().toISOString();
-  const slides: Slide[] = plan.slideKinds.map((kind, slideIndex) => {
-    const slideId = `slide-${slideIndex + 1}`;
-    const objects: SlideObject[] = [];
-
-    const textSlotsForSlide = plan.textSlots.filter((t) => t.slideIndex === slideIndex);
-    for (const t of textSlotsForSlide) {
-      objects.push({
-        id: `obj-${slideId}-${t.slot}`,
-        kind: "text",
-        slot: t.slot,
-        pinned: false,
-        locked: false,
-        source: "ai",
-        text: "",
-        pending: true,
-      });
-    }
-
-    const visualForSlide = plan.visualSlots.filter((v) => v.slideIndex === slideIndex);
-    let backgroundAssetId: string | undefined;
-    let backgroundPending = false;
-    for (const v of visualForSlide) {
-      if (v.source === "library" && v.assetId) {
-        if (v.slot === "background") {
-          backgroundAssetId = v.assetId;
-        } else {
-          objects.push({
-            id: `obj-${slideId}-${v.slot}`,
-            kind: "asset",
-            slot: v.slot,
-            pinned: false,
-            locked: false,
-            source: "library",
-            assetId: v.assetId,
-            fit: "cover",
-          });
-        }
-        continue;
-      }
-      // `generate`-sourced slot: no AI call here — a pending placeholder
-      // stands in until the background compose job fills it in.
-      if (v.slot === "background") {
-        backgroundPending = true;
-      } else {
-        objects.push({
-          id: `obj-${slideId}-${v.slot}`,
-          kind: "asset",
-          slot: v.slot,
-          pinned: false,
-          locked: false,
-          source: "ai",
-          fit: "cover",
-          pending: true,
-        });
-      }
-    }
-
-    const background: Slide["background"] = backgroundAssetId
-      ? { mode: "asset", assetId: backgroundAssetId, pinned: false, source: "library" }
-      : {
-          mode: "color",
-          colorKey: brand.roles.surface,
-          pinned: false,
-          source: "manual",
-          ...(backgroundPending ? { pending: true } : {}),
-        };
-
-    return assignTextColorKeys(brand, { id: slideId, kind, background, objects });
-  });
+  const kinds = planSlideKinds("", template);
+  const slides: Slide[] = kinds.map((kind, slideIndex) => ({
+    id: `slide-${slideIndex + 1}`,
+    kind,
+    background: { mode: "color", colorKey: brand.roles.surface, pinned: false, source: "manual" },
+    objects: [],
+  }));
 
   return {
     schemaVersion: 1,
     id: carouselId,
-    title: plan.promptText.slice(0, 80),
+    title: title?.trim() || carouselId,
     status: "draft",
     createdAt: now,
     updatedAt: now,
     canvas: { w: 1080, h: 1350 },
-    prompt: { text: plan.promptText, createdAt: now, runs: [] },
+    prompt: { text: "", createdAt: now, runs: [] },
     template: { id: templateId },
     slides,
   };

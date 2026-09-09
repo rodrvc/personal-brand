@@ -147,11 +147,11 @@ export class ExportHasPendingPiecesError extends Error {}
  *
  * Refuses to queue at all (throws `ExportHasPendingPiecesError`, synchronously,
  * before anything is added to `jobs`) when the document still has a
- * `pending: true` piece — the background compose job (compose-job.ts)
- * hasn't finished filling in every placeholder yet, so exporting now would
- * bake an empty text box or a missing image into the PNGs. Passing
- * `allowPending: true` skips this check for a caller (the web's "Exportar
- * igual" button) that explicitly wants to export anyway.
+ * `pending: true` piece — the API/script-only `plan/apply` flow
+ * (routes/compose.ts) hasn't finished filling in every placeholder yet, so
+ * exporting now would bake an empty text box or a missing image into the
+ * PNGs. Passing `allowPending: true` skips this check for a caller (the
+ * web's "Exportar igual" button) that explicitly wants to export anyway.
  */
 export function enqueueExport(
   store: ProfileStore,

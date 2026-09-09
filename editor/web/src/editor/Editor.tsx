@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { BrandTokens, CarouselDocument, ComposeJobStatus, LayoutTemplate, StatsResponse } from "../api/types";
+import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
-import { getCarousel, getComposeJob, regenerate } from "../api/client";
+import { regenerate } from "../api/client";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
-import { PlanDrawer } from "./PlanDrawer";
 import { Stage } from "./Stage";
 import { PropertiesPanel } from "./panels/PropertiesPanel";
 import { StatusBar } from "./StatusBar";
@@ -13,8 +12,6 @@ import type { Selection } from "./geometry";
 import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
 import { ExportDialog } from "./ExportDialog";
 import "./Editor.css";
-
-const COMPOSE_POLL_MS = 1200;
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
 
@@ -30,8 +27,6 @@ interface EditorProps {
   initialActiveSlide: number;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  /** A background compose job to poll immediately after landing here from a just-created carousel — see EditorRoute's comment. */
-  initialJobId?: string;
 }
 
 export function Editor({
@@ -43,7 +38,6 @@ export function Editor({
   initialActiveSlide,
   theme,
   onToggleTheme,
-  initialJobId,
 }: EditorProps) {
   const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion } = editorState;
   const [activeIndex, setActiveIndex] = useState(() =>
@@ -55,55 +49,7 @@ export function Editor({
   const [stats, setStats] = useState(initialStats);
   const [showRegenDialog, setShowRegenDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
-  const [showPlanDrawer, setShowPlanDrawer] = useState(false);
   const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
-  const [composeJob, setComposeJob] = useState<ComposeJobStatus | null>(null);
-
-  // Polls the background compose job started by the immediate-build create
-  // call (editor-ui spec's "progress and cost are shown in the prompt
-  // header while composition runs in the background"). Stops once the job
-  // reaches a terminal status, or if this editor instance never had a
-  // jobId to begin with (a page reload after creation, per design: partial
-  // progress already persisted via writeDocument makes that safe to just
-  // not resume).
-  const applyRemoteRef = useRef(applyRemote);
-  applyRemoteRef.current = applyRemote;
-
-  useEffect(() => {
-    if (!initialJobId) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll() {
-      try {
-        const job = await getComposeJob(slug, doc.id, initialJobId!);
-        if (!alive) return;
-        setComposeJob(job);
-        if (job.status === "queued" || job.status === "running") {
-          timer = setTimeout(poll, COMPOSE_POLL_MS);
-        } else {
-          // Terminal status: re-fetch the document once more so every
-          // piece the job touched (including the very last one, written
-          // just before the job flipped to its terminal status) is
-          // reflected — applyRemote bumps renderVersion, which is what
-          // clears the pending shimmer and refreshes the iframe HTML.
-          const fresh = await getCarousel(slug, doc.id);
-          if (alive) applyRemoteRef.current(fresh);
-        }
-      } catch {
-        // A 404 (stale jobId after some edge case) or a transient network
-        // error just stops polling silently — the document itself is not
-        // at risk, since every completed piece was already persisted.
-      }
-    }
-
-    void poll();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed only on slug/jobId: doc.id doesn't change for the life of one editor instance, and re-running this on every doc update would restart polling.
-  }, [slug, initialJobId]);
 
   useEffect(() => {
     try {
@@ -161,8 +107,6 @@ export function Editor({
             stats={stats}
             onRegenerateUnpinned={() => setShowRegenDialog(true)}
             regenerateUnpinnedError={regenUnpinnedError}
-            composeJob={composeJob}
-            onShowPlan={() => setShowPlanDrawer(true)}
           />
           <Stage
             slug={slug}
@@ -227,7 +171,6 @@ export function Editor({
       {showExportDialog && (
         <ExportDialog slug={slug} carouselId={doc.id} onClose={() => setShowExportDialog(false)} />
       )}
-      {showPlanDrawer && <PlanDrawer doc={doc} onClose={() => setShowPlanDrawer(false)} />}
     </div>
   );
 }
