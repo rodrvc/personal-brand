@@ -25,6 +25,7 @@ interface PropertiesPanelProps {
   onPanelTabChange: (tab: PanelTab) => void;
   stats: StatsResponse | null;
   onStatsRefresh: (stats: StatsResponse) => void;
+  onTemplateChange: (next: LayoutTemplate) => void;
 }
 
 /** Tab id → its LocaleKey, in display order. `t()` is called lazily, in `panelTabs()`, never at module load. */
@@ -94,7 +95,16 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           />
         )}
         {panelTab === "marca" && <BrandPane slug={props.slug} />}
-        {panelTab === "templates" && <TemplatesPane slug={props.slug} activeTemplateId={doc.template?.id} />}
+        {panelTab === "templates" && (
+          <TemplatesPane
+            mode="select"
+            slug={props.slug}
+            doc={doc}
+            template={props.template}
+            onDocUpdate={props.onDocUpdate}
+            onTemplateChange={props.onTemplateChange}
+          />
+        )}
       </div>
     </aside>
   );
