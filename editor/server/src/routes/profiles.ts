@@ -212,8 +212,15 @@ export function profilesRouter(): Router {
         snapshotDocument(store, req.params.id);
       }
 
-      writeDocument(store, result.document);
-      res.json(result.document);
+      // `status` is a server-side lifecycle fact (the export queue sets
+      // "exported"); the editor only reads it. A client whose copy predates
+      // an export must not write "draft" back, so the on-disk value wins.
+      const document =
+        previousDocForPinDiff?.status !== undefined
+          ? { ...result.document, status: previousDocForPinDiff.status }
+          : result.document;
+      writeDocument(store, document);
+      res.json(document);
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -233,6 +240,7 @@ export function profilesRouter(): Router {
 
 /** Loose shape used only to diff the previous on-disk document against the incoming one — deliberately untyped/partial since it reads whatever was actually persisted, which a full `CarouselDocument` cast would hide errors in. */
 interface RawDocumentShape {
+  status?: CarouselDocument["status"];
   slides?: Array<{
     kind?: string;
     background?: { mode?: string; assetId?: string; pinned?: boolean };
