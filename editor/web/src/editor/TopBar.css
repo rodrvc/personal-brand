@@ -107,12 +107,6 @@
   color: var(--ui-head);
 }
 
-.topbar-tool.on {
-  background: var(--ui-accent);
-  color: #fff;
-  box-shadow: var(--ui-shadow-sm);
-}
-
 .topbar-tool:disabled {
   opacity: 0.35;
   cursor: not-allowed;

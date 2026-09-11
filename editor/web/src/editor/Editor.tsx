@@ -16,7 +16,6 @@ import "./Editor.css";
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
 
-export type Tool = "select" | "text" | "asset";
 export type PanelTab = "sel" | "bucket" | "lam" | "marca" | "templates";
 
 interface EditorProps {
@@ -44,7 +43,6 @@ export function Editor({
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.min(initialActiveSlide, Math.max(0, doc.slides.length - 1)),
   );
-  const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelection] = useState<Selection>(null);
   const [panelTab, setPanelTab] = useState<PanelTab>("sel");
   const [stats, setStats] = useState(initialStats);
@@ -100,8 +98,9 @@ export function Editor({
         slug={slug}
         brand={brand}
         doc={doc}
-        tool={tool}
-        onToolChange={setTool}
+        hasSelection={selection !== null}
+        onClearSelection={() => setSelection(null)}
+        onOpenAssets={() => setPanelTab("bucket")}
         onAddText={handleAddText}
         canUndo={canUndo}
         canRedo={canRedo}
