@@ -29,6 +29,7 @@
 }
 
 .topbar-brand-pill {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -52,15 +53,30 @@
   color: var(--ui-accent-ink);
 }
 
+.topbar-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .topbar-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-weight: 600;
   font-size: 13.5px;
   color: var(--ui-head);
   letter-spacing: -0.01em;
 }
 
+.topbar-title-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .topbar-chip {
-  display: inline-block;
   font-size: 9.5px;
   font-weight: 600;
   color: var(--ui-warn);
@@ -69,11 +85,14 @@
   padding: 1px 7px;
   border-radius: var(--ui-radius-pill);
   margin-left: 7px;
-  vertical-align: 1px;
   letter-spacing: 0.02em;
+  flex: none;
 }
 
 .topbar-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--ui-mono);
   font-size: 10px;
   color: var(--ui-ink-3);
@@ -110,4 +129,9 @@
 .topbar-tool:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* The export button must never absorb overflow; the title column does. */
+.topbar .ui-btn {
+  flex: none;
 }

@@ -60,9 +60,11 @@ export function TopBar({
         <span className="topbar-brand-name">{brand.copy.wordmark}</span>
       </div>
       <div className="topbar-sep" />
-      <div>
+      <div className="topbar-meta">
         <div className="topbar-title">
-          {doc.title || doc.id}
+          <span className="topbar-title-text" title={doc.title || doc.id}>
+            {doc.title || doc.id}
+          </span>
           <span className="topbar-chip">{statusLabel(doc.status)}</span>
         </div>
         <div className="topbar-subtitle">
