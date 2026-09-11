@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { assetFileUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
 import type { AssetEntry, AssetKind, CarouselDocument, OutputVersion, StatsResponse } from "../../api/types";
 import { addLibraryAssetObject, setBackgroundAsset } from "../mutations";
-import { ASSET_KIND_LABEL, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
+import { ASSET_KIND_LABEL_KEY, assetKindLabel, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
+import { t } from "../../i18n";
 
 interface BucketPaneProps {
   slug: string;
@@ -133,8 +134,10 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
         <div className="savings-banner">
           <span className="big">{stats.libraryRatio}%</span>
           <span className="tx">
-            de este carrusel salió de la biblioteca.
-            {stats.history.length > 0 ? ` Hace un tiempo era ${stats.history[0]!.libraryRatio}%.` : " Sin historial previo aún."}
+            {t("bucketPane.savingsSuffix")}
+            {stats.history.length > 0
+              ? t("bucketPane.savingsHistory", { ratio: stats.history[0]!.libraryRatio })
+              : t("bucketPane.savingsNoHistory")}
           </span>
         </div>
       )}
@@ -144,9 +147,9 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
       {Array.from(grouped.entries()).map(([kind, kindEntries]) => (
         <div key={kind} className="props-card">
           <div className="props-card-heading">
-            {ASSET_KIND_LABEL[kind]}
+            {assetKindLabel(kind)}
             <span style={{ marginLeft: "auto", fontWeight: 500, textTransform: "none", letterSpacing: 0, fontSize: 10.5, color: "var(--ui-ink-3)" }}>
-              {kindEntries.length} archivos
+              {t("common.filesCount", { count: kindEntries.length })}
             </span>
           </div>
           <div className="asset-grid">
@@ -171,30 +174,30 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                       {fileName}
                     </span>
                   )}
-                  {entry.origin === "ai" && <span className="origin-tag">IA</span>}
+                  {entry.origin === "ai" && <span className="origin-tag">{t("common.originAi")}</span>}
                   {used.has(entry.id) && <span className="usage-count">↻{entry.usageCount ?? 1}</span>}
                   <button
                     type="button"
                     className="asset-tile-bg-btn"
-                    title="Usar de fondo"
+                    title={t("bucketPane.useAsBackground")}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleUseAsBackground(entry);
                     }}
                   >
-                    Fondo
+                    {t("bucketPane.backgroundButton")}
                   </button>
                 </div>
               );
             })}
           </div>
-          <p className="props-hint">Borde verde = ya está en este carrusel. ↻ = veces reutilizado.</p>
+          <p className="props-hint">{t("bucketPane.usedHint")}</p>
         </div>
       ))}
 
       {candidates.length > 0 && (
         <div className="props-card">
-          <div className="props-card-heading">Candidatos generados</div>
+          <div className="props-card-heading">{t("bucketPane.candidatesHeading")}</div>
           <div className="asset-grid">
             {candidates.map((entry) => (
               <div
@@ -202,11 +205,11 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                 className="asset-tile"
                 style={{ backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }}
               >
-                <span className="origin-tag">IA</span>
+                <span className="origin-tag">{t("common.originAi")}</span>
               </div>
             ))}
           </div>
-          <p className="props-hint">Al fijar una pieza, entra a la biblioteca clasificada.</p>
+          <p className="props-hint">{t("bucketPane.candidatesHint")}</p>
           <div className="props-row">
             <select
               className="ui-input"
@@ -216,13 +219,13 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                 e.target.selectedIndex = 0;
               }}
             >
-              <option value="">Reclasificar candidato…</option>
+              <option value="">{t("bucketPane.reclassifyPlaceholder")}</option>
               {candidates.flatMap((c) =>
-                (Object.keys(ASSET_KIND_LABEL) as AssetKind[])
+                (Object.keys(ASSET_KIND_LABEL_KEY) as AssetKind[])
                   .filter((k) => k !== "unclassified")
                   .map((k) => (
                     <option key={`${c.id}::${k}`} value={`${c.id}::${k}`}>
-                      {c.id.slice(0, 8)} → {ASSET_KIND_LABEL[k]}
+                      {c.id.slice(0, 8)} → {assetKindLabel(k)}
                     </option>
                   )),
               )}
@@ -232,7 +235,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
       )}
 
       <div className="props-card">
-        <div className="props-card-heading">Subir asset</div>
+        <div className="props-card-heading">{t("bucketPane.uploadHeading")}</div>
         <label
           className={`upload-dropzone ${dragOver ? "dragover" : ""}`}
           onDragOver={(e) => {
@@ -246,13 +249,13 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
             void handleUpload(e.dataTransfer.files);
           }}
         >
-          Arrastra un archivo aquí o haz click para subir
+          {t("bucketPane.uploadDropzone")}
           <input type="file" hidden onChange={(e) => void handleUpload(e.target.files)} />
         </label>
       </div>
 
       <div className="props-card">
-        <div className="props-card-heading">outputs/ · versiones exportadas</div>
+        <div className="props-card-heading">{t("bucketPane.outputsHeading")}</div>
         <div className="output-list">
           {(outputs ?? []).map((v) => (
             <div key={v.version} className="output-row">
@@ -261,15 +264,17 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                   {doc.id} · v{v.version}
                 </div>
                 <div className="output-meta">
-                  {v.slideCount ?? "?"} PNG ·{" "}
-                  {v.exportedAt ? new Date(v.exportedAt).toLocaleString() : "fecha no disponible"}
+                  {t("bucketPane.outputMeta", {
+                    count: v.slideCount ?? "?",
+                    date: v.exportedAt ? new Date(v.exportedAt).toLocaleString() : t("bucketPane.dateUnavailable"),
+                  })}
                 </div>
               </span>
             </div>
           ))}
-          {outputs && outputs.length === 0 && <p className="props-hint">Aún no hay exportaciones de este carrusel.</p>}
+          {outputs && outputs.length === 0 && <p className="props-hint">{t("bucketPane.outputsEmpty")}</p>}
         </div>
-        <p className="props-hint">Cada exportación crea una versión nueva. Nada se sobrescribe.</p>
+        <p className="props-hint">{t("bucketPane.outputsNote")}</p>
       </div>
     </>
   );

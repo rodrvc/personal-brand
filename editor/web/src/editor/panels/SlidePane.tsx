@@ -4,6 +4,8 @@ import { getAiPricing, getAssetGeneration, getContrast, regenerate } from "../..
 import type { BrandTokens, CarouselDocument, ContrastMeasurement, Slide, SlideKind } from "../../api/types";
 import { GenerateImageField } from "../GenerateImageField";
 import { setBackgroundColor, setSlideKind } from "../mutations";
+import { t } from "../../i18n";
+import type { LocaleKey } from "../../i18n";
 
 interface SlidePaneProps {
   slug: string;
@@ -17,7 +19,16 @@ interface SlidePaneProps {
   onDocReplace: (next: CarouselDocument) => void;
 }
 
-const KIND_LABEL: Record<SlideKind, string> = { cover: "Portada", step: "Paso", closing: "Cierre" };
+/** Slide kind → its LocaleKey. `t()` is called lazily, in `slideKindLabel()`, never at module load. */
+const KIND_LABEL_KEY: Record<SlideKind, LocaleKey> = {
+  cover: "slidePane.kind.cover",
+  step: "slidePane.kind.step",
+  closing: "slidePane.kind.closing",
+};
+
+function slideKindLabel(kind: SlideKind): string {
+  return t(KIND_LABEL_KEY[kind]);
+}
 
 type BackgroundMode = "color" | "library" | "ai";
 
@@ -85,52 +96,49 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
   return (
     <>
       <div className="props-card">
-        <div className="props-card-heading">Tipo de lámina</div>
+        <div className="props-card-heading">{t("slidePane.kindHeading")}</div>
         <select
           className="ui-input"
           value={slide.kind}
           onChange={(e) => onDocUpdate((prev) => setSlideKind(prev, slide.id, e.target.value as SlideKind))}
         >
-          {(Object.keys(KIND_LABEL) as SlideKind[]).map((kind) => (
+          {(Object.keys(KIND_LABEL_KEY) as SlideKind[]).map((kind) => (
             <option key={kind} value={kind}>
-              {KIND_LABEL[kind]}
+              {slideKindLabel(kind)}
             </option>
           ))}
         </select>
-        <p className="props-hint">El tipo decide qué zonas quedan fijas y cómo se numera.</p>
+        <p className="props-hint">{t("slidePane.kindHint")}</p>
       </div>
 
       <div className="props-card">
         <div className="props-card-heading">
-          Estructura
-          <span className="lock-hint">template</span>
+          {t("slidePane.structureHeading")}
+          <span className="lock-hint">{t("slidePane.structureLockHint")}</span>
         </div>
         <div className="layer-row">
-          <span className="layer-name">Fondo a sangre</span>
+          <span className="layer-name">{t("slidePane.bleedBackground")}</span>
         </div>
         <div className="layer-row">
-          <span className="layer-name">Footer + logo</span>
+          <span className="layer-name">{t("slidePane.footerLogo")}</span>
         </div>
         <div className="layer-row">
-          <span className="layer-name">Márgenes</span>
+          <span className="layer-name">{t("slidePane.margins")}</span>
         </div>
-        <p className="props-note">
-          Estas zonas no se arrastran. Se cambian en el template y el cambio entra en todas las láminas a la vez,
-          así el carrusel no se desalinea lámina a lámina.
-        </p>
+        <p className="props-note">{t("slidePane.structureNote")}</p>
       </div>
 
       <div className="props-card">
-        <div className="props-card-heading">Fondo de esta lámina</div>
+        <div className="props-card-heading">{t("slidePane.backgroundHeading")}</div>
         <div className="seg-control">
           <button className={bgMode === "color" ? "on" : ""} onClick={() => setBgMode("color")}>
-            Color
+            {t("slidePane.backgroundMode.color")}
           </button>
           <button className={bgMode === "library" ? "on" : ""} onClick={() => setBgMode("library")}>
-            Biblioteca
+            {t("slidePane.backgroundMode.library")}
           </button>
           <button className={bgMode === "ai" ? "on" : ""} onClick={() => setBgMode("ai")}>
-            IA
+            {t("slidePane.backgroundMode.ai")}
           </button>
         </div>
         {bgMode === "color" && (
@@ -146,7 +154,7 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
             ))}
           </div>
         )}
-        {bgMode === "library" && <p className="props-hint">Elige una pieza desde la pestaña Bucket para usarla como fondo.</p>}
+        {bgMode === "library" && <p className="props-hint">{t("slidePane.libraryHint")}</p>}
         {bgMode === "ai" && !slide.background.pinned && (
           <GenerateImageField
             mode={slide.background.mode === "asset" ? "regenerate" : "generate"}
@@ -162,30 +170,27 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
           />
         )}
         {bgMode === "ai" && slide.background.pinned && (
-          <p className="props-hint">Fijado: no se puede regenerar hasta que lo liberes.</p>
+          <p className="props-hint">{t("common.pinnedNoRegenerate")}</p>
         )}
-        <p className="props-note">
-          La IA hace solo el fondo. No dibuja letras sobre la imagen: eso lo pone el template encima, porque un
-          modelo de imagen las deforma.
-        </p>
+        <p className="props-note">{t("slidePane.aiNote")}</p>
       </div>
 
       <div className="props-card">
-        <div className="props-card-heading">Contraste</div>
+        <div className="props-card-heading">{t("slidePane.contrastHeading")}</div>
         {contrastError && <p className="props-hint">{contrastError}</p>}
-        {!contrastError && !measurements && <p className="props-hint">Midiendo…</p>}
+        {!contrastError && !measurements && <p className="props-hint">{t("slidePane.contrastMeasuring")}</p>}
         {measurements?.map((m) => {
           const object = slide.objects.find((o) => o.id === m.objectId);
           return (
             <div key={m.objectId} className="contrast-row" style={{ color: m.passesAA ? "var(--ui-ok)" : "var(--ui-danger)" }}>
               <span className="layer-name">{object?.slot ?? m.objectId}</span>
               <span className="contrast-value">
-                {m.ratio.toFixed(1)}:1 {m.passesAA ? "AA ✓" : "AA ✗"}
+                {m.ratio.toFixed(1)}:1 {m.passesAA ? t("slidePane.contrastPass") : t("slidePane.contrastFail")}
               </span>
             </div>
           );
         })}
-        <p className="props-hint">Medido contra el fondo real de cada lámina, no estimado.</p>
+        <p className="props-hint">{t("slidePane.contrastHint")}</p>
       </div>
     </>
   );
