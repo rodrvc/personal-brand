@@ -98,7 +98,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
           res.status(400).json({ error: `"prompt" is required for a plan preview` });
           return;
         }
-        const template = loadLayoutTemplate(store.roots.profileDir, templateId);
+        const template = loadLayoutTemplate(store.roots.profileDir, templateId, loadBrand(store.roots.profileDir));
         const plan = buildCompositionPlan(store, body.prompt, template, body.slideCount, body.assetIds);
         pendingPlans.set(`${req.params.slug}/${carouselId}`, plan);
 
@@ -117,8 +117,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      const template = loadLayoutTemplate(store.roots.profileDir, templateId);
       const brand = loadBrand(store.roots.profileDir);
+      const template = loadLayoutTemplate(store.roots.profileDir, templateId, brand);
       const document = buildEmptyDocument(brand, template, templateId, carouselId, body.title);
       writeDocument(store, document);
 
@@ -139,7 +139,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       }
       const templateId = (req.body as { templateId?: string })?.templateId ?? "explicativo";
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, templateId);
+      const template = loadLayoutTemplate(store.roots.profileDir, templateId, brand);
       const generator = getGenerator(req.params.slug);
 
       let document = await applyCompositionPlan(store, brand, template, templateId, plan, req.params.id, generator);

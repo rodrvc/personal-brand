@@ -115,7 +115,7 @@ export function profilesRouter(): Router {
         typeof paramsRaw === "string" && paramsRaw.length > 0
           ? (JSON.parse(paramsRaw) as Record<string, unknown>)
           : undefined;
-      const template = loadLayoutTemplate(store.roots.profileDir, req.params.id, params);
+      const template = loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params);
       res.json(template);
     } catch (error) {
       if (error instanceof LayoutTemplateError) {

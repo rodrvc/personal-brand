@@ -12,7 +12,7 @@ const ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = join(ENGINE_DIR, "..", "..", "profiles", "example");
 
 const brand = loadBrand(PROFILE_DIR);
-const template = loadLayoutTemplate(PROFILE_DIR, "explicativo");
+const template = loadLayoutTemplate(PROFILE_DIR, "explicativo", brand);
 
 const KNOWN_ASSET = "asset-hero-1";
 function assetExists(assetId: string): boolean {
