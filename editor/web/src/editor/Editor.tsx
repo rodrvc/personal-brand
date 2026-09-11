@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
-import { regenerate } from "../api/client";
+import { regenerate, getCarousel } from "../api/client";
 import { addTextObject, newEditorId } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
@@ -180,7 +180,16 @@ export function Editor({
         />
       )}
       {showExportDialog && (
-        <ExportDialog slug={slug} carouselId={doc.id} onClose={() => setShowExportDialog(false)} />
+        <ExportDialog
+          slug={slug}
+          carouselId={doc.id}
+          onClose={() => setShowExportDialog(false)}
+          onExported={() => {
+            // The export wrote status "exported" on disk; take the server's
+            // document so the top bar updates and the next save keeps it.
+            void getCarousel(slug, doc.id).then(applyRemote).catch(() => {});
+          }}
+        />
       )}
     </div>
   );

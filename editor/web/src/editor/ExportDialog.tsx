@@ -10,11 +10,13 @@ interface ExportDialogProps {
   slug: string;
   carouselId: string;
   onClose: () => void;
+  /** Called once the export finishes: the server has rewritten the document (status "exported"), so the editor must replace its copy or the next save reverts it. */
+  onExported: () => void;
 }
 
 const POLL_MS = 800;
 
-export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
+export function ExportDialog({ slug, carouselId, onClose, onExported }: ExportDialogProps) {
   const [job, setJob] = useState<ExportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Set only when the server refused with 409 (pieces still pending) —
@@ -57,6 +59,7 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
           pollFailures.current = 0;
           setError(null);
           setJob(next);
+          if (next.status === "done") onExported();
         })
         .catch((err: unknown) => {
           // Never show the raw server/network string here — a genuine
