@@ -2,6 +2,8 @@ import { Link } from "react-router-dom";
 
 import type { BrandTokens, CarouselDocument } from "../api/types";
 import type { Tool } from "./Editor";
+import { t } from "../i18n";
+import type { LocaleKey } from "../i18n";
 import "./TopBar.css";
 
 interface TopBarProps {
@@ -20,11 +22,16 @@ interface TopBarProps {
   onExport: () => void;
 }
 
-const STATUS_LABEL: Record<CarouselDocument["status"], string> = {
-  draft: "borrador",
-  exported: "exportado",
-  published: "publicado",
+/** Document status → its LocaleKey. `t()` is called lazily, in `statusLabel()`, never at module load. */
+const STATUS_LABEL_KEY: Record<CarouselDocument["status"], LocaleKey> = {
+  draft: "topbar.status.draft",
+  exported: "topbar.status.exported",
+  published: "topbar.status.published",
 };
+
+function statusLabel(status: CarouselDocument["status"]): string {
+  return t(STATUS_LABEL_KEY[status]);
+}
 
 export function TopBar({
   slug,
@@ -44,7 +51,7 @@ export function TopBar({
   return (
     <header className="topbar">
       <Link to={`/${slug}/carousels`} className="topbar-back">
-        ← Carruseles
+        {t("topbar.back")}
       </Link>
       <div className="topbar-brand-pill">
         <span className="topbar-brand-dot" />
@@ -54,44 +61,49 @@ export function TopBar({
       <div>
         <div className="topbar-title">
           {doc.title || doc.id}
-          <span className="topbar-chip">{STATUS_LABEL[doc.status]}</span>
+          <span className="topbar-chip">{statusLabel(doc.status)}</span>
         </div>
         <div className="topbar-subtitle">
-          {doc.slides.length} láminas · {doc.canvas.w}×{doc.canvas.h}
+          {t("topbar.subtitle", { count: doc.slides.length, w: doc.canvas.w, h: doc.canvas.h })}
         </div>
       </div>
       <div className="topbar-sep" />
       <button
         className={`topbar-tool ${tool === "select" ? "on" : ""}`}
-        title="Seleccionar"
+        title={t("topbar.tool.select")}
         onClick={() => onToolChange("select")}
       >
         ▲
       </button>
-      <button className="topbar-tool" title="Añadir texto" onClick={onAddText}>
+      <button className="topbar-tool" title={t("topbar.tool.addText")} onClick={onAddText}>
         T
       </button>
       <button
         className={`topbar-tool ${tool === "asset" ? "on" : ""}`}
-        title="Asset"
+        title={t("topbar.tool.asset")}
         onClick={() => onToolChange("asset")}
       >
         ▧
       </button>
       <div className="topbar-sep" />
-      <button className="topbar-tool" title="Deshacer" onClick={onUndo} disabled={!canUndo}>
+      <button className="topbar-tool" title={t("topbar.tool.undo")} onClick={onUndo} disabled={!canUndo}>
         ↺
       </button>
-      <button className="topbar-tool" title="Rehacer" onClick={onRedo} disabled={!canRedo}>
+      <button className="topbar-tool" title={t("topbar.tool.redo")} onClick={onRedo} disabled={!canRedo}>
         ↻
       </button>
       <div className="topbar-spacer" />
-      <button className="topbar-tool" title="Tema claro / oscuro" aria-label="Cambiar tema" onClick={onToggleTheme}>
+      <button
+        className="topbar-tool"
+        title={t("topbar.tool.toggleTheme")}
+        aria-label={t("topbar.tool.toggleThemeAriaLabel")}
+        onClick={onToggleTheme}
+      >
         {theme === "dark" ? "🌙" : "☀️"}
       </button>
       <div className="topbar-sep" />
       <button className="ui-btn ui-btn-primary" onClick={onExport}>
-        Exportar {doc.slides.length} PNG
+        {t("topbar.export", { count: doc.slides.length })}
       </button>
     </header>
   );

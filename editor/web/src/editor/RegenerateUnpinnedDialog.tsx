@@ -3,6 +3,8 @@ import { useState } from "react";
 import type { Slide } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
+import { t } from "../i18n";
+import type { LocaleKey } from "../i18n";
 
 interface RegenerateUnpinnedDialogProps {
   slide: Slide;
@@ -31,23 +33,29 @@ export function RegenerateUnpinnedDialog({ slide, onCancel, onConfirm }: Regener
     }
   }
 
+  const summaryKey: LocaleKey =
+    toRegenerate === 1 && pinned === 1
+      ? "regenerateUnpinned.summary.oneRegenerateOnePinned"
+      : toRegenerate === 1
+        ? "regenerateUnpinned.summary.oneRegenerateManyPinned"
+        : pinned === 1
+          ? "regenerateUnpinned.summary.manyRegenerateOnePinned"
+          : "regenerateUnpinned.summary.manyRegenerateManyPinned";
+
   return (
     <Modal
-      title="Regenerar lo no fijado"
+      title={t("regenerateUnpinned.dialogTitle")}
       onClose={onCancel}
       actions={
         <>
-          <Button onClick={onCancel}>Cancelar</Button>
+          <Button onClick={onCancel}>{t("regenerateUnpinned.cancel")}</Button>
           <Button variant="primary" onClick={handleConfirm} disabled={busy}>
-            {busy ? "Regenerando…" : "Regenerar"}
+            {busy ? t("regenerateUnpinned.regenerating") : t("regenerateUnpinned.confirm")}
           </Button>
         </>
       }
     >
-      <p>
-        Se regeneran {toRegenerate} pieza{toRegenerate === 1 ? "" : "s"} de esta lámina, {pinned} fijada
-        {pinned === 1 ? "" : "s"} se conserva{pinned === 1 ? "" : "n"}.
-      </p>
+      <p>{t(summaryKey, { count: toRegenerate, pinned })}</p>
     </Modal>
   );
 }

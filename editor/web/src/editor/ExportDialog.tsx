@@ -4,6 +4,7 @@ import { ApiError, exportCarousel, getExportJob } from "../api/client";
 import type { ExportJob } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
+import { t } from "../i18n";
 
 interface ExportDialogProps {
   slug: string;
@@ -59,40 +60,37 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
 
   return (
     <Modal
-      title="Exportar carrusel"
+      title={t("exportDialog.title")}
       onClose={onClose}
       actions={
         pendingWarning ? (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancelar
+              {t("exportDialog.cancel")}
             </Button>
             <Button variant="primary" onClick={() => startExport(true)}>
-              Exportar igual
+              {t("exportDialog.exportAnyway")}
             </Button>
           </>
         ) : (
           <Button variant="primary" onClick={onClose}>
-            Cerrar
+            {t("exportDialog.close")}
           </Button>
         )
       }
     >
-      {pendingWarning && (
-        <p style={{ color: "var(--ui-warn)" }}>
-          Todavía hay piezas generándose en segundo plano. Si exportás ahora, el PNG puede salir con texto vacío o
-          sin imagen en esas piezas.
-        </p>
-      )}
+      {pendingWarning && <p style={{ color: "var(--ui-warn)" }}>{t("exportDialog.pendingWarning")}</p>}
       {!pendingWarning && error && <p style={{ color: "var(--ui-danger)" }}>{error}</p>}
-      {!pendingWarning && !error && !job && <p>Encolando exportación…</p>}
+      {!pendingWarning && !error && !job && <p>{t("exportDialog.queuing")}</p>}
       {!pendingWarning && !error && job && job.status !== "done" && job.status !== "error" && (
-        <p>Exportando ({job.status})…</p>
+        <p>{t("exportDialog.exporting", { status: job.status })}</p>
       )}
       {!pendingWarning && !error && job?.status === "done" && (
         <p>
-          Exportación lista{job.version !== undefined ? ` · versión v${job.version}` : ""}. Los PNG quedan en{" "}
-          <code>outputs/</code> dentro del perfil.
+          {job.version !== undefined
+            ? t("exportDialog.donePrefixVersioned", { version: job.version })
+            : t("exportDialog.donePrefix")}{" "}
+          <code>outputs/</code> {t("exportDialog.doneSuffix")}
         </p>
       )}
       {!pendingWarning && !error && job?.status === "error" && (

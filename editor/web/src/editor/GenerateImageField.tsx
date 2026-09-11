@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { previewRegeneratePrompt } from "../api/client";
 import type { RegenerateTarget } from "../api/client";
+import { t } from "../i18n";
 import "./GenerateImageField.css";
 
 interface GenerateImageFieldProps {
@@ -88,7 +89,7 @@ export function GenerateImageField({
   if (!expanded) {
     return (
       <button className="generate-image-toggle" disabled={disabled} onClick={() => setExpanded(true)}>
-        {mode === "generate" ? "Generar imagen…" : "Regenerar…"}
+        {mode === "generate" ? t("generateImage.toggleGenerate") : t("generateImage.toggleRegenerate")}
       </button>
     );
   }
@@ -110,26 +111,26 @@ export function GenerateImageField({
         rows={2}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Déjalo vacío y la IA decide según la guía de la marca"
+        placeholder={t("generateImage.promptPlaceholder")}
         disabled={busy}
       />
       <div className="generate-image-actions">
         {estimatedCostCents !== null && <span className="generate-image-cost">{formatCents(estimatedCostCents)}</span>}
         {previewTarget && (
           <button className="generate-image-preview-toggle" onClick={() => void handleToggleFinalPrompt()} disabled={busy}>
-            Ver prompt final
+            {t("generateImage.viewFinalPrompt")}
           </button>
         )}
         <button className="ui-btn" onClick={() => setExpanded(false)} disabled={busy}>
-          Cancelar
+          {t("generateImage.cancel")}
         </button>
         <button className="ui-btn ui-btn-primary" onClick={() => void handleSubmit()} disabled={busy || !prompt.trim()}>
-          {busy ? "Generando…" : "Generar"}
+          {busy ? t("generateImage.generating") : t("generateImage.generate")}
         </button>
       </div>
       {showFinalPrompt && (
         <div className="generate-image-final-prompt">
-          {loadingFinalPrompt && <p className="props-hint">Componiendo…</p>}
+          {loadingFinalPrompt && <p className="props-hint">{t("generateImage.composingPrompt")}</p>}
           {finalPromptError && <p className="generate-image-error">{finalPromptError}</p>}
           {finalPrompt && <pre>{finalPrompt}</pre>}
         </div>

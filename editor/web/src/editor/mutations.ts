@@ -9,6 +9,7 @@ import type {
   SlideObject,
   TextObject,
 } from "../api/types";
+import { t } from "../i18n";
 
 function mapSlide(doc: CarouselDocument, slideId: string, fn: (slide: Slide) => Slide): CarouselDocument {
   return {
@@ -167,7 +168,7 @@ export function addTextObject(
     };
 
     if (freeTextSlot) {
-      const object: TextObject = { ...base, text: "Texto", slot: freeTextSlot.name };
+      const object: TextObject = { ...base, text: t("common.newTextPlaceholder"), slot: freeTextSlot.name };
       return { ...slide, objects: [...slide.objects, object] };
     }
 

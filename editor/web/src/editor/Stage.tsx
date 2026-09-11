@@ -5,6 +5,7 @@ import type { BrandTokens, CarouselDocument, LayoutTemplate } from "../api/types
 import type { CarouselDocument as Doc } from "../api/types";
 import type { Selection } from "./geometry";
 import { SelectionOverlay } from "./SelectionOverlay";
+import { t } from "../i18n";
 import "./Stage.css";
 
 const CANVAS_DISPLAY_WIDTH = 330;
@@ -99,7 +100,7 @@ export function Stage({
           <div className="stage-sheet-container">
             <div className="stage-sheet active">
               <div className="stage-sheet-label">
-                <b>Lámina {activeIndex + 1}</b> · {activeSlide.kind}
+                <b>{t("stage.slideLabel", { number: activeIndex + 1 })}</b> · {activeSlide.kind}
               </div>
               <div className="stage-art" style={{ width: CANVAS_DISPLAY_WIDTH, height: displayHeight }}>
                 <iframe
@@ -138,13 +139,13 @@ export function Stage({
             doc={doc}
             slideId={nextSlide.id}
             variant="next"
-            label={`Lámina ${activeIndex + 2}`}
+            label={t("stage.slideLabel", { number: activeIndex + 2 })}
             renderVersion={renderVersion}
           />
         )}
       </div>
 
-      <nav className="stage-strip" aria-label="Láminas">
+      <nav className="stage-strip" aria-label={t("stage.stripAriaLabel")}>
         {doc.slides.map((slide, index) => (
           <button
             key={slide.id}
@@ -152,12 +153,18 @@ export function Stage({
             onClick={() => onActiveIndexChange(index)}
           >
             <div className="stage-thumb-mini">
-              <span className="stage-thumb-kind">{slide.kind === "cover" ? "POR" : slide.kind === "closing" ? "FIN" : index}</span>
+              <span className="stage-thumb-kind">
+                {slide.kind === "cover"
+                  ? t("stage.thumbKind.cover")
+                  : slide.kind === "closing"
+                    ? t("stage.thumbKind.closing")
+                    : index}
+              </span>
             </div>
             <div className="stage-thumb-n">{String(index + 1).padStart(2, "0")}</div>
           </button>
         ))}
-        <button className="stage-add-thumb" title="Añadir lámina" onClick={() => onAddSlide(colorKeyForNewSlide)}>
+        <button className="stage-add-thumb" title={t("stage.addSlide")} onClick={() => onAddSlide(colorKeyForNewSlide)}>
           +
         </button>
       </nav>
