@@ -14,6 +14,7 @@ export const ASSET_KIND_LABEL: Record<AssetKind, string> = {
   photo: "Fotos",
   logo: "Logos",
   decoration: "Decoraciones",
+  font: "Fuentes",
   unclassified: "Sin clasificar",
 };
 
