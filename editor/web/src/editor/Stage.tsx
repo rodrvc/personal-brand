@@ -5,6 +5,7 @@ import type { BrandTokens, CarouselDocument, LayoutTemplate } from "../api/types
 import type { CarouselDocument as Doc } from "../api/types";
 import type { Selection } from "./geometry";
 import { SelectionOverlay } from "./SelectionOverlay";
+import { t } from "../i18n";
 import "./Stage.css";
 
 const THUMB_WIDTH = 84;
@@ -53,7 +54,7 @@ function Thumb({
     <button
       type="button"
       className={`stage-thumb ${active ? "on" : ""}`}
-      aria-label={`Lámina ${index + 1}`}
+      aria-label={t("stage.slideLabel", { number: index + 1 })}
       aria-current={active ? "true" : undefined}
       onClick={onSelect}
     >
@@ -137,7 +138,7 @@ export function Stage({
           <div className="stage-sheet-container">
             <div className="stage-sheet active">
               <div className="stage-sheet-label">
-                <b>Lámina {activeIndex + 1}</b> · {activeSlide.kind}
+                <b>{t("stage.slideLabel", { number: activeIndex + 1 })}</b> · {activeSlide.kind}
               </div>
               <div className="stage-art" style={{ width: displayWidth, height: displayHeight }}>
                 <iframe
@@ -172,7 +173,7 @@ export function Stage({
         )}
       </div>
 
-      <nav className="stage-strip" aria-label="Láminas" style={{ "--thumb-w": `${THUMB_WIDTH}px` } as React.CSSProperties}>
+      <nav className="stage-strip" aria-label={t("stage.stripAriaLabel")} style={{ "--thumb-w": `${THUMB_WIDTH}px` } as React.CSSProperties}>
         {doc.slides.map((slide, index) => (
           <Thumb
             key={slide.id}
@@ -189,8 +190,8 @@ export function Stage({
         <button
           type="button"
           className="stage-add-thumb"
-          title="Añadir lámina"
-          aria-label="Añadir lámina"
+          title={t("stage.addSlide")}
+          aria-label={t("stage.addSlide")}
           onClick={() => onAddSlide(colorKeyForNewSlide)}
         >
           +
