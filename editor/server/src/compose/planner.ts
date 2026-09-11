@@ -423,7 +423,7 @@ export async function applyCompositionPlan(
     updatedAt: now,
     canvas: { w: 1080, h: 1350 },
     prompt: { text: plan.promptText, createdAt: now, runs: [] },
-    template: { id: templateId },
+    ...(templateId === undefined ? {} : { template: { id: templateId } }),
     slides,
   };
 }
@@ -437,10 +437,18 @@ export async function applyCompositionPlan(
  * no AI call, no `pending` placeholder anywhere. Composition is something
  * the user asks for afterward, per piece, via `POST .../regenerate`.
  */
+/**
+ * `templateId` is `undefined` for a document with NO template reference:
+ * the `template` key is then omitted entirely rather than written as a
+ * sentinel id, which is what "no template" means on disk (carousel-document
+ * spec's "Template reference on the document"). `template` is still the
+ * resolved `LayoutTemplate` in that case — `freeLayoutTemplate()` — since
+ * the slide structure is planned against it either way.
+ */
 export function buildEmptyDocument(
   brand: BrandTokens,
   template: LayoutTemplate,
-  templateId: string,
+  templateId: string | undefined,
   carouselId: string,
   title?: string,
 ): CarouselDocument {
@@ -462,7 +470,7 @@ export function buildEmptyDocument(
     updatedAt: now,
     canvas: { w: 1080, h: 1350 },
     prompt: { text: "", createdAt: now, runs: [] },
-    template: { id: templateId },
+    ...(templateId === undefined ? {} : { template: { id: templateId } }),
     slides,
   };
 }

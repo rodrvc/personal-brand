@@ -63,12 +63,13 @@ directory and its resolved `outputs.base_dir`.
 
 - `GET /api/profiles` — list profiles found on disk
 - `GET /api/profiles/:slug/brand` — resolved `brand.json`
-- `GET /api/profiles/:slug/template/:id` — resolved layout template
+- `GET /api/profiles/:slug/templates` — templates available to the brand (never includes the `__free__` sentinel)
+- `GET /api/profiles/:slug/template/:id` — resolved layout template; the id `__free__` answers the built-in "no template" layout without touching disk
 - `GET /api/profiles/:slug/carousels` / `:id` / `PUT :id` — carousel document CRUD
 - `GET /api/profiles/:slug/carousels/:id/versions` — export history
 - `GET /api/profiles/:slug/assets` / `POST` (multipart upload) / `PATCH :assetId` / `GET files/*splat` — asset library
 - `GET /api/profiles/:slug/carousels/:id/slides/:n/{html,png,contrast}` — preview HTML, exact PNG, measured contrast
-- `POST /api/profiles/:slug/carousels` / `.../plan/apply` / `.../regenerate` / `GET .../stats` — AI composition and regeneration
+- `POST /api/profiles/:slug/carousels` (`templateId: null` creates a document with no template reference) / `.../plan/apply` / `.../regenerate` / `GET .../stats` — AI composition and regeneration
 - `POST /api/profiles/:slug/carousels/:id/export` / `GET .../export/:jobId` / `GET .../outputs` — versioned export
 
 ## See also
