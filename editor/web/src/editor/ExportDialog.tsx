@@ -10,17 +10,20 @@ interface ExportDialogProps {
   slug: string;
   carouselId: string;
   onClose: () => void;
+  /** Called once the export finishes: the server has rewritten the document (status "exported"), so the editor must replace its copy or the next save reverts it. */
+  onExported: () => void;
 }
 
 const POLL_MS = 800;
 
-export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
+export function ExportDialog({ slug, carouselId, onClose, onExported }: ExportDialogProps) {
   const [job, setJob] = useState<ExportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Set only when the server refused with 409 (pieces still pending) —
   // shows the "Exportar igual" override instead of the plain error text.
   const [pendingWarning, setPendingWarning] = useState(false);
   const started = useRef(false);
+  const notified = useRef(false);
   // Consecutive poll failures (network hiccups etc.), reset on any success.
   // Distinct from a 404, which means the job itself is gone and stops
   // polling right away.
@@ -57,6 +60,12 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
           pollFailures.current = 0;
           setError(null);
           setJob(next);
+          // Latch: the interval can tick once more before the state commit
+          // stops it, and the editor's refresh must run exactly once.
+          if (next.status === "done" && !notified.current) {
+            notified.current = true;
+            onExported();
+          }
         })
         .catch((err: unknown) => {
           // Never show the raw server/network string here — a genuine
@@ -75,7 +84,7 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
         });
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [job, slug, carouselId]);
+  }, [job, slug, carouselId, onExported]);
 
   return (
     <Modal

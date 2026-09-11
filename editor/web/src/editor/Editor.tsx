@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
-import { regenerate } from "../api/client";
+import { regenerate, getCarousel } from "../api/client";
 import { addTextObject, newEditorId } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
@@ -88,6 +88,17 @@ export function Editor({
       setRegenUnpinnedError(err instanceof Error ? err.message : String(err));
     }
   }, [slug, doc.id, activeSlide, applyRemote]);
+
+  // The export queue rewrites the document on disk (status "exported").
+  // Replace the editor's copy with the server's so the top bar updates and
+  // the next save does not write the old status back. Safe only because
+  // the export dialog is modal: applyRemote resets the undo stack, and no
+  // edit can be in progress behind the backdrop.
+  const refreshFromServer = useCallback(() => {
+    getCarousel(slug, doc.id)
+      .then(applyRemote)
+      .catch((error: unknown) => console.warn("Could not refresh the carousel after export", error));
+  }, [slug, doc.id, applyRemote]);
 
   if (!activeSlide) {
     return <div className="editor-empty">{t("editor.empty")}</div>;
@@ -180,7 +191,17 @@ export function Editor({
         />
       )}
       {showExportDialog && (
-        <ExportDialog slug={slug} carouselId={doc.id} onClose={() => setShowExportDialog(false)} />
+        <ExportDialog
+          slug={slug}
+          carouselId={doc.id}
+          onClose={() => {
+            setShowExportDialog(false);
+            // Refresh on close too: a failed poll or an early Escape must not
+            // leave the editor holding a document older than the export.
+            refreshFromServer();
+          }}
+          onExported={refreshFromServer}
+        />
       )}
     </div>
   );
