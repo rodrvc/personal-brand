@@ -145,6 +145,9 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       undoStack.current.push(prev);
       if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift();
       redoStack.current = [];
+      // Order matters: `schedulePersist` assigns `docRef.current = next`
+      // synchronously, which is what lets a second `update` in the same
+      // event handler read the fresh document instead of the rendered one.
       schedulePersist(next);
       setDocState(next);
     },
@@ -178,21 +181,18 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
   const undo = useCallback(() => {
     const previous = undoStack.current.pop();
     if (!previous) return;
-    setDocState((current) => {
-      redoStack.current.push(current);
-      schedulePersist(previous);
-      return previous;
-    });
+    // Same rule as `update`: no side effects inside the updater.
+    redoStack.current.push(docRef.current);
+    schedulePersist(previous);
+    setDocState(previous);
   }, [schedulePersist]);
 
   const redo = useCallback(() => {
     const next = redoStack.current.pop();
     if (!next) return;
-    setDocState((current) => {
-      undoStack.current.push(current);
-      schedulePersist(next);
-      return next;
-    });
+    undoStack.current.push(docRef.current);
+    schedulePersist(next);
+    setDocState(next);
   }, [schedulePersist]);
 
   const canUndo = undoStack.current.length > 0;
@@ -232,7 +232,10 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
     alive.current = true;
     return () => {
       alive.current = false;
-      if (persistTimer.current) clearTimeout(persistTimer.current);
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+        persistTimer.current = null;
+      }
       if (dirtyRef.current) putCarousel(slug, docRef.current, { keepalive: true }).catch(() => {});
     };
   }, [slug]);
