@@ -4,6 +4,7 @@ import { createCarousel } from "../api/client";
 import type { CreateCarouselResponse } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
+import { t } from "../i18n";
 import "./NewCarouselDialog.css";
 
 interface NewCarouselDialogProps {
@@ -53,20 +54,20 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
 
   return (
     <Modal
-      title="Nuevo carrusel"
+      title={t("newCarousel.dialogTitle")}
       onClose={onClose}
       actions={
         <>
-          <Button onClick={onClose}>Cancelar</Button>
+          <Button onClick={onClose}>{t("newCarousel.cancel")}</Button>
           <Button variant="primary" onClick={handleSubmit} disabled={busy || !trimmedTitle}>
-            {busy ? "Creando…" : "Crear"}
+            {busy ? t("newCarousel.creating") : t("newCarousel.create")}
           </Button>
         </>
       }
     >
       <div className="new-carousel-form">
         <label className="new-carousel-label">
-          Título
+          {t("newCarousel.titleLabel")}
           <input
             className="ui-input"
             value={title}
@@ -78,22 +79,20 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleSubmit();
             }}
-            placeholder="ej: Cómo armar tu primer carrusel"
+            placeholder={t("newCarousel.titlePlaceholder")}
             autoFocus
           />
-          {titleTouched && !trimmedTitle && <span className="new-carousel-inline-hint">El título es obligatorio.</span>}
+          {titleTouched && !trimmedTitle && <span className="new-carousel-inline-hint">{t("newCarousel.titleRequired")}</span>}
         </label>
         <label className="new-carousel-label">
-          Marca
+          {t("newCarousel.brandLabel")}
           <input className="ui-input" value={slug} disabled />
         </label>
         <label className="new-carousel-label">
-          Template (opcional)
+          {t("newCarousel.templateLabel")}
           <input className="ui-input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} />
         </label>
-        <p className="new-carousel-hint">
-          El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.
-        </p>
+        <p className="new-carousel-hint">{t("newCarousel.hint")}</p>
         {error && <p className="new-carousel-error">{error}</p>}
       </div>
     </Modal>

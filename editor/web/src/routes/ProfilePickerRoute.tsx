@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { listProfiles } from "../api/client";
 import type { ProfileListingEntry } from "../api/types";
+import { t } from "../i18n";
 import "./ProfilePickerRoute.css";
 
 export function ProfilePickerRoute() {
@@ -17,11 +18,11 @@ export function ProfilePickerRoute() {
 
   return (
     <div className="picker">
-      <h1 className="picker-title">Perfiles</h1>
+      <h1 className="picker-title">{t("profilePicker.title")}</h1>
       {error && <p className="picker-error">{error}</p>}
-      {!profiles && !error && <p className="picker-hint">Cargando perfiles…</p>}
+      {!profiles && !error && <p className="picker-hint">{t("profilePicker.loading")}</p>}
       {profiles && profiles.length === 0 && (
-        <p className="picker-hint">No se encontraron perfiles en la raíz configurada.</p>
+        <p className="picker-hint">{t("profilePicker.empty")}</p>
       )}
       <div className="picker-list">
         {profiles?.map((profile) =>
@@ -33,10 +34,10 @@ export function ProfilePickerRoute() {
             <span
               key={profile.slug}
               className="picker-card picker-card-disabled"
-              title="Este perfil no tiene brand.json configurado"
+              title={t("profilePicker.noBrandTitle")}
             >
               {profile.slug}
-              <span className="picker-card-hint">Sin brand.json configurado</span>
+              <span className="picker-card-hint">{t("profilePicker.noBrandHint")}</span>
             </span>
           ),
         )}

@@ -42,6 +42,7 @@ export const es = {
   "newCarousel.dialogTitle": "Nuevo carrusel",
   "newCarousel.cancel": "Cancelar",
   "newCarousel.creating": "Creando…",
+  "newCarousel.titleRequired": "El título es obligatorio.",
   "newCarousel.create": "Crear",
   "newCarousel.titleLabel": "Título",
   "newCarousel.titlePlaceholder": "ej: Cómo armar tu primer carrusel",
@@ -51,6 +52,7 @@ export const es = {
     "El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.",
 
   // Editor route (routes/EditorRoute.tsx)
+  "editorRoute.noTemplateUnsupported": "Este carrusel no tiene template; el editor todavía no lo soporta",
   "editorRoute.loading": "Cargando carrusel…",
 
   // Editor shell (editor/Editor.tsx)
@@ -120,6 +122,8 @@ export const es = {
     "Se regeneran {count} piezas de esta lámina, {pinned} fijadas se conservan.",
 
   // Export dialog (editor/ExportDialog.tsx)
+  "exportDialog.pollNotFound": "No se encontró la exportación. Cierra y exporta de nuevo.",
+  "exportDialog.pollFailed": "No se pudo consultar el estado de la exportación. Intenta cerrar y exportar de nuevo.",
   "exportDialog.title": "Exportar carrusel",
   "exportDialog.cancel": "Cancelar",
   "exportDialog.exportAnyway": "Exportar igual",

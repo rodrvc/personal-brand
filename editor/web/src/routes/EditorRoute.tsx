@@ -5,6 +5,7 @@ import { getBrand, getCarousel, getStats, getTemplate } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { Editor } from "../editor/Editor";
+import { t } from "../i18n";
 import "./EditorRoute.css";
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
@@ -67,7 +68,7 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
         // that free-composition render path is not built yet (C2b/C2c).
         // Reuse the existing error path rather than adding new UI for it.
         if (!docRes.template) {
-          setError("Este carrusel no tiene template; el editor todavía no lo soporta");
+          setError(t("editorRoute.noTemplateUnsupported"));
           return;
         }
         const [templateRes, statsRes] = await Promise.all([
@@ -90,7 +91,7 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
 
   if (!slug || !id) return null;
   if (error) return <div className="editor-route-error">{error}</div>;
-  if (!doc || !brand || !template) return <div className="editor-route-loading">Cargando carrusel…</div>;
+  if (!doc || !brand || !template) return <div className="editor-route-loading">{t("editorRoute.loading")}</div>;
 
   return (
     <EditorLoaded

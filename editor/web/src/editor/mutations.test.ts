@@ -300,13 +300,13 @@ function docWithObject(object: CarouselDocument["slides"][number]["objects"][num
 {
   const doc = docWithObject({
     id: "obj-1", pinned: false, locked: false, source: "manual", kind: "text",
-    text: "El texto que escribió el dueño", slot: "headline",
+    text: "The text the owner wrote", slot: "headline",
     geometry: { x: 10, y: 20, w: 300, h: 60, rotation: 0 },
     fontSize: 48, colorKey: "onSurface", fontKey: "body", lineHeight: 1.4, align: "center",
   });
 
   const object = resetObjectToSlot(doc, "slide-cover", "obj-1").slides[0]!.objects[0]!;
-  assert.ok(object.kind === "text" && object.text === "El texto que escribió el dueño", "keeps the text");
+  assert.ok(object.kind === "text" && object.text === "The text the owner wrote", "keeps the text");
   assert.equal(object.geometry, undefined, "loses geometry");
   for (const field of ["fontSize", "fontKey", "lineHeight", "align"]) {
     assert.ok(!(field in object), `${field} dropped`);
