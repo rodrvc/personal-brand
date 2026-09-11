@@ -97,7 +97,18 @@ an id lives at `system/ig-carousel/layouts/<id>.json` (generic — no brand
 literals) and a profile may override any part at
 `profiles/<slug>/templates/<id>.json` (deep partial merge: plain objects
 merge key by key, arrays replace wholesale). Load the resolved, validated
-result with `loadLayoutTemplate(profileDir, id, params?)`.
+result with `loadLayoutTemplate(profileDir, id, brand, params?)`.
+
+`brand` is required, not optional, and comes before `params`: once the
+template's own shape validates, `loadLayoutTemplate` cross-checks it against
+that brand — today this only matters for `zones.footer.signature`, whose
+`copyKey`/`fontKey`/`colorRole` must each resolve in `brand.copy` /
+`brand.fonts` / `brand.roles`, or loading fails naming the missing key's path
+(e.g. `zones.footer.signature.copyKey → brand.copy.tagline`). Making `brand`
+required, rather than an optional last argument, is deliberate: an optional
+brand let a caller skip that cross-check by omission, which would otherwise
+surface later as a silently unstyled signature at render time instead of a
+named error at load time.
 
 `params` is the carousel document's own `template.params` (see "Per-carousel
 template parameters" below) and, when given, is deep-merged on top of the

@@ -71,7 +71,7 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, doc.template.params);
+      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -106,7 +106,7 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, doc.template.params);
+      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
 
@@ -159,7 +159,7 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, doc.template.params);
+      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
 

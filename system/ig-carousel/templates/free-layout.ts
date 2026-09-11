@@ -250,7 +250,63 @@ function renderFooterZone(
       )}px; color: ${color(brand, "onSurfaceMuted")};">${slideIndex + 1}/${totalSlides}</span>`
     : "";
 
-  return `<div class="zone zone-footer" data-zone="footer" style="${style}">${logoMarkup}${paginationMarkup}</div>`;
+  // Two edge groups, each its own flex item, so a `space-between` footer
+  // still has exactly two children — logo+signature on the left,
+  // signature+pagination on the right — instead of `justify-content:
+  // space-between` redistributing a third top-level child and shifting the
+  // logo/pagination off their edges (architect review: `order` only
+  // permutes flex children in place, it does not anchor one to an edge).
+  // With no signature this renders byte-identical wrapper markup to the
+  // pre-signature footer, just with the same logo/pagination each wrapped
+  // in its own (empty-margin, non-visual) edge group.
+  const signatureLeft =
+    footer.signature && footer.signature.align === "left"
+      ? renderFooterSignature(brand, footer.signature, footer.height)
+      : "";
+  const signatureRight =
+    footer.signature && footer.signature.align === "right"
+      ? renderFooterSignature(brand, footer.signature, footer.height)
+      : "";
+
+  const groupStyle = `display: flex; align-items: center; gap: ${Math.round(footer.height * 0.25)}px;`;
+
+  return `<div class="zone zone-footer" data-zone="footer" style="${style}"><div class="footer-left" style="${groupStyle}">${logoMarkup}${signatureLeft}</div><div class="footer-right" style="${groupStyle}">${signatureRight}${paginationMarkup}</div></div>`;
+}
+
+/**
+ * Renders the footer's optional fixed signature line — painted straight
+ * from the resolved template and brand, never from a document object
+ * (layout-template spec's "Footer signature": structurally unreachable
+ * from any composition). `loadLayoutTemplate` has already proven, at
+ * resolve time, that the signature's `copyKey`/`fontKey`/`colorRole` exist
+ * on the brand when `brand` was passed to it, so this still fails closed
+ * (rather than emitting `color: undefined`) on a `colorRole` that somehow
+ * reaches render unresolved.
+ */
+function renderFooterSignature(
+  brand: BrandTokens,
+  signature: NonNullable<LayoutTemplate["zones"]["footer"]["signature"]>,
+  footerHeight: number,
+): string {
+  const text = (brand.copy as Record<string, unknown>)[signature.copyKey];
+  if (typeof text !== "string") {
+    throw new Error(
+      `Footer signature copyKey "${signature.copyKey}" is not a string in brand.copy — ` +
+        `loadLayoutTemplate should have caught this before render.`,
+    );
+  }
+  const fontFamily = fontFromKey(brand, signature.fontKey);
+  if (!(signature.colorRole in brand.roles)) {
+    throw new Error(
+      `Unknown colorRole "${signature.colorRole}" in zones.footer.signature — not present in brand.roles. ` +
+        `loadLayoutTemplate should have caught this before render.`,
+    );
+  }
+  const textColor = color(brand, signature.colorRole as keyof BrandTokens["roles"]);
+
+  return `<span class="footer-signature" data-footer-signature="true" style="font-family: ${fontFamily}; font-size: ${Math.round(
+    footerHeight * 0.3,
+  )}px; color: ${textColor};">${escapeHtml(text)}</span>`;
 }
 
 /**

@@ -258,6 +258,17 @@ Consecuencias deliberadas:
   el que el motor sabe hacer. Nombrar la clave que falta es barato; descubrir
   la tarjeta plana después de publicar, no.
 
+- La **firma fija del footer** (`zones.footer.signature` en un layout
+  template, opcional) nombra su texto con `copyKey`, una clave *plana* de
+  `copy` — cualquiera cuyo valor sea un string, no un bloque anidado como
+  `listFormat` o `reel` (`copy.wordmark` y `copy.site` sirven de ejemplo).
+  No es una `BrandFeature` nueva: `loadLayoutTemplate` valida `copyKey`
+  (junto a `fontKey` contra `fonts` y `colorRole` contra `roles`) en el
+  momento en que resuelve el template contra la marca, y falla nombrando la
+  ruta exacta (p. ej. `zones.footer.signature.copyKey → brand.copy.<key>`)
+  si la marca no la define. Un perfil que no agrega `signature` a ningún
+  template no necesita declarar nada nuevo en `brand.json`.
+
 Claves del diseño:
 
 - **`roles`** mapea roles semánticos a nombres de la propia paleta. Los

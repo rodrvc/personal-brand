@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { loadBrand } from "./brand-schema.js";
 import { listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "./layout-template.js";
+
+const ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+const EXAMPLE_PROFILE_DIR = join(ENGINE_DIR, "..", "..", "profiles", "example");
+const exampleBrand = loadBrand(EXAMPLE_PROFILE_DIR);
 
 /** A throwaway profile dir with a `templates/<id>.json` override, cleaned up after `fn` runs. */
 function withTempProfile<T>(overrides: Record<string, unknown>, fn: (profileDir: string) => T): T {
@@ -43,7 +49,7 @@ const tests: Array<[string, () => void]> = [
         },
         (profileDir) => {
           assert.throws(
-            () => loadLayoutTemplate(profileDir, "explicativo"),
+            () => loadLayoutTemplate(profileDir, "explicativo", exampleBrand),
             (error: unknown) => {
               assert.ok(error instanceof LayoutTemplateError, "expected a LayoutTemplateError");
               assert.match((error as Error).message, /colorRole/, "message must name the offending field");
@@ -60,7 +66,7 @@ const tests: Array<[string, () => void]> = [
     () => {
       withTempProfile({ zones: { background: { policy: "#000" } } }, (profileDir) => {
         assert.throws(
-          () => loadLayoutTemplate(profileDir, "explicativo"),
+          () => loadLayoutTemplate(profileDir, "explicativo", exampleBrand),
           (error: unknown) => {
             assert.ok(error instanceof LayoutTemplateError);
             assert.match((error as Error).message, /zones\.background\.policy|policy/);
@@ -75,7 +81,7 @@ const tests: Array<[string, () => void]> = [
     "C10: a profile with templates/explicativo.json = {zones:{footer:{height:140}}} resolves height 140 and keeps everything else",
     () => {
       withTempProfile({ zones: { footer: { height: 140 } } }, (profileDir) => {
-        const template = loadLayoutTemplate(profileDir, "explicativo");
+        const template = loadLayoutTemplate(profileDir, "explicativo", exampleBrand);
         assert.equal(template.zones.footer.height, 140);
         assert.equal(template.zones.footer.logo, "auto");
         assert.equal(template.zones.footer.pagination, "all");
@@ -93,7 +99,7 @@ const tests: Array<[string, () => void]> = [
     "C10: zones.footer.logo accepts 'none' so a profile can disable the footer logo",
     () => {
       withTempProfile({ zones: { footer: { logo: "none" } } }, (profileDir) => {
-        const template = loadLayoutTemplate(profileDir, "explicativo");
+        const template = loadLayoutTemplate(profileDir, "explicativo", exampleBrand);
         assert.equal(template.zones.footer.logo, "none");
       });
     },
@@ -126,6 +132,113 @@ const tests: Array<[string, () => void]> = [
       }
     },
   ],
+
+  [
+    "3.2: a signature with a copyKey the brand does not define fails naming the path",
+    () => {
+      withTempProfile(
+        {
+          zones: {
+            footer: {
+              signature: { copyKey: "notACopyKey", fontKey: "body", colorRole: "onSurfaceMuted", align: "right" },
+            },
+          },
+        },
+        (profileDir) => {
+          assert.throws(
+            () => loadLayoutTemplate(profileDir, "explicativo", exampleBrand),
+            (error: unknown) => {
+              assert.ok(error instanceof LayoutTemplateError, "expected a LayoutTemplateError");
+              assert.match(
+                (error as Error).message,
+                /zones\.footer\.signature\.copyKey → brand\.copy\.notACopyKey/,
+                "message must name the missing key's path",
+              );
+              return true;
+            },
+          );
+        },
+      );
+    },
+  ],
+
+  [
+    "3.2: a signature with a fontKey the brand does not define fails naming the path",
+    () => {
+      withTempProfile(
+        {
+          zones: {
+            footer: {
+              signature: { copyKey: "wordmark", fontKey: "notAFontKey", colorRole: "onSurfaceMuted", align: "right" },
+            },
+          },
+        },
+        (profileDir) => {
+          assert.throws(
+            () => loadLayoutTemplate(profileDir, "explicativo", exampleBrand),
+            (error: unknown) => {
+              assert.ok(error instanceof LayoutTemplateError, "expected a LayoutTemplateError");
+              assert.match(
+                (error as Error).message,
+                /zones\.footer\.signature\.fontKey → brand\.fonts\.notAFontKey/,
+                "message must name the missing key's path",
+              );
+              return true;
+            },
+          );
+        },
+      );
+    },
+  ],
+
+  [
+    "3.2: a signature with a colorRole the brand does not define fails naming the path",
+    () => {
+      withTempProfile(
+        {
+          zones: {
+            footer: {
+              signature: { copyKey: "wordmark", fontKey: "body", colorRole: "notARole", align: "right" },
+            },
+          },
+        },
+        (profileDir) => {
+          assert.throws(
+            () => loadLayoutTemplate(profileDir, "explicativo", exampleBrand),
+            (error: unknown) => {
+              assert.ok(error instanceof LayoutTemplateError, "expected a LayoutTemplateError");
+              assert.match(
+                (error as Error).message,
+                /zones\.footer\.signature\.colorRole → brand\.roles\.notARole/,
+                "message must name the missing key's path",
+              );
+              return true;
+            },
+          );
+        },
+      );
+    },
+  ],
+
+  [
+    "3.2: a signature whose keys the brand DOES define resolves without throwing",
+    () => {
+      withTempProfile(
+        {
+          zones: {
+            footer: {
+              signature: { copyKey: "wordmark", fontKey: "body", colorRole: "onSurfaceMuted", align: "right" },
+            },
+          },
+        },
+        (profileDir) => {
+          const template = loadLayoutTemplate(profileDir, "explicativo", exampleBrand);
+          assert.equal(template.zones.footer.signature?.copyKey, "wordmark");
+        },
+      );
+    },
+  ],
+
 ];
 
 let failed = 0;
