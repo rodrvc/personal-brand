@@ -1,7 +1,10 @@
 .stage-wrap {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* Not overflow: hidden — as a grid item that would clamp this to 0 and
+     clip the strip below with no scrollbar. min-content lets editor-center's
+     overflow-y: auto see the strip and scroll to it instead. */
+  min-height: min-content;
   background: var(--ui-bg);
 }
 
@@ -10,7 +13,10 @@
   display: flex;
   padding: 26px;
   overflow: auto;
-  min-height: 0;
+  /* Keep room for the sheet's ~240px minimum plus its padding/label so the
+     active slide is never clipped; editor-center scrolls when the viewport
+     is shorter than this (see Editor.css). */
+  min-height: 292px;
 }
 
 .stage-sheet-container {
@@ -64,13 +70,21 @@
   height: 124px;
   background: var(--ui-surface);
   border-top: 1px solid var(--ui-line);
-  overflow-x: auto;
-  overflow-y: hidden;
   padding: 12px 16px;
   display: flex;
   flex-direction: row;
   align-items: flex-start;
   gap: 12px;
+}
+
+.stage-strip-tablist {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
 }
 
 .stage-thumb {

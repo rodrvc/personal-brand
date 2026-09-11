@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { slideHtmlUrl, slidePngUrl } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate } from "../api/types";
@@ -36,6 +37,7 @@ function Thumb({
   cacheBuster,
   thumbAspect,
   onSelect,
+  thumbRef,
 }: {
   slug: string;
   doc: CarouselDocument;
@@ -45,16 +47,22 @@ function Thumb({
   cacheBuster: string;
   thumbAspect: number;
   onSelect: () => void;
+  thumbRef: (el: HTMLButtonElement | null) => void;
 }) {
   const [failed, setFailed] = useState(false);
   const kindLabel = slide.kind === "cover" ? "POR" : slide.kind === "closing" ? "FIN" : String(index + 1);
+  const numberLabel = String(index + 1).padStart(2, "0");
 
   return (
     <button
       type="button"
+      ref={thumbRef}
+      role="tab"
       className={`stage-thumb ${active ? "on" : ""}`}
-      aria-label={`Lámina ${index + 1}`}
-      aria-current={active ? "true" : undefined}
+      aria-label={`Lámina ${numberLabel}`}
+      aria-selected={active}
+      tabIndex={active ? 0 : -1}
+      data-thumb-index={index}
       onClick={onSelect}
     >
       <div
@@ -72,7 +80,7 @@ function Thumb({
         )}
         {failed && <span className="stage-thumb-fallback">{kindLabel}</span>}
       </div>
-      <div className="stage-thumb-n">{String(index + 1).padStart(2, "0")}</div>
+      <div className="stage-thumb-n">{numberLabel}</div>
     </button>
   );
 }
@@ -94,6 +102,7 @@ export function Stage({
   const activeSlide = doc.slides[activeIndex];
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [iframeLoadTick, setIframeLoadTick] = useState(0);
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
 
@@ -129,6 +138,33 @@ export function Stage({
 
   const colorKeyForNewSlide =
     (activeSlide?.background.mode === "color" ? activeSlide.background.colorKey : undefined) ?? fallbackColorKey;
+
+  // Drop stale refs from a shorter previous slide count.
+  thumbRefs.current.length = doc.slides.length;
+
+  const focusThumb = (index: number) => {
+    const el = thumbRefs.current[index];
+    el?.focus();
+    // editor-center/.stage-wrap can now scroll vertically too (see
+    // Editor.css/Stage.css), so this also keeps the thumb in view on that axis.
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+
+  const handleStripKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    // Only thumbs (role="tab", carrying data-thumb-index) drive the strip;
+    // keys on the "+" button (outside the tablist) are a no-op here.
+    if (!(event.target as HTMLElement).closest("[data-thumb-index]")) return;
+    const lastIndex = doc.slides.length - 1;
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = Math.min(activeIndex + 1, lastIndex);
+    else if (event.key === "ArrowLeft") nextIndex = Math.max(activeIndex - 1, 0);
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = lastIndex;
+    if (nextIndex === null || nextIndex === activeIndex) return;
+    event.preventDefault();
+    onActiveIndexChange(nextIndex);
+    focusThumb(nextIndex);
+  };
 
   return (
     <div className="stage-wrap">
@@ -171,20 +207,29 @@ export function Stage({
         )}
       </div>
 
-      <nav className="stage-strip" aria-label="Láminas" style={{ "--thumb-w": `${THUMB_WIDTH}px` } as React.CSSProperties}>
-        {doc.slides.map((slide, index) => (
-          <Thumb
-            key={slide.id}
-            slug={slug}
-            doc={doc}
-            slide={slide}
-            index={index}
-            active={index === activeIndex}
-            cacheBuster={cacheBuster}
-            thumbAspect={thumbAspect}
-            onSelect={() => onActiveIndexChange(index)}
-          />
-        ))}
+      <nav
+        className="stage-strip"
+        aria-label="Láminas"
+        style={{ "--thumb-w": `${THUMB_WIDTH}px` } as React.CSSProperties}
+      >
+        <div className="stage-strip-tablist" role="tablist" aria-label="Láminas" onKeyDown={handleStripKeyDown}>
+          {doc.slides.map((slide, index) => (
+            <Thumb
+              key={slide.id}
+              slug={slug}
+              doc={doc}
+              slide={slide}
+              index={index}
+              active={index === activeIndex}
+              cacheBuster={cacheBuster}
+              thumbAspect={thumbAspect}
+              onSelect={() => onActiveIndexChange(index)}
+              thumbRef={(el) => {
+                thumbRefs.current[index] = el;
+              }}
+            />
+          ))}
+        </div>
         <button
           type="button"
           className="stage-add-thumb"
