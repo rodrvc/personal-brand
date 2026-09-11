@@ -6,6 +6,7 @@ import type { BrandTokens, CarouselDocument, LayoutTemplate } from "../api/types
 import type { CarouselDocument as Doc } from "../api/types";
 import type { Selection } from "./geometry";
 import { SelectionOverlay } from "./SelectionOverlay";
+import { t } from "../i18n";
 import "./Stage.css";
 
 const THUMB_WIDTH = 84;
@@ -50,7 +51,7 @@ function Thumb({
   thumbRef: (el: HTMLButtonElement | null) => void;
 }) {
   const [failed, setFailed] = useState(false);
-  const kindLabel = slide.kind === "cover" ? "POR" : slide.kind === "closing" ? "FIN" : String(index + 1);
+  const kindLabel = slide.kind === "cover" ? t("stage.thumbKind.cover") : slide.kind === "closing" ? t("stage.thumbKind.closing") : String(index + 1);
   const numberLabel = String(index + 1).padStart(2, "0");
 
   return (
@@ -61,7 +62,7 @@ function Thumb({
       id={`stage-thumb-${slide.id}`}
       aria-controls="stage-active-sheet"
       className={`stage-thumb ${active ? "on" : ""}`}
-      aria-label={`Lámina ${numberLabel}`}
+      aria-label={t("stage.slideLabel", { number: numberLabel })}
       aria-selected={active}
       tabIndex={active ? 0 : -1}
       data-thumb-index={index}
@@ -180,7 +181,7 @@ export function Stage({
           >
             <div className="stage-sheet active">
               <div className="stage-sheet-label">
-                <b>Lámina {activeIndex + 1}</b> · {activeSlide.kind}
+                <b>{t("stage.slideLabel", { number: activeIndex + 1 })}</b> · {activeSlide.kind}
               </div>
               <div className="stage-art" style={{ width: displayWidth, height: displayHeight }}>
                 <iframe
@@ -217,10 +218,10 @@ export function Stage({
 
       <nav
         className="stage-strip"
-        aria-label="Láminas"
+        aria-label={t("stage.stripAriaLabel")}
         style={{ "--thumb-w": `${THUMB_WIDTH}px` } as React.CSSProperties}
       >
-        <div className="stage-strip-tablist" role="tablist" aria-label="Láminas" onKeyDown={handleStripKeyDown}>
+        <div className="stage-strip-tablist" role="tablist" aria-label={t("stage.stripAriaLabel")} onKeyDown={handleStripKeyDown}>
           {doc.slides.map((slide, index) => (
             <Thumb
               key={slide.id}
@@ -241,8 +242,8 @@ export function Stage({
         <button
           type="button"
           className="stage-add-thumb"
-          title="Añadir lámina"
-          aria-label="Añadir lámina"
+          title={t("stage.addSlide")}
+          aria-label={t("stage.addSlide")}
           onClick={() => onAddSlide(colorKeyForNewSlide)}
         >
           +

@@ -9,6 +9,7 @@ import type {
   SlideObject,
   TextObject,
 } from "../api/types";
+import { t } from "../i18n";
 import { resetObjectToSlot as engineResetObjectToSlot } from "../../../../system/ig-carousel/carousel-document-resolve.js";
 
 /**
@@ -268,7 +269,7 @@ export function addTextObject(
     };
 
     if (freeTextSlot) {
-      const object: TextObject = { ...base, text: "Texto", slot: freeTextSlot.name };
+      const object: TextObject = { ...base, text: t("common.newTextPlaceholder"), slot: freeTextSlot.name };
       return { ...slide, objects: [...slide.objects, object] };
     }
 
