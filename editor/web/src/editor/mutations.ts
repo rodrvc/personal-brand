@@ -25,14 +25,15 @@ function mapObject(slide: Slide, objectId: string, fn: (object: SlideObject) => 
 /**
  * Ids for objects and slides created in the editor. `Date.now()` alone
  * collided when two additions landed in the same millisecond (fast clicks,
- * batch inserts), which gave React duplicate keys; a per-session counter
- * keeps every id distinct within a session, and the timestamp keeps them
- * distinct across sessions.
+ * batch inserts), which gave React duplicate keys. A per-session counter
+ * keeps ids distinct within a session; a random suffix covers two sessions
+ * minting in the same millisecond, which the timestamp alone would not.
  */
 let idCounter = 0;
 export function newEditorId(prefix: string): string {
   idCounter += 1;
-  return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
+  const nonce = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}-${nonce}`;
 }
 export function setObjectPinned(doc: CarouselDocument, slideId: string, objectId: string, pinned: boolean): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => mapObject(slide, objectId, (o) => ({ ...o, pinned })));
