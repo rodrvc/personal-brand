@@ -201,6 +201,7 @@ export function Stage({
                   template={template}
                   brand={brand}
                   slide={activeSlide}
+                  canvas={doc.canvas}
                   scale={scale}
                   selection={selection}
                   onSelectionChange={onSelectionChange}

@@ -4,7 +4,7 @@ import type { RefObject } from "react";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, Slide } from "../api/types";
 import type { Selection } from "./geometry";
 import { moveGeometry, rotateGeometry, scaleGeometry } from "./geometry";
-import { setObjectGeometryAndFontSize, setTextContent } from "./mutations";
+import { clampGeometryToCanvas, setObjectGeometryAndFontSize, setTextContent } from "./mutations";
 import "./SelectionOverlay.css";
 
 interface ResolvedBox {
@@ -19,6 +19,8 @@ interface SelectionOverlayProps {
   template: LayoutTemplate;
   brand: BrandTokens;
   slide: Slide;
+  /** The document's own `canvas`, not `template.canvas` — the mutation-level clamp (mutations.ts) clamps against `doc.canvas` too, so both must agree on the same source. */
+  canvas: { w: number; h: number };
   scale: number;
   selection: Selection;
   onSelectionChange: (selection: Selection) => void;
@@ -40,6 +42,7 @@ export function SelectionOverlay({
   template,
   brand,
   slide,
+  canvas,
   scale,
   selection,
   onSelectionChange,
@@ -165,8 +168,14 @@ export function SelectionOverlay({
   const proxyRef = useRef<{ objectId: string; geometry: { x: number; y: number; w: number; h?: number; rotation: number }; fontSize?: number } | null>(null);
   const [, setProxyTick] = useState(0);
 
+  // Clamped here too (not only on mouseup in mutations.ts) so the overlay
+  // box never leaves the sheet mid-drag, and a corner resize past the edge
+  // stops at the wall instead of jumping there once released. `rotation`
+  // is ignored: this is an axis-aligned clamp on `x/y/w/h`, and a rotated
+  // box's true bounding rect isn't representable in this geometry shape.
   function setLocalProxy(objectId: string, geometry: { x: number; y: number; w: number; h?: number; rotation: number }, fontSize?: number) {
-    proxyRef.current = { objectId, geometry, fontSize };
+    const clamped = clampGeometryToCanvas(geometry, canvas);
+    proxyRef.current = { objectId, geometry: clamped, fontSize };
     setProxyTick((t) => t + 1);
   }
 

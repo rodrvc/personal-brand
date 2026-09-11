@@ -94,6 +94,10 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
 
   return (
     <EditorLoaded
+      // A carousel switch must remount useDocumentEditor, not reuse it with
+      // a new `initialDoc` — otherwise an in-flight save for the old
+      // carousel could keep running against the new one's `slug`/`docRef`.
+      key={`${slug}/${id}`}
       slug={slug}
       brand={brand}
       template={template}
