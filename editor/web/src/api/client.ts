@@ -64,7 +64,7 @@ export function getTemplate(slug: string, id: string, params?: Record<string, un
 }
 
 /** Every template available to a brand: engine defaults merged with that profile's own overrides (ACU-230). */
-export function listTemplates(slug: string): Promise<{ templates: LayoutTemplateSummary[] }> {
+export function listTemplates(slug: string): Promise<{ templates: LayoutTemplateSummary[]; freeTemplateId: string }> {
   return request(`/profiles/${slug}/templates`);
 }
 

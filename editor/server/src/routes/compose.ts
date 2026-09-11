@@ -1,7 +1,7 @@
 import { Router } from "express";
 
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
-import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
+import { freeLayoutTemplate, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadIndex, type AssetEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
@@ -77,14 +77,18 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const body = req.body as {
         title?: string;
         prompt?: string;
-        templateId?: string;
+        /** `null` means "no template": the document is created with no `template` key and renders free (carousel-document spec). Omitting the field keeps the historical default instead. */
+        templateId?: string | null;
         id?: string;
         assetIds?: string[];
         /** API-client-only override — the web UI never sends this; slide count comes from the prompt or the template default instead (see planner.ts's `resolveStepCount`). */
         slideCount?: number;
         preview?: boolean;
       };
-      const templateId = body.templateId ?? "explicativo";
+      // `undefined` (field absent) -> the historical default; explicit
+      // `null` -> no template at all. `??` cannot tell those apart, so the
+      // check is on `undefined` specifically.
+      const templateId = body.templateId === undefined ? "explicativo" : body.templateId;
       const carouselId = body.id ?? `carousel-${Date.now()}`;
       assertValidCarouselId(carouselId);
       if (documentExists(store, carouselId)) {
@@ -96,6 +100,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       if (isPreview) {
         if (!body.prompt || typeof body.prompt !== "string") {
           res.status(400).json({ error: `"prompt" is required for a plan preview` });
+          return;
+        }
+        // The plan/apply flow composes INTO named slots, so it has nothing
+        // to plan against without a real template — 400 rather than
+        // silently planning over the free template's empty slot lists.
+        if (templateId === null) {
+          res.status(400).json({ error: `"templateId" cannot be null for a plan preview — planning needs a template's slots` });
           return;
         }
         const template = loadLayoutTemplate(store.roots.profileDir, templateId, loadBrand(store.roots.profileDir));
@@ -123,8 +134,9 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, templateId, brand);
-      const document = buildEmptyDocument(brand, template, templateId, carouselId, body.title);
+      const template =
+        templateId === null ? freeLayoutTemplate() : loadLayoutTemplate(store.roots.profileDir, templateId, brand);
+      const document = buildEmptyDocument(brand, template, templateId ?? undefined, carouselId, body.title);
       writeDocument(store, document);
 
       res.status(201).json({ document });
@@ -142,7 +154,14 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         res.status(404).json({ error: `No pending plan for carousel "${req.params.id}" — create one via POST /carousels first.` });
         return;
       }
-      const templateId = (req.body as { templateId?: string })?.templateId ?? "explicativo";
+      // Same rule as the plan preview above: applying a plan fills named
+      // slots, so "no template" is not a thing this path can do.
+      const requestedTemplateId = (req.body as { templateId?: string | null })?.templateId;
+      if (requestedTemplateId === null) {
+        res.status(400).json({ error: `"templateId" cannot be null when applying a plan — planning needs a template's slots` });
+        return;
+      }
+      const templateId = requestedTemplateId ?? "explicativo";
       const brand = loadBrand(store.roots.profileDir);
       const template = loadLayoutTemplate(store.roots.profileDir, templateId, brand);
       const generator = getGenerator(req.params.slug);

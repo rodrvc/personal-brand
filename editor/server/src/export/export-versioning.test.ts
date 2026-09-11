@@ -151,6 +151,43 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "a document with no template exports, with templateId: null in the manifest",
+    async () => {
+      const store = new ProfileStore(SLUG);
+      const freeCarouselId = "free-carousel";
+      mkdirSync(join(profileDir, "carousels", freeCarouselId), { recursive: true });
+      const { writeFileSync } = await import("node:fs");
+      // Same document minus its `template` key — "no template" is the
+      // field's absence, not a sentinel id (carousel-document spec). The
+      // object also drops its `slot`, which only means anything inside a
+      // template's slot list.
+      const { template: _template, ...withoutTemplate } = document;
+      const freeDocument = {
+        ...withoutTemplate,
+        id: freeCarouselId,
+        slides: document.slides.map((slide) => ({
+          ...slide,
+          objects: slide.objects.map(({ slot: _slot, ...object }) => object),
+        })),
+      };
+      writeFileSync(
+        join(profileDir, "carousels", freeCarouselId, "carousel.json"),
+        JSON.stringify(freeDocument, null, 2) + "\n",
+      );
+
+      const jobId = enqueueExport(store, freeCarouselId, fakeRender);
+      const job = await waitForJob(jobId);
+      assert.equal(job?.status, "done", job?.error);
+
+      const manifest = store.readJson<{ engine: { templateId: string | null; templateHash: string } }>(
+        `outputs/${SUB}/${freeCarouselId}/v1/manifest.json`,
+      );
+      assert.equal(manifest.engine.templateId, null);
+      // The hash is still computed, over the RESOLVED (free) template.
+      assert.ok(manifest.engine.templateHash.length > 0);
+    },
+  ],
+  [
     "export sets status to exported and approves used AI assets",
     async () => {
       const store = new ProfileStore(SLUG);

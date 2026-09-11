@@ -73,6 +73,15 @@ Key rules:
   composition on the brand's palette and fonts alone, no zone painted, no
   slot imposed — a deliberate, valid choice, not an error state. Do not
   confuse it with `template: null`, which the schema rejects; omit the key.
+  On the server side this is resolved in exactly one place —
+  `resolveDocumentTemplate(store, brand, doc)` in
+  `editor/server/src/template-resolve.ts` — which hands every downstream
+  caller (preview HTML, PNG, contrast, export) a non-optional
+  `LayoutTemplate`, `freeLayoutTemplate()` when the reference is absent.
+  `POST /api/profiles/:slug/carousels` creates such a document when the body
+  sends `templateId: null` (omitting the field keeps the default template
+  instead), and an export manifest records `engine.templateId: null` for it
+  while still hashing the resolved (free) template.
 - `objects[]` is stacking order: the last entry paints on top.
 - `pending?: boolean` marks a placeholder the background compose job hasn't
   filled in yet (text drafting, or a library-sourced visual still being

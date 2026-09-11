@@ -5,13 +5,14 @@ import { fileURLToPath } from "node:url";
 import type { Browser } from "playwright";
 
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
-import { loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
+import type { LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
 import { resolveOutputSubfolder } from "../../../../system/ig-carousel/profile.js";
 import { hashContent, loadIndex, updateEntry } from "../../../../system/assets/index.js";
 
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { buildExportRenderContext } from "../render-context.js";
-import { readValidatedDocument, requireTemplateRef, writeDocument } from "../document-store.js";
+import { readValidatedDocument, writeDocument } from "../document-store.js";
+import { resolveDocumentTemplate } from "../template-resolve.js";
 import { ProfileStore } from "../profile-store.js";
 
 /**
@@ -22,7 +23,7 @@ import { ProfileStore } from "../profile-store.js";
  */
 export type RenderFn = (opts: {
   brand: ReturnType<typeof loadBrand>;
-  template: ReturnType<typeof loadLayoutTemplate>;
+  template: LayoutTemplate;
   doc: unknown;
   ctx: ReturnType<typeof buildExportRenderContext>;
   outputDir: string;
@@ -190,8 +191,7 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
   job.status = "running";
   try {
     const brand = loadBrand(store.roots.profileDir);
-    const ref = requireTemplateRef(doc);
-    const template = loadLayoutTemplate(store.roots.profileDir, ref.id, brand, ref.params);
+    const template = resolveDocumentTemplate(store, brand, doc);
     const index = loadIndex(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 
@@ -227,7 +227,12 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
       exportedAt: new Date().toISOString(),
       engine: {
         gitSha: gitShaOrUnknown(),
-        templateId: ref.id,
+        // `null` — not a sentinel id — for a document with no template
+        // reference: the manifest records what the document declared, and
+        // "nothing" is a real answer. `templateHash` below still hashes the
+        // RESOLVED template (the free one in that case), so the engine
+        // fingerprint stays complete either way.
+        templateId: doc.template?.id ?? null,
         templateHash: hashTemplate(template),
       },
       brand,
