@@ -41,3 +41,9 @@
   color: var(--ui-ink-3);
   line-height: 1.4;
 }
+
+.new-carousel-inline-hint {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ui-danger);
+}

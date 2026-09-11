@@ -340,6 +340,45 @@
   border-radius: 4px;
 }
 
+/* Non-image asset (a file the server cannot paint as `image/*`, e.g. .html/.txt/.json): a neutral placeholder instead of a broken `background-image`. */
+.asset-tile-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  text-align: center;
+  font-size: 9px;
+  color: var(--ui-ink-3);
+  word-break: break-all;
+}
+
+.asset-tile-file-glyph {
+  font-size: 18px;
+}
+
+/* Corner chip for the tile's secondary action ("Usar de fondo"). The tile's own click stays "Añadir a la lámina"; this is a real, keyboard-reachable <button> so it can't be reduced to a hover-only affordance. */
+.asset-tile-bg-btn {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  font-size: 7.5px;
+  font-weight: 700;
+  background: var(--ui-overlay-badge-soft);
+  color: var(--ui-p600);
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: var(--ui-transition);
+}
+
+.asset-tile:hover .asset-tile-bg-btn,
+.asset-tile-bg-btn:focus-visible {
+  opacity: 1;
+}
+
 .output-list {
   display: flex;
   flex-direction: column;
@@ -375,20 +414,6 @@
   font-size: 10px;
   color: var(--ui-ink-3);
   margin-top: 1px;
-}
-
-.output-copy-btn {
-  color: var(--ui-ink-3);
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-}
-
-.output-copy-btn:hover {
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-ink);
 }
 
 .upload-dropzone {
