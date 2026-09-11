@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,38 @@ function withTempProfile<T>(overrides: Record<string, unknown>, fn: (profileDir:
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * A throwaway profile dir carrying templates under arbitrary ids, so a test
+ * can declare an id the engine has NO default for — which is what
+ * `listLayoutTemplates` already lists and `loadLayoutTemplate` has to be
+ * able to load.
+ */
+function withTempProfileTemplates<T>(templates: Record<string, unknown>, fn: (profileDir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "layout-template-test-standalone-"));
+  try {
+    const templatesDir = join(dir, "templates");
+    mkdirSync(templatesDir, { recursive: true });
+    for (const [id, body] of Object.entries(templates)) {
+      writeFileSync(join(templatesDir, `${id}.json`), JSON.stringify(body), "utf-8");
+    }
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The engine's own `explicativo` as a plain object, restamped with `id` —
+ * a known-valid full template to reuse as the body of a brand-only id. A
+ * template declares its own `id` in the file (the loader reads it from the
+ * body, not from the filename), so a fixture that forgets to restamp it
+ * would be testing the wrong id.
+ */
+function engineDefaultBody(id: string): Record<string, unknown> {
+  const body = JSON.parse(readFileSync(join(ENGINE_DIR, "layouts", "explicativo.json"), "utf-8")) as Record<string, unknown>;
+  return { ...body, id };
 }
 
 const tests: Array<[string, () => void]> = [
@@ -277,6 +309,82 @@ const tests: Array<[string, () => void]> = [
           "listLayoutTemplates must never list the free template's sentinel id, even with a profile override present",
         );
       });
+    },
+  ],
+  [
+    "a brand-only template (no engine default for the id) loads standalone",
+    () => {
+      // `listLayoutTemplates` lists ids a brand declares on its own, so
+      // refusing to load them made every one of them a dead entry in the
+      // picker: listed, then a raw error the moment it was selected.
+      withTempProfileTemplates({ "brand-only": engineDefaultBody("brand-only") }, (profileDir) => {
+        const template = loadLayoutTemplate(profileDir, "brand-only", exampleBrand);
+        assert.equal(template.id, "brand-only", "the standalone override is the whole template");
+        assert.ok(template.slides.cover.slots.length > 0, "its slots come through, with nothing to merge onto");
+      });
+    },
+  ],
+
+  [
+    "a brand-only template is still schema-checked and brand-cross-checked, not waved through",
+    () => {
+      // Standing alone must buy no leniency: the same schema and the same
+      // brand cross-validation apply as to a merged template.
+      withTempProfileTemplates({ "brand-only-broken": { ...engineDefaultBody("brand-only-broken"), canvas: { w: "wide" } } }, (profileDir) => {
+        assert.throws(
+          () => loadLayoutTemplate(profileDir, "brand-only-broken", exampleBrand),
+          (error: unknown) => error instanceof LayoutTemplateError && /canvas/.test((error as Error).message),
+          "a malformed standalone override fails naming the offending path",
+        );
+      });
+
+      const withBadSignature = engineDefaultBody("brand-only-signature");
+      (withBadSignature.zones as Record<string, any>).footer.signature = {
+        copyKey: "no-such-copy-key",
+        fontKey: "body",
+        colorRole: "onSurface",
+      };
+      withTempProfileTemplates({ "brand-only-signature": withBadSignature }, (profileDir) => {
+        assert.throws(
+          () => loadLayoutTemplate(profileDir, "brand-only-signature", exampleBrand),
+          LayoutTemplateError,
+          "a standalone override is cross-validated against the brand like any other",
+        );
+      });
+    },
+  ],
+
+  [
+    "an id backed by neither an engine default nor a profile override still fails, naming it",
+    () => {
+      withTempProfileTemplates({ "brand-only": engineDefaultBody("brand-only") }, (profileDir) => {
+        assert.throws(
+          () => loadLayoutTemplate(profileDir, "no-such-template", exampleBrand),
+          (error: unknown) =>
+            error instanceof LayoutTemplateError && /no-such-template/.test((error as Error).message),
+          "a genuinely missing id is still an error, and says which id",
+        );
+      });
+    },
+  ],
+
+  [
+    "listing and loading agree: every id listLayoutTemplates returns is loadable",
+    () => {
+      // The invariant the blocker broke. Asserted over the whole listing
+      // rather than over a hardcoded id, so a future template of either
+      // origin is covered without editing this test.
+      withTempProfileTemplates(
+        { "brand-only": engineDefaultBody("brand-only"), "brand-only-two": engineDefaultBody("brand-only-two") },
+        (profileDir) => {
+          const listed = listLayoutTemplates(profileDir);
+          assert.ok(listed.length >= 3, "engine default plus both brand-only ids are listed");
+          for (const entry of listed) {
+            const template = loadLayoutTemplate(profileDir, entry.id, exampleBrand);
+            assert.equal(template.id, entry.id, `listed template "${entry.id}" must load`);
+          }
+        },
+      );
     },
   ],
 ];
