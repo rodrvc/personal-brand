@@ -45,6 +45,7 @@ export const es = {
   "newCarousel.create": "Crear",
   "newCarousel.titleLabel": "Título",
   "newCarousel.titlePlaceholder": "ej: Cómo armar tu primer carrusel",
+  "newCarousel.titleRequired": "El título es obligatorio.",
   "newCarousel.brandLabel": "Marca",
   "newCarousel.templateLabel": "Template (opcional)",
   "newCarousel.hint":
@@ -120,6 +121,8 @@ export const es = {
     "Se regeneran {count} piezas de esta lámina, {pinned} fijadas se conservan.",
 
   // Export dialog (editor/ExportDialog.tsx)
+  "exportDialog.pollNotFound": "No se encontró la exportación. Cierra y exporta de nuevo.",
+  "exportDialog.pollFailed": "No se pudo consultar el estado de la exportación. Intenta cerrar y exportar de nuevo.",
   "exportDialog.title": "Exportar carrusel",
   "exportDialog.cancel": "Cancelar",
   "exportDialog.exportAnyway": "Exportar igual",
