@@ -5,6 +5,7 @@ import type { BrandTokens, CarouselDocument, LayoutTemplate, Slide } from "../ap
 import type { Selection } from "./geometry";
 import { moveGeometry, rotateGeometry, scaleGeometry } from "./geometry";
 import { clampGeometryToCanvas, setObjectGeometryAndFontSize, setTextContent } from "./mutations";
+import { t } from "../i18n";
 import "./SelectionOverlay.css";
 
 interface ResolvedBox {
@@ -240,7 +241,7 @@ export function SelectionOverlay({
                 onSelectionChange(null);
               }}
             >
-              Generar imagen…
+              {t("selectionOverlay.generateImage")}
             </button>
           )}
         </div>
@@ -262,7 +263,7 @@ export function SelectionOverlay({
                 height: box.h ? box.h * scale : undefined,
               }}
             >
-              <span className="overlay-lock-badge" title="Bloqueado">🔒</span>
+              <span className="overlay-lock-badge" title={t("selectionOverlay.locked")}>🔒</span>
             </div>
           );
         }
@@ -292,7 +293,7 @@ export function SelectionOverlay({
               beginDrag(e, object.id, { kind: "move", startX: e.clientX, startY: e.clientY });
             }}
           >
-            {object.pinned && <span className="overlay-pin-badge" title="Fijado">✓</span>}
+            {object.pinned && <span className="overlay-pin-badge" title={t("selectionOverlay.pinned")}>✓</span>}
             {object.kind === "asset" && object.awaitingImage && (
               <button
                 className="overlay-generate-image-btn"
@@ -301,7 +302,7 @@ export function SelectionOverlay({
                   onSelectionChange({ slideId: slide.id, objectId: object.id });
                 }}
               >
-                Generar imagen…
+                {t("selectionOverlay.generateImage")}
               </button>
             )}
             {isSelected && !editing && (

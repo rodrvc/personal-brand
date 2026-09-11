@@ -12,6 +12,7 @@ import { StatusBar } from "./StatusBar";
 import type { Selection } from "./geometry";
 import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
 import { ExportDialog } from "./ExportDialog";
+import { t } from "../i18n";
 import "./Editor.css";
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
@@ -89,7 +90,7 @@ export function Editor({
   }, [slug, doc.id, activeSlide, applyRemote]);
 
   if (!activeSlide) {
-    return <div className="editor-empty">Este carrusel no tiene láminas.</div>;
+    return <div className="editor-empty">{t("editor.empty")}</div>;
   }
 
   return (

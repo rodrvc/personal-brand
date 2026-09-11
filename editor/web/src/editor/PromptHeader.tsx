@@ -1,4 +1,5 @@
 import type { CarouselDocument, StatsResponse } from "../api/types";
+import { t } from "../i18n";
 import "./PromptHeader.css";
 
 interface PromptHeaderProps {
@@ -37,12 +38,12 @@ function relativeTime(iso: string): string {
   if (Number.isNaN(then)) return "";
   const diffMs = Date.now() - then;
   const minutes = Math.floor(diffMs / 60000);
-  if (minutes < 1) return "hace instantes";
-  if (minutes < 60) return `hace ${minutes} min`;
+  if (minutes < 1) return t("promptHeader.relativeTime.justNow");
+  if (minutes < 60) return t("promptHeader.relativeTime.minutes", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `hace ${hours} h`;
+  if (hours < 24) return t("promptHeader.relativeTime.hours", { count: hours });
   const days = Math.floor(hours / 24);
-  return `hace ${days} d`;
+  return t("promptHeader.relativeTime.days", { count: days });
 }
 
 export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpinnedError }: PromptHeaderProps) {
@@ -55,34 +56,37 @@ export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpin
         <p className="prompt-text">{doc.title}</p>
         <div className="prompt-meta">
           <span>
-            <i className="prompt-check">✓</i> {slideCount} láminas
+            <i className="prompt-check">✓</i> {t("promptHeader.slideCount", { count: slideCount })}
           </span>
           <span>
-            <i className="prompt-check">✓</i> {draftedTexts} textos redactados
+            <i className="prompt-check">✓</i> {t("promptHeader.draftedTexts", { count: draftedTexts })}
           </span>
           <span>
-            <i className="prompt-check">✓</i> {libraryPieces} piezas de biblioteca
+            <i className="prompt-check">✓</i> {t("promptHeader.libraryPieces", { count: libraryPieces })}
           </span>
           <span>
-            <i className="prompt-check">✓</i> {generatedBackgrounds} fondos generados
+            <i className="prompt-check">✓</i> {t("promptHeader.generatedBackgrounds", { count: generatedBackgrounds })}
           </span>
           {awaitingImages > 0 && (
             <span className="prompt-awaiting-images">
-              {awaitingImages} {awaitingImages === 1 ? "imagen por generar" : "imágenes por generar"}
+              {awaitingImages === 1
+                ? t("promptHeader.awaitingImage.one", { count: awaitingImages })
+                : t("promptHeader.awaitingImage.other", { count: awaitingImages })}
             </span>
           )}
           <span className="prompt-updated">{relativeTime(doc.updatedAt || doc.createdAt)}</span>
           {stats && (
             <span className="prompt-savings">
-              {stats.libraryRatio}% de este carrusel salió de la biblioteca
-              {stats.history.length > 0 && ` · hace un tiempo era ${stats.history[0]!.libraryRatio}%`}
+              {t("promptHeader.savings", { ratio: stats.libraryRatio })}
+              {stats.history.length > 0 &&
+                t("promptHeader.savingsHistory", { ratio: stats.history[0]!.libraryRatio })}
             </span>
           )}
         </div>
         {regenerateUnpinnedError && <p className="prompt-error">{regenerateUnpinnedError}</p>}
       </div>
       <button className="prompt-redo" onClick={onRegenerateUnpinned}>
-        ↻ Regenerar lo no fijado
+        ↻ {t("promptHeader.regenerateUnpinned")}
       </button>
     </div>
   );
