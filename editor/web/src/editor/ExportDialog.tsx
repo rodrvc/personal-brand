@@ -64,13 +64,13 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
           // `job.error` below, which this catch never touches.
           if (err instanceof ApiError && err.status === 404) {
             clearInterval(timer);
-            setError("No se encontró la exportación. Cierra y exporta de nuevo.");
+            setError(t("exportDialog.pollNotFound"));
             return;
           }
           pollFailures.current += 1;
           if (pollFailures.current >= 3) {
             clearInterval(timer);
-            setError("No se pudo consultar el estado de la exportación. Intenta cerrar y exportar de nuevo.");
+            setError(t("exportDialog.pollFailed"));
           }
         });
     }, POLL_MS);

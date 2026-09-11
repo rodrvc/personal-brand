@@ -5,6 +5,7 @@ import { getBrand, getCarousel, getStats, getTemplate } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { Editor } from "../editor/Editor";
+import { t } from "../i18n";
 import "./EditorRoute.css";
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
@@ -81,7 +82,7 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
 
   if (!slug || !id) return null;
   if (error) return <div className="editor-route-error">{error}</div>;
-  if (!doc || !brand || !template) return <div className="editor-route-loading">Cargando carrusel…</div>;
+  if (!doc || !brand || !template) return <div className="editor-route-loading">{t("editorRoute.loading")}</div>;
 
   return (
     <EditorLoaded
