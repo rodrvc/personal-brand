@@ -7,16 +7,23 @@ import { Button } from "../components/Button";
 import { AssetsPane } from "../editor/panels/AssetsPane";
 import { TemplatesPane } from "../editor/panels/TemplatesPane";
 import { NewCarouselDialog } from "./NewCarouselDialog";
+import { t } from "../i18n";
+import type { LocaleKey } from "../i18n";
 import "./CarouselListRoute.css";
 import "../editor/panels/PropertiesPanel.css";
 
 type SidePanelTab = "assets" | "templates";
 
-const STATUS_LABEL: Record<CarouselSummary["status"], string> = {
-  draft: "Borrador",
-  exported: "Exportado",
-  published: "Publicado",
+/** Carousel status → its LocaleKey. `t()` is called lazily, in `statusLabel()`, never at module load. */
+const STATUS_LABEL_KEY: Record<CarouselSummary["status"], LocaleKey> = {
+  draft: "carouselList.status.draft",
+  exported: "carouselList.status.exported",
+  published: "carouselList.status.published",
 };
+
+function statusLabel(status: CarouselSummary["status"]): string {
+  return t(STATUS_LABEL_KEY[status]);
+}
 
 export function CarouselListRoute() {
   const { slug } = useParams<{ slug: string }>();
@@ -49,28 +56,28 @@ export function CarouselListRoute() {
         <header className="carousel-list-header">
           <div>
             <Link to="/" className="carousel-list-back">
-              ← Perfiles
+              {t("carouselList.back")}
             </Link>
-            <h1 className="carousel-list-title">{slug} · Carruseles</h1>
+            <h1 className="carousel-list-title">{t("carouselList.title", { slug })}</h1>
           </div>
           <Button variant="primary" onClick={() => setShowNew(true)}>
-            Nuevo carrusel
+            {t("carouselList.new")}
           </Button>
         </header>
 
         {error && <p className="carousel-list-error">{error}</p>}
-        {!carousels && !error && <p className="carousel-list-hint">Cargando…</p>}
+        {!carousels && !error && <p className="carousel-list-hint">{t("carouselList.loading")}</p>}
         {carousels && carousels.length === 0 && (
-          <p className="carousel-list-hint">Este perfil aún no tiene carruseles.</p>
+          <p className="carousel-list-hint">{t("carouselList.empty")}</p>
         )}
 
         <table className="carousel-table">
           <thead>
             <tr>
-              <th>Título</th>
-              <th>Estado</th>
-              <th>Actualizado</th>
-              <th>Láminas</th>
+              <th>{t("carouselList.columnTitle")}</th>
+              <th>{t("carouselList.columnStatus")}</th>
+              <th>{t("carouselList.columnUpdated")}</th>
+              <th>{t("carouselList.columnSlides")}</th>
               <th></th>
             </tr>
           </thead>
@@ -79,13 +86,13 @@ export function CarouselListRoute() {
               <tr key={c.id}>
                 <td>{c.title || c.id}</td>
                 <td>
-                  <span className={`carousel-status ${c.status}`}>{STATUS_LABEL[c.status]}</span>
+                  <span className={`carousel-status ${c.status}`}>{statusLabel(c.status)}</span>
                 </td>
                 <td>{new Date(c.updatedAt).toLocaleString()}</td>
                 <td>{c.slideCount}</td>
                 <td>
                   <Link to={`/${slug}/carousels/${c.id}`} className="carousel-open-link">
-                    Abrir
+                    {t("carouselList.open")}
                   </Link>
                 </td>
               </tr>
@@ -121,7 +128,7 @@ export function CarouselListRoute() {
             aria-selected={sidePanelTab === "assets"}
             onClick={() => setSidePanelTab("assets")}
           >
-            Assets
+            {t("carouselList.sidePanel.assetsTab")}
           </button>
           <button
             className="props-tab"
@@ -129,7 +136,7 @@ export function CarouselListRoute() {
             aria-selected={sidePanelTab === "templates"}
             onClick={() => setSidePanelTab("templates")}
           >
-            Templates
+            {t("carouselList.sidePanel.templatesTab")}
           </button>
         </div>
         <div className="props-body">
