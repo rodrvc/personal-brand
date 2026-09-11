@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadBrand } from "../brand-schema.js";
 import type { CarouselDocument } from "../carousel-document.js";
 import { validateDocument } from "../carousel-document.js";
-import { loadLayoutTemplate } from "../layout-template.js";
+import { freeLayoutTemplate, loadLayoutTemplate } from "../layout-template.js";
 import { renderFreeLayoutSlide, type FreeLayoutRenderContext } from "./free-layout.js";
 
 const ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -125,6 +125,48 @@ function buildDoc(overParams?: Record<string, unknown>): CarouselDocument {
   return result.document;
 }
 
+/** No `slot`s — safe against `freeLayoutTemplate()`, unlike `buildDoc()`'s slotted objects. */
+function buildFreeDoc(): CarouselDocument {
+  const raw = {
+    schemaVersion: 1,
+    id: "smoke-test-free",
+    title: "Smoke test carousel (no template)",
+    status: "draft",
+    createdAt: "2026-08-17T10:00:00.000Z",
+    updatedAt: "2026-08-17T10:00:00.000Z",
+    canvas: { w: 1080, h: 1350 },
+    prompt: { text: "Smoke test the free layout renderer with no template", createdAt: "2026-08-17T10:00:00.000Z" },
+    slides: [
+      {
+        id: "slide-1",
+        kind: "cover",
+        background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" },
+        objects: [
+          {
+            id: "obj-free",
+            kind: "text",
+            pinned: false,
+            locked: false,
+            source: "manual",
+            text: "Free text",
+            fontKey: "body",
+            fontSize: 30,
+            lineHeight: 1.2,
+            align: "left",
+            colorKey: "slate",
+            geometry: { x: 10, y: 10, w: 400, rotation: 0 },
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = validateDocument(raw, { brand, assetExists });
+  assert.equal(result.valid, true, "free-doc test fixture must validate");
+  if (!result.valid) throw new Error("unreachable");
+  return result.document;
+}
+
 /** Every `#rrggbb`/`#rgb`/`#rrggbbaa` literal appearing in a string. */
 function findHexLiterals(html: string): string[] {
   return html.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
@@ -175,7 +217,7 @@ const tests: Array<[string, () => void]> = [
     "pagination = 'steps' shows pagination only on step slides",
     () => {
       const doc = buildDoc({ zones: { footer: { pagination: "steps" } } });
-      const stepsTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", doc.template.params);
+      const stepsTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", doc.template!.params);
       const html0 = renderFreeLayoutSlide(brand, stepsTemplate, doc, 0, ctx);
       const html1 = renderFreeLayoutSlide(brand, stepsTemplate, doc, 1, ctx);
       const html2 = renderFreeLayoutSlide(brand, stepsTemplate, doc, 2, ctx);
@@ -190,7 +232,7 @@ const tests: Array<[string, () => void]> = [
     "pagination = 'none' shows no pagination on any slide",
     () => {
       const doc = buildDoc({ zones: { footer: { pagination: "none" } } });
-      const noneTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", doc.template.params);
+      const noneTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", doc.template!.params);
       const html0 = renderFreeLayoutSlide(brand, noneTemplate, doc, 0, ctx);
       const html1 = renderFreeLayoutSlide(brand, noneTemplate, doc, 1, ctx);
       const html2 = renderFreeLayoutSlide(brand, noneTemplate, doc, 2, ctx);
@@ -230,12 +272,45 @@ const tests: Array<[string, () => void]> = [
   ],
 
   [
+    "rendering with freeLayoutTemplate() emits no footer zone, no logo, no pagination",
+    () => {
+      const doc = buildFreeDoc();
+      const free = freeLayoutTemplate();
+      const html = renderFreeLayoutSlide(brand, free, doc, 0, ctx);
+      assert.doesNotMatch(html, /data-zone="footer"/, "free template must paint no footer zone");
+      assert.doesNotMatch(html, /footer-logo|footer-wordmark/, "free template must paint no logo");
+      assert.doesNotMatch(html, /footer-pagination/, "free template must paint no pagination");
+    },
+  ],
+  [
+    "rendering with freeLayoutTemplate() still emits the background zone with the brand colour and body font",
+    () => {
+      const doc = buildFreeDoc();
+      const free = freeLayoutTemplate();
+      const html = renderFreeLayoutSlide(brand, free, doc, 0, ctx);
+      assert.match(html, /data-zone="background"/);
+      assert.ok(html.toLowerCase().includes(brand.colors.paper!.toLowerCase()));
+      assert.ok(html.includes(`font-family: ${brand.fonts.body}`));
+    },
+  ],
+  [
+    "renderFreeLayoutSlide completes for a document with no template reference",
+    () => {
+      const doc = buildFreeDoc();
+      assert.equal(doc.template, undefined);
+      const free = freeLayoutTemplate();
+      for (let i = 0; i < doc.slides.length; i++) {
+        assert.doesNotThrow(() => renderFreeLayoutSlide(brand, free, doc, i, ctx));
+      }
+    },
+  ],
+  [
     "template.params.zones.footer.height changes the rendered footer height",
     () => {
       const defaultDoc = buildDoc();
       const shrunkDoc = buildDoc({ zones: { footer: { height: 40 } } });
 
-      const shrunkTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", shrunkDoc.template.params);
+      const shrunkTemplate = loadLayoutTemplate(PROFILE_DIR, "explicativo", shrunkDoc.template!.params);
       assert.equal(shrunkTemplate.zones.footer.height, 40);
 
       const defaultHtml = renderFreeLayoutSlide(brand, template, defaultDoc, 0, ctx);

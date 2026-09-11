@@ -87,7 +87,7 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           />
         )}
         {panelTab === "marca" && <BrandPane slug={props.slug} />}
-        {panelTab === "templates" && <TemplatesPane slug={props.slug} activeTemplateId={doc.template.id} />}
+        {panelTab === "templates" && <TemplatesPane slug={props.slug} activeTemplateId={doc.template?.id} />}
       </div>
     </aside>
   );

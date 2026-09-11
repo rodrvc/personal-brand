@@ -3,10 +3,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadBrand } from "./brand-schema.js";
-import { changeSlideKind, resetObjectToSlot, resolveSlide } from "./carousel-document-resolve.js";
+import { changeSlideKind, changeTemplate, resetObjectToSlot, resolveSlide } from "./carousel-document-resolve.js";
 import type { CarouselDocument } from "./carousel-document.js";
 import { validateDocument } from "./carousel-document.js";
-import { loadLayoutTemplate } from "./layout-template.js";
+import { freeLayoutTemplate, loadLayoutTemplate } from "./layout-template.js";
 
 const ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = join(ENGINE_DIR, "..", "..", "profiles", "example");
@@ -186,6 +186,34 @@ const tests: Array<[string, () => void]> = [
       assert.equal(result.valid, false);
     },
   ],
+  [
+    "a document with no template key validates: absence means no template",
+    () => {
+      const raw = validDoc() as any;
+      delete raw.template;
+      const result = validateDocument(raw, { brand, assetExists });
+      assert.equal(result.valid, true);
+      if (!result.valid) return;
+      assert.equal(result.document.template, undefined);
+    },
+  ],
+  [
+    "rejects template: null — absence, not null, is what means no template",
+    () => {
+      const doc = validDoc({ template: null as any });
+      const result = validateDocument(doc, { brand, assetExists });
+      assert.equal(result.valid, false);
+    },
+  ],
+  [
+    "a document with a template key still validates",
+    () => {
+      const result = validateDocument(validDoc(), { brand, assetExists });
+      assert.equal(result.valid, true);
+      if (!result.valid) return;
+      assert.deepEqual(result.document.template, { id: "explicativo" });
+    },
+  ],
 
   // --- resolveSlide / resetObjectToSlot / changeSlideKind ---
 
@@ -331,6 +359,160 @@ const tests: Array<[string, () => void]> = [
       const doc = validDoc();
       const unchanged = changeSlideKind(doc.slides[0]!, "cover", template);
       assert.equal(unchanged, doc.slides[0]);
+    },
+  ],
+
+  // --- changeTemplate ---
+
+  [
+    "changeTemplate: a shared slot keeps its content and its slot, but loses its own geometry",
+    () => {
+      // "title" exists under kind "cover" in both templates — a shared slot.
+      const doc = validDoc();
+      const retargeted = {
+        ...template,
+        id: "retargeted",
+        slides: {
+          ...template.slides,
+          cover: {
+            slots: template.slides.cover!.slots.map((slot) =>
+              slot.name === "title" ? { ...slot, geometry: { ...slot.geometry, x: 12 } } : slot,
+            ),
+          },
+        },
+      };
+      const changed = changeTemplate(doc, template, retargeted as any);
+      const title = changed.slides[0]!.objects.find((object) => object.id === "obj-title")!;
+      assert.equal(title.slot, "title");
+      assert.equal((title as any).text, "We shipped it");
+      assert.equal((title as any).geometry, undefined);
+    },
+  ],
+  [
+    "changeTemplate: a slot absent from the target loses its slot and gains the frozen old geometry",
+    () => {
+      // "body" exists under "step" in the default template, not in target.
+      const doc = validDoc();
+      const target = { ...template, id: "no-body", slides: { ...template.slides, step: { slots: [] } } };
+      const changed = changeTemplate(doc, template, target as any);
+      const body = changed.slides[1]!.objects.find((object) => object.id === "obj-body")!;
+      assert.equal(body.slot, undefined);
+      const originalSlot = template.slides.step!.slots.find((slot) => slot.name === "body")!;
+      assert.deepEqual((body as any).geometry, originalSlot.geometry);
+    },
+  ],
+  [
+    "changeTemplate: a free object (no slot) is untouched",
+    () => {
+      const doc = validDoc();
+      const freeGeometry = { x: 321, y: 654, w: 400, rotation: 0 };
+      (doc.slides[0]!.objects as any[]).push({
+        id: "obj-free", kind: "text", pinned: false, locked: false, source: "manual",
+        text: "Free", fontKey: "body", fontSize: 20, lineHeight: 1.2, align: "left",
+        colorKey: "slate", geometry: freeGeometry,
+      });
+      const target = { ...template, id: "other", slides: { cover: { slots: [] }, step: { slots: [] }, closing: { slots: [] } } };
+      const changed = changeTemplate(doc, template, target as any);
+      const free = changed.slides[0]!.objects.find((object) => object.id === "obj-free")!;
+      assert.deepEqual((free as any).geometry, freeGeometry);
+      assert.equal(free.slot, undefined);
+    },
+  ],
+  [
+    "changeTemplate: swapping to freeLayoutTemplate() demotes everything, freezing each origin slot's geometry",
+    () => {
+      const doc = validDoc();
+      const free = freeLayoutTemplate();
+      const changed = changeTemplate(doc, template, free);
+      assert.equal(changed.template, undefined, "swapping to the free template clears doc.template");
+      changed.slides.forEach((slide, slideIndex) => {
+        const originSlide = doc.slides[slideIndex]!;
+        slide.objects.forEach((object, objectIndex) => {
+          assert.equal(object.slot, undefined, `object "${object.id}" must be demoted to a free object`);
+          const originObject = originSlide.objects[objectIndex]!;
+          const originSlot = originObject.slot
+            ? template.slides[originSlide.kind]!.slots.find((slot) => slot.name === originObject.slot)
+            : undefined;
+          if (originSlot) {
+            assert.deepEqual((object as any).geometry, originSlot.geometry, `object "${object.id}" must freeze the origin slot's geometry`);
+          }
+        });
+        assert.doesNotThrow(() => resolveSlide(changed, slide, free));
+      });
+    },
+  ],
+  [
+    "changeTemplate: swapping FROM freeLayoutTemplate() leaves objects unchanged (nothing was ever slotted)",
+    () => {
+      const doc = validDoc();
+      const free = freeLayoutTemplate();
+      const freed = changeTemplate(doc, template, free);
+      const backToTemplate = changeTemplate(freed, free, template);
+      for (const slide of backToTemplate.slides) {
+        for (const object of slide.objects) {
+          assert.equal(object.slot, undefined, `object "${object.id}" has no slot in the free document and cannot regain one`);
+        }
+      }
+    },
+  ],
+  [
+    "changeTemplate: drops template.params on swap and bumps updatedAt",
+    () => {
+      const doc = validDoc({ template: { id: "explicativo", params: { zones: { footer: { height: 40 } } } } });
+      const otherTemplate = { ...template, id: "other" };
+      const changed = changeTemplate(doc, template, otherTemplate as any);
+      assert.deepEqual(changed.template, { id: "other" });
+      assert.notEqual(changed.updatedAt, doc.updatedAt);
+    },
+  ],
+  [
+    "changeTemplate then changeSlideKind compose exactly like remapObjects's rule applied twice by hand",
+    () => {
+      const doc = validDoc();
+      const coverSlide = doc.slides[0]!; // kind "cover", obj-title slotted to "title"
+
+      // "target" keeps "title" under "cover" (retargeted geometry) but not
+      // under "closing" — whichever step lands on "closing" under "target"
+      // must demote the object there.
+      const target = {
+        ...template,
+        id: "target",
+        slides: {
+          ...template.slides,
+          cover: {
+            slots: template.slides.cover!.slots.map((slot) =>
+              slot.name === "title" ? { ...slot, geometry: { ...slot.geometry, x: 500 } } : slot,
+            ),
+          },
+          closing: { slots: template.slides.closing!.slots.filter((slot) => slot.name !== "title") },
+        },
+      };
+      const targetCoverSlot = target.slides.cover.slots.find((s) => s.name === "title")!;
+      const templateClosingSlot = template.slides.closing!.slots.find((s) => s.name === "title")!;
+
+      // Order A: changeTemplate (cover -> cover, slot kept) then
+      // changeSlideKind (cover -> closing under target, slot dropped) —
+      // demotes at step 2, freezing target's own cover geometry.
+      const afterTemplateA = changeTemplate(doc, template, target as any);
+      const slideA = changeSlideKind(afterTemplateA.slides[0]!, "closing", target as any);
+      const objA = slideA.objects.find((o) => o.id === "obj-title")!;
+      assert.equal(objA.slot, undefined);
+      assert.deepEqual((objA as any).geometry, targetCoverSlot.geometry);
+
+      // Order B: changeSlideKind (cover -> closing under the ORIGINAL
+      // template, which still declares "title" for both kinds — slot
+      // survives) then changeTemplate (closing -> closing under target,
+      // slot dropped) — demotes at step 2 instead, freezing the ORIGINAL
+      // template's closing geometry. Same rule, different step, different
+      // frozen value — by construction, not a bug: "which template is in
+      // force when the slot disappears" differs between the two orders.
+      const slideB0 = changeSlideKind(coverSlide, "closing", template);
+      assert.equal(slideB0.objects[0]!.slot, "title");
+      const afterKindB = { ...doc, slides: [slideB0, ...doc.slides.slice(1)] };
+      const afterTemplateB = changeTemplate(afterKindB, template, target as any);
+      const objB = afterTemplateB.slides[0]!.objects.find((o) => o.id === "obj-title")!;
+      assert.equal(objB.slot, undefined);
+      assert.deepEqual((objB as any).geometry, templateClosingSlot.geometry, "frozen from the ORIGINAL template's closing slot, the last one it resolved against");
     },
   ],
 ];
