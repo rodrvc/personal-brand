@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "tsx src/profile-store.test.ts && tsx src/export/export-versioning.test.ts && tsx src/compose/regenerate.test.ts && tsx src/routes/profiles.test.ts",
+    "test": "tsx src/profile-store.test.ts && tsx src/export/export-versioning.test.ts && tsx src/compose/regenerate.test.ts && tsx src/routes/profiles.test.ts && tsx src/routes/export.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
