@@ -108,7 +108,9 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
   }
 
   const grouped = groupAssetsByKind(entries ?? []);
-  const candidates = (entries ?? []).filter((e) => e.status === "candidate");
+  // Fonts are uploaded files, never generated pieces, so they are not
+  // reclassification candidates even while their status is still "candidate".
+  const candidates = (entries ?? []).filter((e) => e.status === "candidate" && e.kind !== "font");
 
   return (
     <>
