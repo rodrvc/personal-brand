@@ -112,19 +112,7 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
   return { id: slide.id, kind: slide.kind, background: slide.background, objects };
 }
 
-/**
- * "Reset to template": drops an object's own `geometry`, restoring
- * inheritance from its slot. Throws if the object has no `slot` — a free
- * object has nothing to reset to, and that's a caller error rather than
- * something this function should guess at silently.
- */
-export function resetObjectToSlot<T extends SlideObject>(object: T): T {
-  if (!object.slot) {
-    throw new Error(`Object "${object.id}" has no slot — nothing to reset it to.`);
-  }
-  const { geometry: _geometry, ...rest } = object;
-  return rest as T;
-}
+export { resetObjectToSlot } from "./object-reset.js";
 
 /**
  * Changes a slide's `kind`, carrying over text for slots that exist under

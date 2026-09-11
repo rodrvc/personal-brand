@@ -9,6 +9,28 @@ import type {
   SlideObject,
   TextObject,
 } from "../api/types";
+import { resetObjectToSlot as engineResetObjectToSlot } from "../../../../system/ig-carousel/object-reset.js";
+
+/**
+ * Keeps an object's box fully inside the canvas (QA: a text object was
+ * dragged to `geometry.y: -203` with no clamp). Clamps the whole box, not
+ * just the origin: the far edge (`x + w`, `y + h`) must also stay on-canvas.
+ * An object larger than the canvas is pinned at 0 rather than shrunk —
+ * resizing is a separate, explicit user action. `rotation` is ignored: this
+ * is an axis-aligned clamp, and a rotated box's true bounding rect isn't
+ * representable in this geometry shape.
+ */
+export function clampGeometryToCanvas(geometry: Geometry, canvas: { w: number; h: number }): Geometry {
+  const x = geometry.w >= canvas.w ? 0 : Math.min(Math.max(geometry.x, 0), canvas.w - geometry.w);
+  const result: Geometry = { ...geometry, x };
+  if (geometry.h !== undefined) {
+    const y = geometry.h >= canvas.h ? 0 : Math.min(Math.max(geometry.y, 0), canvas.h - geometry.h);
+    result.y = y;
+  } else {
+    result.y = Math.min(Math.max(geometry.y, 0), canvas.h);
+  }
+  return result;
+}
 
 function mapSlide(doc: CarouselDocument, slideId: string, fn: (slide: Slide) => Slide): CarouselDocument {
   return {
@@ -102,7 +124,8 @@ export function setBackgroundPinned(doc: CarouselDocument, slideId: string, pinn
 }
 
 export function setObjectGeometry(doc: CarouselDocument, slideId: string, objectId: string, geometry: Geometry): CarouselDocument {
-  return mapSlide(doc, slideId, (slide) => mapObject(slide, objectId, (o) => ({ ...o, geometry })));
+  const clamped = clampGeometryToCanvas(geometry, doc.canvas);
+  return mapSlide(doc, slideId, (slide) => mapObject(slide, objectId, (o) => ({ ...o, geometry: clamped })));
 }
 
 export function setTextFontSize(doc: CarouselDocument, slideId: string, objectId: string, fontSize: number): CarouselDocument {
@@ -118,9 +141,10 @@ export function setObjectGeometryAndFontSize(
   geometry: Geometry,
   fontSize: number | undefined,
 ): CarouselDocument {
+  const clamped = clampGeometryToCanvas(geometry, doc.canvas);
   return mapSlide(doc, slideId, (slide) =>
     mapObject(slide, objectId, (o) => {
-      const next = { ...o, geometry };
+      const next = { ...o, geometry: clamped };
       if (fontSize !== undefined && next.kind === "text") (next as TextObject).fontSize = fontSize;
       return next;
     }),
@@ -144,14 +168,19 @@ export function setTextStyle(
   );
 }
 
+/**
+ * Restores a slotted object to whatever the template slot defines. The
+ * field-dropping rule (geometry, plus a text object's typographic
+ * overrides — never `colorKey`, a document-level pin) lives once in the
+ * engine (`resetObjectToSlot`, carousel-document-resolve.ts) so callers
+ * can't drift into a different reset rule. This wrapper just locates the
+ * object and no-ops on a free (unslotted) one — the engine function throws
+ * for that, a caller bug here since "Restablecer" only renders when
+ * `selectedObject.slot` is set.
+ */
 export function resetObjectToSlot(doc: CarouselDocument, slideId: string, objectId: string): CarouselDocument {
   return mapSlide(doc, slideId, (slide) =>
-    mapObject(slide, objectId, (o) => {
-      if (!o.slot) return o;
-      const { geometry: _geometry, ...rest } = o;
-      void _geometry;
-      return rest as SlideObject;
-    }),
+    mapObject(slide, objectId, (o) => (o.slot ? engineResetObjectToSlot(o) : o)),
   );
 }
 
