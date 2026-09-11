@@ -1,15 +1,16 @@
 import { Link } from "react-router-dom";
 
 import type { BrandTokens, CarouselDocument } from "../api/types";
-import type { Tool } from "./Editor";
 import "./TopBar.css";
 
 interface TopBarProps {
   slug: string;
   brand: BrandTokens;
   doc: CarouselDocument;
-  tool: Tool;
-  onToolChange: (tool: Tool) => void;
+  /** Whether anything is selected on the active slide — the deselect button is inert otherwise, and says so. */
+  hasSelection: boolean;
+  onClearSelection: () => void;
+  onOpenAssets: () => void;
   onAddText: () => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -30,8 +31,9 @@ export function TopBar({
   slug,
   brand,
   doc,
-  tool,
-  onToolChange,
+  hasSelection,
+  onClearSelection,
+  onOpenAssets,
   onAddText,
   canUndo,
   canRedo,
@@ -61,28 +63,20 @@ export function TopBar({
         </div>
       </div>
       <div className="topbar-sep" />
-      <button
-        className={`topbar-tool ${tool === "select" ? "on" : ""}`}
-        title="Seleccionar"
-        onClick={() => onToolChange("select")}
-      >
+      <button className="topbar-tool" title="Deseleccionar" aria-label="Deseleccionar" onClick={onClearSelection} disabled={!hasSelection}>
         ▲
       </button>
-      <button className="topbar-tool" title="Añadir texto" onClick={onAddText}>
+      <button className="topbar-tool" title="Añadir texto" aria-label="Añadir texto" onClick={onAddText}>
         T
       </button>
-      <button
-        className={`topbar-tool ${tool === "asset" ? "on" : ""}`}
-        title="Asset"
-        onClick={() => onToolChange("asset")}
-      >
+      <button className="topbar-tool" title="Añadir asset" aria-label="Añadir asset" onClick={onOpenAssets}>
         ▧
       </button>
       <div className="topbar-sep" />
-      <button className="topbar-tool" title="Deshacer" onClick={onUndo} disabled={!canUndo}>
+      <button className="topbar-tool" title="Deshacer" aria-label="Deshacer" onClick={onUndo} disabled={!canUndo}>
         ↺
       </button>
-      <button className="topbar-tool" title="Rehacer" onClick={onRedo} disabled={!canRedo}>
+      <button className="topbar-tool" title="Rehacer" aria-label="Rehacer" onClick={onRedo} disabled={!canRedo}>
         ↻
       </button>
       <div className="topbar-spacer" />
