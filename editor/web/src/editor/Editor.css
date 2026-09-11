@@ -19,7 +19,12 @@
 .editor-center {
   display: grid;
   grid-template-rows: auto 1fr;
-  overflow: hidden;
+  /* Stage.css gives .stage a min-height so the active slide is never
+     clipped; let this column scroll vertically instead when the viewport
+     is shorter than that (the page body itself must never scroll
+     horizontally). */
+  overflow-x: hidden;
+  overflow-y: auto;
   min-width: 0;
 }
 
