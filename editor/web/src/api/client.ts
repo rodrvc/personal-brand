@@ -76,15 +76,23 @@ export function getCarousel(slug: string, id: string): Promise<CarouselDocument>
   return request(`/profiles/${slug}/carousels/${id}`);
 }
 
+/**
+ * `keepalive`: used by useDocumentEditor.ts's unload flush so the PUT
+ * survives past `pagehide`, like `navigator.sendBeacon`. Chrome caps a
+ * keepalive body at 64KB, well above a document's size (~1KB/slide); the
+ * only field that could grow toward that cap is `prompt.runs[]`.
+ */
 export function putCarousel(
   slug: string,
   doc: CarouselDocument,
-  opts?: { snapshot?: boolean },
+  opts?: { snapshot?: boolean; keepalive?: boolean; signal?: AbortSignal },
 ): Promise<CarouselDocument> {
   const query = opts?.snapshot ? "?snapshot=true" : "";
   return request(`/profiles/${slug}/carousels/${doc.id}${query}`, {
     method: "PUT",
     body: JSON.stringify(doc),
+    ...(opts?.keepalive ? { keepalive: true } : {}),
+    ...(opts?.signal ? { signal: opts.signal } : {}),
   });
 }
 
