@@ -22,6 +22,18 @@ function mapObject(slide: Slide, objectId: string, fn: (object: SlideObject) => 
   return { ...slide, objects: slide.objects.map((o) => (o.id === objectId ? fn(o) : o)) };
 }
 
+/**
+ * Ids for objects and slides created in the editor. `Date.now()` alone
+ * collided when two additions landed in the same millisecond (fast clicks,
+ * batch inserts), which gave React duplicate keys; a per-session counter
+ * keeps every id distinct within a session, and the timestamp keeps them
+ * distinct across sessions.
+ */
+let idCounter = 0;
+export function newEditorId(prefix: string): string {
+  idCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
+}
 export function setObjectPinned(doc: CarouselDocument, slideId: string, objectId: string, pinned: boolean): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => mapObject(slide, objectId, (o) => ({ ...o, pinned })));
 }
@@ -101,7 +113,7 @@ export function setBackgroundAsset(doc: CarouselDocument, slideId: string, asset
 export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, assetId: string): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => {
     const object: AssetObject = {
-      id: `obj-${slideId}-lib-${Date.now()}`,
+      id: newEditorId(`obj-${slideId}-lib`),
       pinned: true,
       locked: false,
       source: "library",
@@ -188,7 +200,7 @@ export function addTextObject(
 /** Adds a slide after `afterIndex` with a plain color background — a slide is never created with no background (schema requires one), so the caller passes a `brand.colors` key. */
 export function addSlideWithColor(doc: CarouselDocument, afterIndex: number, colorKey: string, kind: SlideKind = "step"): CarouselDocument {
   const newSlide: Slide = {
-    id: `slide-${Date.now()}`,
+    id: newEditorId("slide"),
     kind,
     background: { mode: "color", colorKey, pinned: false, source: "manual" },
     objects: [],

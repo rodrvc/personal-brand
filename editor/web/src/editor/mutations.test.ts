@@ -6,7 +6,7 @@ import { resolveSlide } from "../../../../system/ig-carousel/carousel-document-r
 import { validateDocument, type CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { addTextObject } from "./mutations.js";
+import { addTextObject, newEditorId } from "./mutations.js";
 
 /**
  * `addTextObject` is the only path in the editor that can put text on a
@@ -121,3 +121,10 @@ function baseDoc(): CarouselDocument {
 }
 
 console.log("mutations: addTextObject seeds from a template slot, then falls back to a free object");
+
+// Ids minted in the same millisecond must still be distinct.
+{
+  const ids = new Set(Array.from({ length: 1000 }, () => newEditorId("obj-x-text")));
+  assert.equal(ids.size, 1000, "newEditorId must not collide within a burst");
+  console.log("mutations: newEditorId stays unique within a burst");
+}
