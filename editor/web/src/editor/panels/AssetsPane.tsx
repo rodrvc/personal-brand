@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 
 import { assetFileUrl, listAssets } from "../../api/client";
 import type { AssetEntry } from "../../api/types";
-import { ASSET_KIND_LABEL, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
+import { assetKindLabel, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
+import { t } from "../../i18n";
 import "./PropertiesPanel.css";
 
 interface AssetsPaneProps {
@@ -43,7 +44,7 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
     return <p style={{ color: "var(--ui-danger)" }}>{error}</p>;
   }
   if (!entries) {
-    return <p className="props-hint">Cargando assets de {slug}…</p>;
+    return <p className="props-hint">{t("assetsPane.loading", { slug })}</p>;
   }
 
   const grouped = groupAssetsByKind(entries);
@@ -51,9 +52,9 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
   if (grouped.size === 0) {
     return (
       <div className="props-card">
-        <div className="props-card-heading">Assets</div>
+        <div className="props-card-heading">{t("assetsPane.heading")}</div>
         <p className="props-hint">
-          La marca <b>{slug}</b> todavía no tiene assets en su biblioteca.
+          {t("assetsPane.emptyPrefix")} <b>{slug}</b> {t("assetsPane.emptySuffix")}
         </p>
       </div>
     );
@@ -67,7 +68,7 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
       {Array.from(grouped.entries()).map(([kind, kindEntries]) => (
         <div key={kind} className="props-card">
           <div className="props-card-heading">
-            {ASSET_KIND_LABEL[kind]}
+            {assetKindLabel(kind)}
             <span
               style={{
                 marginLeft: "auto",
@@ -78,7 +79,7 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
                 color: "var(--ui-ink-3)",
               }}
             >
-              {kindEntries.length} archivos
+              {t("common.filesCount", { count: kindEntries.length })}
             </span>
           </div>
           <div className="asset-grid">
@@ -102,7 +103,7 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
                       {fileName}
                     </span>
                   )}
-                  {entry.origin === "ai" && <span className="origin-tag">IA</span>}
+                  {entry.origin === "ai" && <span className="origin-tag">{t("common.originAi")}</span>}
                 </div>
               );
             })}

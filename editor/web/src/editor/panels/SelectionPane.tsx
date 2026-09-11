@@ -11,6 +11,8 @@ import {
   setTextContent,
   setTextStyle,
 } from "../mutations";
+import { t } from "../../i18n";
+import type { LocaleKey } from "../../i18n";
 
 interface SelectionPaneProps {
   slug: string;
@@ -23,7 +25,17 @@ interface SelectionPaneProps {
   onDocReplace: (next: CarouselDocument) => void;
 }
 
-const ORIGIN_LABEL: Record<string, string> = { ai: "IA", library: "Biblioteca", manual: "Manual" };
+/** Piece origin → its LocaleKey. `t()` is called lazily, in `originLabel()`, never at module load. */
+const ORIGIN_LABEL_KEY: Record<string, LocaleKey> = {
+  ai: "common.originAi",
+  library: "selectionPane.origin.library",
+  manual: "selectionPane.origin.manual",
+};
+
+function originLabel(source: string): string {
+  const key = ORIGIN_LABEL_KEY[source];
+  return key ? t(key) : source;
+}
 
 /**
  * The generate/regenerate control only makes sense for a piece that is
@@ -150,9 +162,9 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
       {selectedObject?.kind === "text" && (
         <div className="props-card">
           <div className="props-card-heading">
-            {selectedObject.slot ?? "Texto"}
+            {selectedObject.slot ?? t("selectionPane.textHeadingFallback")}
             <span className={`origin-badge ${selectedObject.source}`} style={{ marginLeft: "auto" }}>
-              {selectedObject.pinned ? "fijado" : ORIGIN_LABEL[selectedObject.source]}
+              {selectedObject.pinned ? t("selectionPane.pinned") : originLabel(selectedObject.source)}
             </span>
           </div>
           <textarea
@@ -163,7 +175,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
           />
           <div className="props-row">
             <div className="props-field">
-              <label>Tamaño</label>
+              <label>{t("selectionPane.fontSizeLabel")}</label>
               <input
                 className="ui-input"
                 type="number"
@@ -178,7 +190,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
               />
             </div>
             <div className="props-field">
-              <label>Interlínea</label>
+              <label>{t("selectionPane.lineHeightLabel")}</label>
               <input
                 className="ui-input"
                 type="number"
@@ -192,21 +204,25 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
           </div>
           <div className="props-row">
             <div className="props-field">
-              <label>Posición</label>
+              <label>{t("selectionPane.positionLabel")}</label>
               <input
                 className="ui-input"
                 readOnly
-                value={selectedObject.geometry ? `${selectedObject.geometry.x} · ${selectedObject.geometry.y}` : "heredada"}
+                value={
+                  selectedObject.geometry
+                    ? `${selectedObject.geometry.x} · ${selectedObject.geometry.y}`
+                    : t("selectionPane.positionInherited")
+                }
               />
             </div>
             <div className="props-field">
-              <label>Rotación</label>
+              <label>{t("selectionPane.rotationLabel")}</label>
               <input className="ui-input" readOnly value={`${selectedObject.geometry?.rotation ?? 0}°`} />
             </div>
           </div>
           {selectedObject.slot && (
             <button className="ui-btn" onClick={() => onDocUpdate((prev) => resetObjectToSlot(prev, slide.id, selectedObject.id))}>
-              Restablecer al template
+              {t("selectionPane.resetToTemplate")}
             </button>
           )}
         </div>
@@ -215,8 +231,8 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
       {selectedObject?.kind === "text" && (
         <div className="props-card">
           <div className="props-card-heading">
-            Color
-            <span className="lock-hint">marca</span>
+            {t("selectionPane.colorHeading")}
+            <span className="lock-hint">{t("selectionPane.colorLockHint")}</span>
           </div>
           <div className="color-swatches">
             {colorKeys.map((key) => (
@@ -230,8 +246,8 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
             ))}
           </div>
           <p className="props-hint">
-            Los {colorKeys.length} colores de la marca. Son <b>inputs</b>, no configuración: si un color no está
-            aquí, no existe para esta pieza.
+            {t("selectionPane.colorHintPrefix", { count: colorKeys.length })} <b>inputs</b>
+            {t("selectionPane.colorHintSuffix")}
           </p>
         </div>
       )}
@@ -239,9 +255,9 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
       {selectedObject?.kind === "asset" && (
         <div className="props-card">
           <div className="props-card-heading">
-            {selectedObject.slot ?? "Asset"}
+            {selectedObject.slot ?? t("selectionPane.assetHeadingFallback")}
             <span className={`origin-badge ${selectedObject.source}`} style={{ marginLeft: "auto" }}>
-              {selectedObject.pinned ? "fijado" : ORIGIN_LABEL[selectedObject.source]}
+              {selectedObject.pinned ? t("selectionPane.pinned") : originLabel(selectedObject.source)}
             </span>
           </div>
           {!selectedObject.pinned && canOfferGenerate(selectedObject) && (
@@ -255,29 +271,30 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
               onDocReplace={onDocReplace}
             />
           )}
-          {selectedObject.pinned && <p className="props-hint">Fijado: no se puede regenerar hasta que lo liberes.</p>}
+          {selectedObject.pinned && <p className="props-hint">{t("common.pinnedNoRegenerate")}</p>}
           {!selectedObject.pinned && !canOfferGenerate(selectedObject) && (
-            <p className="props-hint">Esta pieza no pasó por IA — no hay imagen que generar ni regenerar.</p>
+            <p className="props-hint">{t("selectionPane.noAiHint")}</p>
           )}
         </div>
       )}
 
       <div className="props-card">
-        <div className="props-card-heading">Piezas de la lámina</div>
+        <div className="props-card-heading">{t("selectionPane.piecesHeading")}</div>
         <p className="props-hint" style={{ marginBottom: 2 }}>
-          Fija <b>✓</b> lo que te gustó y regenera <b>↻</b> el texto, o generá la imagen que falte.
+          {t("selectionPane.piecesHintPrefix")} <b>✓</b> {t("selectionPane.piecesHintMiddle")} <b>↻</b>{" "}
+          {t("selectionPane.piecesHintSuffix")}
         </p>
 
         <div
           className={`layer-row ${selection === null ? "on" : ""}`}
           onClick={() => onSelectionChange(null)}
         >
-          <span className="layer-name">Fondo</span>
+          <span className="layer-name">{t("selectionPane.backgroundLayerName")}</span>
           <span className="layer-actions">
-            <span className={`origin-badge ${slide.background.source}`}>{ORIGIN_LABEL[slide.background.source]}</span>
+            <span className={`origin-badge ${slide.background.source}`}>{originLabel(slide.background.source)}</span>
             <button
               className={`pin-btn ${slide.background.pinned ? "on" : ""}`}
-              title="Fijar"
+              title={t("selectionPane.pinAction")}
               onClick={(e) => {
                 e.stopPropagation();
                 onDocUpdate((prev) => setBackgroundPinned(prev, slide.id, !slide.background.pinned));
@@ -309,15 +326,15 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
             >
               <span className="layer-name">
                 {object.locked && <span className="layer-lock-icon">🔒 </span>}
-                {object.slot ?? (object.kind === "text" ? "Texto" : "Asset")}
+                {object.slot ?? (object.kind === "text" ? t("selectionPane.textHeadingFallback") : t("selectionPane.assetHeadingFallback"))}
               </span>
               <span className="layer-actions">
-                {!object.locked && <span className={`origin-badge ${object.source}`}>{ORIGIN_LABEL[object.source]}</span>}
+                {!object.locked && <span className={`origin-badge ${object.source}`}>{originLabel(object.source)}</span>}
                 {!object.locked && (
                   <>
                     <button
                       className={`pin-btn ${object.pinned ? "on" : ""}`}
-                      title="Fijar"
+                      title={t("selectionPane.pinAction")}
                       onClick={(e) => {
                         e.stopPropagation();
                         onDocUpdate((prev) => setObjectPinned(prev, slide.id, object.id, !object.pinned));
@@ -328,7 +345,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
                     {object.kind === "text" && (
                       <button
                         className="regen-btn"
-                        title="Regenerar"
+                        title={t("selectionPane.regenerateAction")}
                         disabled={object.pinned || regenerating === object.id}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -359,7 +376,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
         ))}
 
         {regenError && <p className="props-hint" style={{ color: "var(--ui-danger)" }}>{regenError}</p>}
-        <p className="props-note">Fija lo que quieras conservar; "Regenerar lo no fijado" redacta de nuevo solo los textos.</p>
+        <p className="props-note">{t("selectionPane.footerNote")}</p>
       </div>
     </>
   );
