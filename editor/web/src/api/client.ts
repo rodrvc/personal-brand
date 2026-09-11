@@ -99,11 +99,13 @@ export function putCarousel(
 /**
  * Creates a new, empty carousel (editor-ui spec's "New carousel opens
  * empty"): inert — no AI call, no cost, no job id. `title` is optional;
- * the server falls back to the carousel id when omitted.
+ * the server falls back to the carousel id when omitted. `templateId: null`
+ * is the explicit "sin template" choice — distinct from omitting the field,
+ * which the server reads as its default template.
  */
 export function createCarousel(
   slug: string,
-  body: { title?: string; templateId?: string; id?: string },
+  body: { title?: string; templateId?: string | null; id?: string },
 ): Promise<CreateCarouselResponse> {
   return request(`/profiles/${slug}/carousels`, {
     method: "POST",

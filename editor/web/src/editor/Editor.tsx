@@ -28,6 +28,8 @@ interface EditorProps {
   initialActiveSlide: number;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  /** Passed straight to the properties panel's Templates tab: a swap there re-renders the stage against the new template without a route refetch. */
+  onTemplateChange: (next: LayoutTemplate) => void;
 }
 
 export function Editor({
@@ -39,6 +41,7 @@ export function Editor({
   initialActiveSlide,
   theme,
   onToggleTheme,
+  onTemplateChange,
 }: EditorProps) {
   const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion } = editorState;
   const [activeIndex, setActiveIndex] = useState(() =>
@@ -172,6 +175,7 @@ export function Editor({
           onPanelTabChange={setPanelTab}
           stats={stats}
           onStatsRefresh={setStats}
+          onTemplateChange={onTemplateChange}
         />
       </div>
       <StatusBar

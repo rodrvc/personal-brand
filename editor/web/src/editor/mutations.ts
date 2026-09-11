@@ -7,9 +7,15 @@ import type {
   Slide,
   SlideKind,
   SlideObject,
+  TemplateRef,
   TextObject,
 } from "../api/types";
-import { resetObjectToSlot as engineResetObjectToSlot } from "../../../../system/ig-carousel/object-reset.js";
+import { t } from "../i18n";
+import {
+  changeTemplate,
+  FREE_TEMPLATE_ID,
+  resetObjectToSlot as engineResetObjectToSlot,
+} from "../../../../system/ig-carousel/object-reset.js";
 
 /**
  * Keeps an object's box fully inside the canvas (QA: a text object was
@@ -31,7 +37,6 @@ export function clampGeometryToCanvas(geometry: Geometry, canvas: { w: number; h
   }
   return result;
 }
-import { t } from "../i18n";
 
 function mapSlide(doc: CarouselDocument, slideId: string, fn: (slide: Slide) => Slide): CarouselDocument {
   return {
@@ -48,8 +53,32 @@ function mapObject(slide: Slide, objectId: string, fn: (object: SlideObject) => 
 /** Vertical gap kept between a new free box and whatever it is placed next to. */
 const PLACEMENT_GAP = 24;
 
+/**
+ * Inset used in place of the template's margins when it declares none.
+ * The free template (`freeLayoutTemplate()`) has zero margins on purpose —
+ * it imposes no structure — but `placeFreeGeometry` reads those margins as
+ * the safe area, so a new text box would land flush at (0, 0) and span the
+ * full canvas, touching every edge. A fixed inset keeps it visible and
+ * grabbable without inventing a structure the template deliberately omits.
+ */
+const NO_MARGIN_INSET = 80;
+
 /** Assumed height for a content-sized text rect with no `h` (no text slot in explicativo.json declares one) — a placement estimate, never `?? 0`, which would let a box sit flush on a heightless slot's baseline. */
 const NOMINAL_TEXT_HEIGHT = 120;
+
+/**
+ * The template's margins, or `NO_MARGIN_INSET` on every side when it
+ * declares none at all. Applied to placement only — nothing is written back
+ * to the template, so a template that really means "no margins" still
+ * renders its zones edge to edge.
+ */
+function effectiveMargins(template: LayoutTemplate): LayoutTemplate["zones"]["margins"] {
+  const { top, right, bottom, left } = template.zones.margins;
+  if (top === 0 && right === 0 && bottom === 0 && left === 0) {
+    return { top: NO_MARGIN_INSET, right: NO_MARGIN_INSET, bottom: NO_MARGIN_INSET, left: NO_MARGIN_INSET };
+  }
+  return template.zones.margins;
+}
 
 interface Rect {
   x: number;
@@ -88,7 +117,7 @@ function placeFreeGeometry(
   kind: SlideKind,
   h: number,
 ): { x: number; y: number } {
-  const margins = template.zones.margins;
+  const margins = effectiveMargins(template);
   const { left, top } = margins;
   const bottom = template.canvas.h - margins.bottom;
 
@@ -252,7 +281,9 @@ export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, as
  * When no free text slot exists for this slide kind, falls back to a free
  * (unslotted) object: `placeFreeGeometry` (see `occupiedRects`) finds a spot
  * inside the template's safe margins clear of everything already on the
- * slide, slotted or free, template-positioned or dragged. Styles with
+ * slide, slotted or free, template-positioned or dragged. With the free
+ * template, whose margins are all zero, `effectiveMargins` substitutes
+ * `NO_MARGIN_INSET` so the box does not land flush at (0, 0). Styles with
  * `brand.fonts.body` and the `onSurface` role's color key (a `brand.colors`
  * key, never a hex literal). That path always sets an explicit `h`, so it
  * stays visible even with empty text.
@@ -286,7 +317,7 @@ export function addTextObject(
       return { ...slide, objects: [...slide.objects, object] };
     }
 
-    const margins = template.zones.margins;
+    const margins = effectiveMargins(template);
     const h = NOMINAL_TEXT_HEIGHT;
     const { x, y } = placeFreeGeometry(slide.objects, template, slide.kind, h);
     const object: TextObject = {
@@ -317,4 +348,45 @@ export function addSlideWithColor(doc: CarouselDocument, afterIndex: number, col
 
 export function setSlideKind(doc: CarouselDocument, slideId: string, kind: SlideKind): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => ({ ...slide, kind }));
+}
+
+/**
+ * Points the document at a different template (or at none), applying the
+ * engine's swap rule (`changeTemplate`, object-reset.ts) to every slide:
+ * an object whose slot exists in both templates keeps its text and takes
+ * the new template's geometry; one whose slot the new template lacks stays
+ * where it is but loses its slot; a free object is untouched. Per-carousel
+ * `template.params` are dropped — they are keyed to the old template's
+ * shape.
+ *
+ * `ref` is the caller's intent and `to` is the template actually fetched;
+ * the two must describe the same choice. They come from different places —
+ * the panel knows which row the user clicked, the network knows what came
+ * back — so a mismatch is a real possibility (a stale row, a redirected
+ * fetch) and it is exactly the kind that would silently persist a document
+ * pointing at a template it was never remapped onto. Rather than letting
+ * either side win, disagreement throws: `ref` must be `undefined` for the
+ * free template and `{ id: to.id }` for any other.
+ */
+export function setTemplateRef(
+  doc: CarouselDocument,
+  ref: TemplateRef | undefined,
+  from: LayoutTemplate,
+  to: LayoutTemplate,
+): CarouselDocument {
+  const wantsFree = ref === undefined;
+  const isFree = to.id === FREE_TEMPLATE_ID;
+  if (wantsFree !== isFree || (ref !== undefined && ref.id !== to.id)) {
+    throw new Error(
+      `Template reference ${ref ? `"${ref.id}"` : "(none)"} does not match the resolved template "${to.id}" — ` +
+        `the document would point at a template its slides were not remapped onto.`,
+    );
+  }
+
+  const swapped = changeTemplate(doc, from, to);
+  if (ref === undefined) {
+    const { template: _template, ...rest } = swapped;
+    return rest as CarouselDocument;
+  }
+  return { ...swapped, template: ref };
 }
