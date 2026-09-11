@@ -9,7 +9,7 @@ import type {
   SlideObject,
   TextObject,
 } from "../api/types";
-import { resetObjectToSlot as engineResetObjectToSlot } from "../../../../system/ig-carousel/carousel-document-resolve.js";
+import { resetObjectToSlot as engineResetObjectToSlot } from "../../../../system/ig-carousel/object-reset.js";
 
 /**
  * Keeps an object's box fully inside the canvas (QA: a text object was
