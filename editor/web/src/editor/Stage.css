@@ -5,6 +5,9 @@
      clip the strip below with no scrollbar. min-content lets editor-center's
      overflow-y: auto see the strip and scroll to it instead. */
   min-height: min-content;
+  /* But a grid item's automatic min-width would also become min-content,
+     handing the strip all the width it wants instead of scrolling it. */
+  min-width: 0;
   background: var(--ui-bg);
 }
 
@@ -68,6 +71,9 @@
 .stage-strip {
   flex: none;
   height: 124px;
+  /* The tablist is a few px taller than this box; clip it here so the
+     excess never reaches editor-center's vertical scroll. */
+  overflow-y: hidden;
   background: var(--ui-surface);
   border-top: 1px solid var(--ui-line);
   padding: 12px 16px;

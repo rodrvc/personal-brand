@@ -58,6 +58,8 @@ function Thumb({
       type="button"
       ref={thumbRef}
       role="tab"
+      id={`stage-thumb-${slide.id}`}
+      aria-controls="stage-active-sheet"
       className={`stage-thumb ${active ? "on" : ""}`}
       aria-label={`Lámina ${numberLabel}`}
       aria-selected={active}
@@ -170,7 +172,12 @@ export function Stage({
     <div className="stage-wrap">
       <div className="stage" ref={stageRef}>
         {activeSlide && (
-          <div className="stage-sheet-container">
+          <div
+            className="stage-sheet-container"
+            role="tabpanel"
+            id="stage-active-sheet"
+            aria-labelledby={`stage-thumb-${activeSlide.id}`}
+          >
             <div className="stage-sheet active">
               <div className="stage-sheet-label">
                 <b>Lámina {activeIndex + 1}</b> · {activeSlide.kind}
