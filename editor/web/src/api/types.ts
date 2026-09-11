@@ -24,8 +24,14 @@ export type {
   LayoutTemplateOrigin,
   LayoutTemplateSummary,
 } from "../../../../system/ig-carousel/layout-template.ts";
+// Same rationale as above: `AssetKind` is derived from `ASSET_KINDS` in the
+// server's asset index, so the client union can never drift from the list
+// the server actually validates against (this is what let "font" go missing
+// here before — a hand-copied union silently fell behind).
+export type { AssetKind } from "../../../../system/assets/index.ts";
 
 import type { CarouselDocument, SlideKind } from "../../../../system/ig-carousel/carousel-document.ts";
+import type { AssetKind } from "../../../../system/assets/index.ts";
 
 export interface CarouselSummary {
   id: string;
@@ -41,7 +47,6 @@ export interface ProfileListingEntry {
   hasBrand: boolean;
 }
 
-export type AssetKind = "background" | "character" | "photo" | "logo" | "decoration" | "unclassified";
 export type AssetStatus = "candidate" | "approved" | "hidden";
 
 export interface AssetEntry {
