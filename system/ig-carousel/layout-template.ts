@@ -334,3 +334,39 @@ export function listLayoutTemplates(profileDir: string): LayoutTemplateSummary[]
 
   return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
 }
+
+/**
+ * Sentinel id for "no template". Never a file on disk — `loadLayoutTemplate`
+ * never receives it and `listLayoutTemplates` never returns it — so a
+ * caller can use it as an explicit "free" choice in a picker without it
+ * colliding with a real template id (`idsFromJsonDir` only ever returns ids
+ * backed by an actual `.json` file).
+ */
+export const FREE_TEMPLATE_ID = "__free__";
+
+/**
+ * The template used for a document with no template reference (carousel-
+ * document spec's "Template reference on the document"): every zone is
+ * inert (zero-height footer, no logo, no pagination, zero margins) and no
+ * slide kind declares any slot, so `resolveSlide` never has a slot to look
+ * up and every object in the document is necessarily a free object. Not
+ * read from disk and never registered anywhere `loadLayoutTemplate` or
+ * `listLayoutTemplates` search, which is what keeps it out of any listing
+ * by construction rather than by filtering.
+ */
+export function freeLayoutTemplate(): LayoutTemplate {
+  return {
+    id: FREE_TEMPLATE_ID,
+    canvas: { w: 1080, h: 1350 },
+    zones: {
+      background: { policy: "fill" },
+      footer: { height: 0, logo: "none", pagination: "none" },
+      margins: { top: 0, right: 0, bottom: 0, left: 0 },
+    },
+    slides: {
+      cover: { slots: [] },
+      step: { slots: [] },
+      closing: { slots: [] },
+    },
+  };
+}

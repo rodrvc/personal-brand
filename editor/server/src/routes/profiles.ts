@@ -187,7 +187,12 @@ export function profilesRouter(): Router {
         previousDocForPinDiff = previousRaw;
         const previousShape = (previousRaw.slides ?? []).map((s) => s.kind).join(",");
         const nextShape = result.document.slides.map((s) => s.kind).join(",");
-        const templateChanged = previousRaw.template?.id !== undefined && previousRaw.template.id !== result.document.template.id;
+        // Plain inequality over both sides' optional `template?.id` — this
+        // already covers every case: unchanged (equal, both real ids or
+        // both undefined), swapped to another template, or swapped to/from
+        // "no template" (one side undefined). No `!== undefined` guard is
+        // needed since `undefined !== undefined` is `false`.
+        const templateChanged = previousRaw.template?.id !== result.document.template?.id;
         structuralChange =
           (previousRaw.slides?.length ?? 0) !== result.document.slides.length ||
           previousShape !== nextShape ||

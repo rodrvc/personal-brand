@@ -11,7 +11,7 @@ import { hashContent, loadIndex, updateEntry } from "../../../../system/assets/i
 
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { buildExportRenderContext } from "../render-context.js";
-import { readValidatedDocument, writeDocument } from "../document-store.js";
+import { readValidatedDocument, requireTemplateRef, writeDocument } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
 
 /**
@@ -190,7 +190,8 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
   job.status = "running";
   try {
     const brand = loadBrand(store.roots.profileDir);
-    const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
+    const ref = requireTemplateRef(doc);
+    const template = loadLayoutTemplate(store.roots.profileDir, ref.id, brand, ref.params);
     const index = loadIndex(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 
@@ -226,7 +227,7 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
       exportedAt: new Date().toISOString(),
       engine: {
         gitSha: gitShaOrUnknown(),
-        templateId: doc.template.id,
+        templateId: ref.id,
         templateHash: hashTemplate(template),
       },
       brand,
