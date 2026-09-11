@@ -1,13 +1,17 @@
 import type { SlideObject } from "./carousel-document.js";
 
 /**
- * Pure object rules the editor's web bundle may import at runtime.
+ * Pure object rules the editor's web bundle imports at runtime.
  *
- * This module must stay free of value imports: the browser bundle reaches
- * it through `editor/web/src/editor/mutations.ts`, and anything it pulls in
- * (`node:fs` via layout-template, `zod` via the schemas) would break the
- * app at load with no visible error. `carousel-document-resolve.ts`
- * re-exports it so engine callers keep one import path.
+ * This module must stay importable from the browser: no value imports.
+ * The resolver next door (`carousel-document-resolve.ts`) sits beside
+ * Node-reaching modules (`layout-template.ts` imports `node:fs`, the
+ * schemas import `zod`), and the moment it acquires a value import from
+ * one of them (#36 does, for the free template's sentinel) anything in
+ * `editor/web` that imports the resolver pulls Node into the bundle and
+ * the app renders a blank page. The resolver re-exports this rule so
+ * engine callers keep one import path; `pnpm check` builds the bundle
+ * to catch a regression.
  */
 /**
  * "Reset to template": drops `geometry` and, for a text object, its
