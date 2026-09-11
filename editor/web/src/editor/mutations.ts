@@ -22,6 +22,77 @@ function mapObject(slide: Slide, objectId: string, fn: (object: SlideObject) => 
   return { ...slide, objects: slide.objects.map((o) => (o.id === objectId ? fn(o) : o)) };
 }
 
+/** Vertical gap kept between a new free box and whatever it is placed next to. */
+const PLACEMENT_GAP = 24;
+
+/** Assumed height for a content-sized text rect with no `h` (no text slot in explicativo.json declares one) — a placement estimate, never `?? 0`, which would let a box sit flush on a heightless slot's baseline. */
+const NOMINAL_TEXT_HEIGHT = 120;
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Every rect already on the slide, resolved like `resolveSlide` does: an object's own `geometry` wins if present (a free object, or a slotted one the user dragged — `setObjectGeometryAndFontSize` sets `geometry` without clearing `slot`); otherwise a slotted object falls back to its slot's template rect. */
+function occupiedRects(objects: SlideObject[], template: LayoutTemplate, kind: SlideKind): Rect[] {
+  return objects
+    .map((o): Rect | undefined => {
+      const geometry = o.geometry ?? template.slides[kind]?.slots.find((s) => s.name === o.slot)?.geometry;
+      if (!geometry) return undefined;
+      return { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h ?? NOMINAL_TEXT_HEIGHT };
+    })
+    .filter((r): r is Rect => r !== undefined);
+}
+
+/**
+ * Placement for a new full-width free text box of height `h` avoiding
+ * everything already on the slide. Pass 1 searches only `y` (free boxes
+ * always span the full content width): walk the occupied spans top to
+ * bottom and return the first `y` from the top margin whose `[y, y+h]`,
+ * padded by `PLACEMENT_GAP`, clears every span and fits above the bottom
+ * margin. Pass 2, when no gap fits, cascades both axes together
+ * (`margin + k*GAP`, clamped) like a desktop editor's paste-in-place —
+ * moving both axes keeps origins distinct across many boxes, unlike a
+ * y-only cascade that repeats itself once it clamps. Once both axes
+ * saturate, further boxes share that clamped origin: the honest limit of a
+ * full slide, not a bug in the search.
+ */
+function placeFreeGeometry(
+  objects: SlideObject[],
+  template: LayoutTemplate,
+  kind: SlideKind,
+  h: number,
+): { x: number; y: number } {
+  const margins = template.zones.margins;
+  const { left, top } = margins;
+  const bottom = template.canvas.h - margins.bottom;
+
+  const rects = occupiedRects(objects, template, kind);
+  const spans = rects.map((r) => [r.y - PLACEMENT_GAP, r.y + r.h + PLACEMENT_GAP] as const).sort((a, b) => a[0] - b[0]);
+
+  let candidate = top;
+  for (const [spanStart, spanEnd] of spans) {
+    if (candidate + h <= spanStart) break; // gap found before this span
+    if (candidate < spanEnd) candidate = spanEnd; // push past an overlapping span
+  }
+  if (candidate + h <= bottom) return { x: left, y: candidate };
+
+  // Pass 2: diagonal cascade. `x` has no template ceiling (a free box's `w`
+  // stays fixed by the caller), so clamp its drift to a few gaps; `y` clamps
+  // to the bottom margin like pass 1.
+  const maxDriftSteps = 6;
+  const origins = new Set(rects.map((r) => `${r.x},${r.y}`));
+  const bottomY = Math.max(top, bottom - h);
+  for (let k = 0; ; k++) {
+    const x = left + PLACEMENT_GAP * Math.min(k, maxDriftSteps);
+    const y = Math.min(top + PLACEMENT_GAP * k, bottomY);
+    if (!origins.has(`${x},${y}`)) return { x, y };
+    if (y >= bottomY && k >= maxDriftSteps) return { x, y }; // saturated: honest overlap
+  }
+}
+
 export function setObjectPinned(doc: CarouselDocument, slideId: string, objectId: string, pinned: boolean): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => mapObject(slide, objectId, (o) => ({ ...o, pinned })));
 }
@@ -136,11 +207,12 @@ export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, as
  * the owner overwrites it the moment they start typing.
  *
  * When no free text slot exists for this slide kind, falls back to a free
- * (unslotted) object: a default position inside the template's safe
- * margins, `brand.fonts.body` and the `onSurface` role's color key (a
- * `brand.colors` key, never a hex literal — carousel-document.ts's
- * `findHexLiterals` check would reject one). That path already sets an
- * explicit `h`, so it stays visible even with empty text.
+ * (unslotted) object: `placeFreeGeometry` (see `occupiedRects`) finds a spot
+ * inside the template's safe margins clear of everything already on the
+ * slide, slotted or free, template-positioned or dragged. Styles with
+ * `brand.fonts.body` and the `onSurface` role's color key (a `brand.colors`
+ * key, never a hex literal). That path always sets an explicit `h`, so it
+ * stays visible even with empty text.
  *
  * Takes `objectId` from the caller rather than generating one internally
  * (unlike `addLibraryAssetObject`) so the caller can select the new object
@@ -172,9 +244,11 @@ export function addTextObject(
     }
 
     const margins = template.zones.margins;
+    const h = NOMINAL_TEXT_HEIGHT;
+    const { x, y } = placeFreeGeometry(slide.objects, template, slide.kind, h);
     const object: TextObject = {
       ...base,
-      geometry: { x: margins.left, y: margins.top, w: template.canvas.w - margins.left - margins.right, h: 120, rotation: 0 },
+      geometry: { x, y, w: template.canvas.w - margins.left - margins.right, h, rotation: 0 },
       fontKey: "body",
       fontSize: 48,
       lineHeight: 1.2,
