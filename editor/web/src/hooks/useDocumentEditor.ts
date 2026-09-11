@@ -135,15 +135,18 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
   /** A user edit: pushes the previous state for undo, clears redo, persists. */
   const update = useCallback(
     (updater: (prev: CarouselDocument) => CarouselDocument) => {
-      setDocState((prev) => {
-        const next = updater(prev);
-        if (next === prev) return prev;
-        undoStack.current.push(prev);
-        if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift();
-        redoStack.current = [];
-        schedulePersist(next);
-        return next;
-      });
+      // Compute from `docRef` outside the state updater: React StrictMode
+      // double-invokes updaters, so side effects inside one (undo push,
+      // dirty flag) ran twice and a stale `setDirty(true)` landed after the
+      // PUT cleared it, leaving "Guardando…" on screen forever.
+      const prev = docRef.current;
+      const next = updater(prev);
+      if (next === prev) return;
+      undoStack.current.push(prev);
+      if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift();
+      redoStack.current = [];
+      schedulePersist(next);
+      setDocState(next);
     },
     [schedulePersist],
   );
