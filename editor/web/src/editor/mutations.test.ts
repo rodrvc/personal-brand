@@ -120,4 +120,142 @@ function baseDoc(): CarouselDocument {
   assert.equal(resolvedOverflow.content.kind, "text");
 }
 
+/** A resolved rect: x/y/w with h defaulted the way the renderer treats a heightless text box, only for overlap math in these tests. */
+interface TestRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const TEST_NOMINAL_TEXT_HEIGHT = 120;
+
+function overlaps(a: TestRect, b: TestRect): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+/** Fills every free text slot on the cover slide, marking each occupant's `slot` as used — the fixture setup every fallback test below needs before `addTextObject` is forced past the slotted path. */
+function fillCoverTextSlots(doc: CarouselDocument): CarouselDocument {
+  const coverTextSlots = template.slides.cover!.slots.filter((s) => s.type === "text").map((s) => s.name);
+  let next = doc;
+  for (const slotName of coverTextSlots) {
+    next = addTextObject(next, "slide-cover", `obj-${slotName}`, template, brand);
+    next = {
+      ...next,
+      slides: next.slides.map((s) =>
+        s.id === "slide-cover"
+          ? { ...s, objects: s.objects.map((o) => (o.id === `obj-${slotName}` ? { ...o, slot: slotName } : o)) }
+          : s,
+      ),
+    };
+  }
+  return next;
+}
+
+// The first free (unslotted) text object lands below the cover's resolved
+// slot rects (eyebrow/title/subtitle), not at the top margin over the
+// title — it must not overlap any of them.
+{
+  let doc = baseDoc();
+  const coverTextSlots = template.slides.cover!.slots.filter((s) => s.type === "text").map((s) => s.name);
+  assert.ok(coverTextSlots.length > 0, "fixture assumption: cover has text slots");
+  doc = fillCoverTextSlots(doc);
+
+  const withFree = addTextObject(doc, "slide-cover", "obj-free-1", template, brand);
+  const free = withFree.slides[0]!.objects.find((o) => o.id === "obj-free-1")!;
+  const freeRect: TestRect = { x: free.geometry!.x, y: free.geometry!.y, w: free.geometry!.w, h: free.geometry!.h! };
+
+  const slotRects: TestRect[] = template.slides.cover!.slots
+    .filter((s) => s.type === "text")
+    .map((s) => ({ x: s.geometry.x, y: s.geometry.y, w: s.geometry.w, h: s.geometry.h ?? TEST_NOMINAL_TEXT_HEIGHT }));
+
+  for (const slotRect of slotRects) {
+    assert.ok(!overlaps(freeRect, slotRect), `free box must not overlap slot rect at y=${slotRect.y}`);
+  }
+  const titleRect = slotRects.find((r) => r.y === 594)!; // "title" slot, explicativo.json
+  assert.ok(!overlaps(freeRect, titleRect), "free box does not overlap the title's resolved rect");
+
+  const result = validateDocument(withFree, { brand, assetExists: () => true });
+  assert.ok(result.valid, `document should validate: ${JSON.stringify("errors" in result ? result.errors : [])}`);
+}
+
+// Adding free boxes until the vertical gap search runs out: every box
+// placed while a gap still existed does not overlap any other, and once
+// the search falls back to the diagonal cascade, each cascaded box gets a
+// distinct origin (until the clamp saturates).
+{
+  let doc = baseDoc();
+  doc = fillCoverTextSlots(doc);
+
+  const COUNT = 12;
+  for (let i = 0; i < COUNT; i++) {
+    doc = addTextObject(doc, "slide-cover", `obj-free-${i}`, template, brand);
+  }
+
+  const freeRects: TestRect[] = Array.from({ length: COUNT }, (_, i) => {
+    const o = doc.slides[0]!.objects.find((obj) => obj.id === `obj-free-${i}`)!;
+    return { x: o.geometry!.x, y: o.geometry!.y, w: o.geometry!.w, h: o.geometry!.h! };
+  });
+
+  const margins = template.zones.margins;
+  const bottom = template.canvas.h - margins.bottom;
+
+  // Pairwise non-overlap holds for every box the gap search placed (before
+  // the box that first needed the cascade — identified by no longer fitting
+  // a fresh vertical gap, i.e. its y equals an earlier box's y or x drifted).
+  const gapPlaced = freeRects.filter((r) => r.x === margins.left);
+  for (let i = 0; i < gapPlaced.length; i++) {
+    for (let j = i + 1; j < gapPlaced.length; j++) {
+      assert.ok(!overlaps(gapPlaced[i]!, gapPlaced[j]!), `gap-placed boxes ${i} and ${j} must not overlap`);
+    }
+  }
+
+  // Every cascaded box (x drifted past the left margin) has a distinct
+  // origin from every other box, as long as the clamp has not saturated.
+  const cascaded = freeRects.filter((r) => r.x !== margins.left);
+  const unsaturated = cascaded.filter((r) => r.y < bottom - TEST_NOMINAL_TEXT_HEIGHT);
+  const origins = new Set(unsaturated.map((r) => `${r.x},${r.y}`));
+  assert.equal(origins.size, unsaturated.length, "unsaturated cascaded boxes each land on a distinct origin");
+
+  // Every box, gap-placed or cascaded, stays inside the canvas margins.
+  for (const r of freeRects) {
+    assert.ok(r.y >= margins.top, "box stays at or below the top margin");
+    assert.ok(r.y + r.h <= bottom, "box stays inside the bottom margin");
+  }
+}
+
+// A slotted object the user dragged (carries its own `geometry`, but keeps
+// `slot`) is respected at its dragged position for placement purposes, not
+// snapped back to its slot's template position.
+{
+  let doc = baseDoc();
+  doc = fillCoverTextSlots(doc);
+
+  // Drag the "title" slot occupant down near the bottom of the canvas.
+  const draggedGeometry = { x: 86, y: 1100, w: 908, h: 100, rotation: 0 };
+  doc = {
+    ...doc,
+    slides: doc.slides.map((s) =>
+      s.id === "slide-cover"
+        ? { ...s, objects: s.objects.map((o) => (o.id === "obj-title" ? { ...o, geometry: draggedGeometry } : o)) }
+        : s,
+    ),
+  };
+
+  const withFree = addTextObject(doc, "slide-cover", "obj-free-1", template, brand);
+  const free = withFree.slides[0]!.objects.find((o) => o.id === "obj-free-1")!;
+  const freeRect: TestRect = { x: free.geometry!.x, y: free.geometry!.y, w: free.geometry!.w, h: free.geometry!.h! };
+
+  // The other two slots (eyebrow, subtitle) still occupy their template
+  // rects; "title"'s template rect (y=594) is now free, but its dragged
+  // rect (y=1100) is occupied instead — the new box must respect the
+  // dragged rect and avoid it, and may legally land where the template's
+  // title slot used to be.
+  assert.ok(!overlaps(freeRect, draggedGeometry), "free box avoids the dragged rect, not the slot's template rect");
+
+  const result = validateDocument(withFree, { brand, assetExists: () => true });
+  assert.ok(result.valid, `document should validate: ${JSON.stringify("errors" in result ? result.errors : [])}`);
+}
+
 console.log("mutations: addTextObject seeds from a template slot, then falls back to a free object");
+console.log("mutations: fallback placement avoids overlap, cascades with distinct origins, and respects dragged geometry");
