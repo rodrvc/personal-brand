@@ -243,7 +243,7 @@ export function exportCarousel(
   slug: string,
   carouselId: string,
   options?: { allowPending?: boolean },
-): Promise<{ jobId: string }> {
+): Promise<ExportJob> {
   return request(`/profiles/${slug}/carousels/${carouselId}/export`, {
     method: "POST",
     body: JSON.stringify({ allowPending: options?.allowPending === true }),
