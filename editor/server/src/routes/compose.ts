@@ -117,6 +117,11 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
+      if (!body.title || !body.title.trim()) {
+        res.status(400).json({ error: "title is required" });
+        return;
+      }
+
       const template = loadLayoutTemplate(store.roots.profileDir, templateId);
       const brand = loadBrand(store.roots.profileDir);
       const document = buildEmptyDocument(brand, template, templateId, carouselId, body.title);

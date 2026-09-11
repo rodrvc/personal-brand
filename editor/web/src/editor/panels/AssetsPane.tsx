@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { assetFileUrl, listAssets } from "../../api/client";
 import type { AssetEntry } from "../../api/types";
-import { ASSET_KIND_LABEL, groupAssetsByKind } from "./asset-grouping";
+import { ASSET_KIND_LABEL, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
 import "./PropertiesPanel.css";
 
 interface AssetsPaneProps {
@@ -82,16 +82,30 @@ export function AssetsPane({ slug }: AssetsPaneProps) {
             </span>
           </div>
           <div className="asset-grid">
-            {kindEntries.map((entry) => (
-              <div
-                key={entry.id}
-                className="asset-tile"
-                style={{ backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }}
-                title={entry.tags?.join(", ") ?? entry.id}
-              >
-                {entry.origin === "ai" && <span className="origin-tag">IA</span>}
-              </div>
-            ))}
+            {kindEntries.map((entry) => {
+              const renderable = isRenderableImage(entry);
+              const fileName = entry.path.split("/").pop() ?? entry.id;
+              return (
+                <div
+                  key={entry.id}
+                  className="asset-tile"
+                  style={
+                    renderable
+                      ? { backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }
+                      : undefined
+                  }
+                  title={entry.tags?.join(", ") ?? entry.id}
+                >
+                  {!renderable && (
+                    <span className="asset-tile-file">
+                      <span className="asset-tile-file-glyph">📄</span>
+                      {fileName}
+                    </span>
+                  )}
+                  {entry.origin === "ai" && <span className="origin-tag">IA</span>}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

@@ -32,3 +32,20 @@ export function groupAssetsByKind(entries: AssetEntry[]): Map<AssetKind, AssetEn
   }
   return grouped;
 }
+
+/**
+ * Extensions the server (`editor/server/src/routes/assets.ts`'s
+ * `mimeFromPath`) serves with an `image/*` content type, so a tile can point
+ * a `background-image: url(...)` at them safely. Fonts are excluded not
+ * because of `application/octet-stream` — they get their own `font/*` types
+ * — but because a font file isn't paintable as an image. `AssetEntry`
+ * carries no mime/kind field to read instead, so this decides by extension,
+ * mirroring the server's own table.
+ */
+const RENDERABLE_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "svg"]);
+
+/** Whether an asset's file can be shown as an image tile (`background-image`), vs. a neutral file tile. */
+export function isRenderableImage(entry: Pick<AssetEntry, "path">): boolean {
+  const ext = entry.path.toLowerCase().split(".").pop() ?? "";
+  return RENDERABLE_IMAGE_EXTENSIONS.has(ext);
+}

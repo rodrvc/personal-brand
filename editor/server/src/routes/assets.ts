@@ -29,6 +29,7 @@ function mimeFromPath(path: string): string {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
     webp: "image/webp",
+    svg: "image/svg+xml",
     woff2: "font/woff2",
     woff: "font/woff",
     ttf: "font/ttf",

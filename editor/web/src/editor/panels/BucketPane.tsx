@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { assetFileUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
 import type { AssetEntry, AssetKind, CarouselDocument, OutputVersion, StatsResponse } from "../../api/types";
 import { addLibraryAssetObject, setBackgroundAsset } from "../mutations";
-import { ASSET_KIND_LABEL, groupAssetsByKind } from "./asset-grouping";
+import { ASSET_KIND_LABEL, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
 
 interface BucketPaneProps {
   slug: string;
@@ -79,14 +79,25 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
     reloadAssets();
   }
 
-  function handlePlaceAsset(entry: AssetEntry) {
-    if (entry.kind === "background") {
-      onDocUpdate((prev) => setBackgroundAsset(prev, prev.slides[activeIndex]!.id, entry.id));
-    } else {
-      onDocUpdate((prev) => addLibraryAssetObject(prev, prev.slides[activeIndex]!.id, entry.id));
-    }
+  // Two explicit actions per tile rather than a hidden mode: which one
+  // fires must never depend on state that lives in another pane
+  // (SlidePane's "Biblioteca" background-mode toggle) — that's the bug
+  // this replaces (QA #1). "Añadir a la lámina" keeps the previous
+  // click behaviour; "Usar de fondo" is the only path that actually sets
+  // `slide.background = {mode:"asset", assetId}`.
+  function bumpUsage(entry: AssetEntry) {
     // Optimistic usage bump so the border/counter update without waiting for a full reload.
     setEntries((prev) => prev?.map((e) => (e.id === entry.id ? { ...e, usageCount: (e.usageCount ?? 0) + 1 } : e)) ?? prev);
+  }
+
+  function handleUseAsBackground(entry: AssetEntry) {
+    onDocUpdate((prev) => setBackgroundAsset(prev, prev.slides[activeIndex]!.id, entry.id));
+    bumpUsage(entry);
+  }
+
+  function handleAddToSlide(entry: AssetEntry) {
+    onDocUpdate((prev) => addLibraryAssetObject(prev, prev.slides[activeIndex]!.id, entry.id));
+    bumpUsage(entry);
   }
 
   async function handleReclassify(entry: AssetEntry, kind: AssetKind) {
@@ -137,18 +148,43 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
             </span>
           </div>
           <div className="asset-grid">
-            {kindEntries.map((entry) => (
-              <div
-                key={entry.id}
-                className={`asset-tile ${used.has(entry.id) ? "used" : ""}`}
-                style={{ backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }}
-                title={entry.tags?.join(", ") ?? entry.id}
-                onClick={() => handlePlaceAsset(entry)}
-              >
-                {entry.origin === "ai" && <span className="origin-tag">IA</span>}
-                {used.has(entry.id) && <span className="usage-count">↻{entry.usageCount ?? 1}</span>}
-              </div>
-            ))}
+            {kindEntries.map((entry) => {
+              const renderable = isRenderableImage(entry);
+              const fileName = entry.path.split("/").pop() ?? entry.id;
+              return (
+                <div
+                  key={entry.id}
+                  className={`asset-tile ${used.has(entry.id) ? "used" : ""}`}
+                  style={
+                    renderable
+                      ? { backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }
+                      : undefined
+                  }
+                  title={entry.tags?.join(", ") ?? entry.id}
+                  onClick={() => handleAddToSlide(entry)}
+                >
+                  {!renderable && (
+                    <span className="asset-tile-file">
+                      <span className="asset-tile-file-glyph">📄</span>
+                      {fileName}
+                    </span>
+                  )}
+                  {entry.origin === "ai" && <span className="origin-tag">IA</span>}
+                  {used.has(entry.id) && <span className="usage-count">↻{entry.usageCount ?? 1}</span>}
+                  <button
+                    type="button"
+                    className="asset-tile-bg-btn"
+                    title="Usar de fondo"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleUseAsBackground(entry);
+                    }}
+                  >
+                    Fondo
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <p className="props-hint">Borde verde = ya está en este carrusel. ↻ = veces reutilizado.</p>
         </div>
@@ -223,16 +259,10 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                   {doc.id} · v{v.version}
                 </div>
                 <div className="output-meta">
-                  {v.fileCount} PNG · {new Date(v.createdAt).toLocaleString()}
+                  {v.slideCount ?? "?"} PNG ·{" "}
+                  {v.exportedAt ? new Date(v.exportedAt).toLocaleString() : "fecha no disponible"}
                 </div>
               </span>
-              <button
-                className="output-copy-btn"
-                title="Copiar ruta"
-                onClick={() => void navigator.clipboard?.writeText(v.path)}
-              >
-                📋
-              </button>
             </div>
           ))}
           {outputs && outputs.length === 0 && <p className="props-hint">Aún no hay exportaciones de este carrusel.</p>}

@@ -56,11 +56,16 @@ export interface AssetEntry {
   costCents?: number;
 }
 
+/**
+ * Mirrors the engine's `ObjectContrast`
+ * (system/ig-carousel/contrast.ts) as sent by the
+ * `/slides/:n/contrast` route: one entry per text object, keyed by
+ * `objectId` — there is no `label` or `note` on the wire.
+ */
 export interface ContrastMeasurement {
-  label: string;
+  objectId: string;
   ratio: number;
   passesAA: boolean;
-  note?: string;
 }
 
 export interface StatsResponse {
@@ -103,11 +108,16 @@ export interface CreateCarouselResponse {
   document: CarouselDocument;
 }
 
+/**
+ * Mirrors `listOutputVersions`'s return shape
+ * (editor/server/src/export/export-queue.ts): read straight off each
+ * version's `manifest.json`, so `exportedAt`/`slideCount` are absent
+ * for a version whose manifest failed to parse.
+ */
 export interface OutputVersion {
   version: number;
-  path: string;
-  createdAt: string;
-  fileCount: number;
+  exportedAt?: string;
+  slideCount?: number;
 }
 
 export interface ExportJob {
