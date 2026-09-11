@@ -93,6 +93,17 @@ export function Editor({
     return <div className="editor-empty">{t("editor.empty")}</div>;
   }
 
+  // The export queue rewrites the document on disk (status "exported").
+  // Replace the editor's copy with the server's so the top bar updates and
+  // the next save does not write the old status back. Safe only because
+  // the export dialog is modal: applyRemote resets the undo stack, and no
+  // edit can be in progress behind the backdrop.
+  const refreshFromServer = useCallback(() => {
+    getCarousel(slug, doc.id)
+      .then(applyRemote)
+      .catch((error: unknown) => console.warn("Could not refresh the carousel after export", error));
+  }, [slug, doc.id, applyRemote]);
+
   return (
     <div className="editor-app">
       <TopBar
@@ -183,12 +194,13 @@ export function Editor({
         <ExportDialog
           slug={slug}
           carouselId={doc.id}
-          onClose={() => setShowExportDialog(false)}
-          onExported={() => {
-            // The export wrote status "exported" on disk; take the server's
-            // document so the top bar updates and the next save keeps it.
-            void getCarousel(slug, doc.id).then(applyRemote).catch(() => {});
+          onClose={() => {
+            setShowExportDialog(false);
+            // Refresh on close too: a failed poll or an early Escape must not
+            // leave the editor holding a document older than the export.
+            refreshFromServer();
           }}
+          onExported={refreshFromServer}
         />
       )}
     </div>
