@@ -225,6 +225,11 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
    * flight can't touch state after this point.
    */
   useEffect(() => {
+    // Set on every mount, not only at ref creation: React StrictMode runs
+    // this effect's cleanup once at mount in development, which would leave
+    // `alive` false for the whole session and silently skip every save's
+    // completion (the status bar then reads "Guardando…" forever).
+    alive.current = true;
     return () => {
       alive.current = false;
       if (persistTimer.current) clearTimeout(persistTimer.current);
