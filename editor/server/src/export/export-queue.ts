@@ -190,7 +190,7 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
   job.status = "running";
   try {
     const brand = loadBrand(store.roots.profileDir);
-    const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, doc.template.params);
+    const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
     const index = loadIndex(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 

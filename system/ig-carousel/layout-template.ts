@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
+import type { BrandTokens } from "./brand-schema.js";
+
 /**
  * A layout template: `system/ig-carousel/layouts/<id>.json` (the generic
  * default, shipped with the engine) deep-merged with
@@ -72,6 +74,27 @@ const marginsSchema = z.object({
   left: z.number().int(),
 });
 
+/**
+ * The footer's optional fixed signature line: a single string painted by the
+ * engine (`renderFooterZone`), never a document object, so it stays
+ * unreachable from any composition (design.md's "signature becomes a footer
+ * zone property, not a slot"). `copyKey` names a key in `brand.copy`,
+ * `fontKey` a key in `brand.fonts`, `colorRole` a role in `brand.roles` —
+ * never a literal string, family or hex, matching how slots already name
+ * brand data by key instead of by value.
+ */
+const footerSignatureSchema = z.object({
+  /** Key into `brand.copy` (e.g. "wordmark", "site") whose string value is painted. */
+  copyKey: z.string().min(1),
+  /** Key into `brand.fonts` the signature is set in. */
+  fontKey: z.string().min(1),
+  /** A brand ROLE name (brand.roles keys) — never a color key or hex. */
+  colorRole: roleStringSchema("zones.footer.signature.colorRole"),
+  /** Follows the footer's existing left/right convention (logo sits left, pagination right). */
+  align: z.enum(["left", "right"]),
+});
+export type FooterSignature = z.infer<typeof footerSignatureSchema>;
+
 const zonesSchema = z.object({
   background: z.object({
     /** How the background zone is painted; the engine interprets the policy name, the template only names it. */
@@ -83,6 +106,8 @@ const zonesSchema = z.object({
     logo: z.enum(["auto", "none"]),
     /** "all" shows i/total on every slide; "steps" only on `kind: step` slides; "none" shows no pagination at all. */
     pagination: z.enum(["all", "steps", "none"]),
+    /** Optional fixed signature line. A template that omits this paints none (layout-template spec's "Footer signature"). */
+    signature: footerSignatureSchema.optional(),
   }),
   margins: marginsSchema,
 });
@@ -156,10 +181,19 @@ function deepMerge(base: unknown, override: unknown): unknown {
  * then profile override, then per-carousel params — is validated as a
  * whole so an invalid override (a typo'd key, a missing geometry field)
  * fails naming that key, regardless of which layer introduced it.
+ *
+ * `brand` is REQUIRED (not optional): a resolved template can declare a
+ * `zones.footer.signature` whose `copyKey`/`fontKey`/`colorRole` only make
+ * sense against a brand, and an optional param here would let a caller
+ * skip that cross-check by omission — exactly the silent "color: undefined"
+ * failure mode the architect review flagged. Callers with no brand to
+ * check against (there are none left in this codebase) would need to load
+ * one first, the same way every real call site already does.
  */
 export function loadLayoutTemplate(
   profileDir: string,
   id: string,
+  brand: BrandTokens,
   params?: Record<string, unknown>,
 ): LayoutTemplate {
   const engineDir = dirname(fileURLToPath(import.meta.url));
@@ -202,7 +236,46 @@ export function loadLayoutTemplate(
       )} — ${issue.message}`,
     );
   }
+
+  validateTemplateAgainstBrand(result.data, brand);
+
   return result.data;
+}
+
+/**
+ * Cross-checks the resolved template against the loaded brand: every
+ * `zones.footer.signature` key (`copyKey` into `brand.copy`, `fontKey` into
+ * `brand.fonts`, `colorRole` into `brand.roles`) must resolve. A template's
+ * own schema (`layoutTemplateSchema` above) only knows the key is a
+ * non-empty, non-hex string — it has no `brand` to check it against, so
+ * this runs as a second pass once both are in hand, right where
+ * `loadLayoutTemplate` already resolves the template. Always runs, because
+ * `brand` is now a required parameter of `loadLayoutTemplate` (architect
+ * review: an optional brand let this check be silently skipped).
+ */
+function validateTemplateAgainstBrand(template: LayoutTemplate, brand: BrandTokens): void {
+  const signature = template.zones.footer.signature;
+  if (!signature) return;
+
+  const copy = brand.copy as Record<string, unknown>;
+  if (typeof copy[signature.copyKey] !== "string") {
+    throw new LayoutTemplateError(
+      `Layout template "${template.id}" declares zones.footer.signature.copyKey "${signature.copyKey}", ` +
+        `which the brand does not define as a string: zones.footer.signature.copyKey → brand.copy.${signature.copyKey}`,
+    );
+  }
+  if (!(signature.fontKey in brand.fonts)) {
+    throw new LayoutTemplateError(
+      `Layout template "${template.id}" declares zones.footer.signature.fontKey "${signature.fontKey}", ` +
+        `which the brand does not define: zones.footer.signature.fontKey → brand.fonts.${signature.fontKey}`,
+    );
+  }
+  if (!(signature.colorRole in brand.roles)) {
+    throw new LayoutTemplateError(
+      `Layout template "${template.id}" declares zones.footer.signature.colorRole "${signature.colorRole}", ` +
+        `which the brand does not define: zones.footer.signature.colorRole → brand.roles.${signature.colorRole}`,
+    );
+  }
 }
 
 export type LayoutTemplateOrigin = "engine-default" | "brand-override";
