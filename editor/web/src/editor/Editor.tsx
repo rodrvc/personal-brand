@@ -90,10 +90,6 @@ export function Editor({
     }
   }, [slug, doc.id, activeSlide, applyRemote]);
 
-  if (!activeSlide) {
-    return <div className="editor-empty">Este carrusel no tiene láminas.</div>;
-  }
-
   // The export queue rewrites the document on disk (status "exported").
   // Replace the editor's copy with the server's so the top bar updates and
   // the next save does not write the old status back. Safe only because
@@ -104,6 +100,10 @@ export function Editor({
       .then(applyRemote)
       .catch((error: unknown) => console.warn("Could not refresh the carousel after export", error));
   }, [slug, doc.id, applyRemote]);
+
+  if (!activeSlide) {
+    return <div className="editor-empty">Este carrusel no tiene láminas.</div>;
+  }
 
   return (
     <div className="editor-app">
