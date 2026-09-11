@@ -7,7 +7,6 @@ import type { Selection } from "./geometry";
 import { SelectionOverlay } from "./SelectionOverlay";
 import "./Stage.css";
 
-const STAGE_PADDING = 26;
 const THUMB_WIDTH = 84;
 
 interface StageProps {
@@ -114,8 +113,11 @@ export function Stage({
     return () => observer.disconnect();
   }, []);
 
-  const availableW = Math.max(stageSize.w - STAGE_PADDING * 2, 0);
-  const availableH = Math.max(stageSize.h - STAGE_PADDING * 2, 0);
+  // `contentRect` already excludes the stage's padding, so the measured
+  // size is the space the sheet can use as is; subtracting the padding
+  // again would shrink the sheet by 52px on each axis.
+  const availableW = Math.max(stageSize.w, 0);
+  const availableH = Math.max(stageSize.h, 0);
   const fitScale = availableW > 0 && availableH > 0 ? Math.min(availableW / doc.canvas.w, availableH / doc.canvas.h) : 0;
   // Before the first measurement, fall back to a reasonable scale so the
   // sheet isn't invisible for one frame.
