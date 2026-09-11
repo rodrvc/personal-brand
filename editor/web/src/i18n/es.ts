@@ -52,6 +52,7 @@ export const es = {
     "El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.",
 
   // Editor route (routes/EditorRoute.tsx)
+  "editorRoute.noTemplateUnsupported": "Este carrusel no tiene template; el editor todavía no lo soporta",
   "editorRoute.loading": "Cargando carrusel…",
 
   // Editor shell (editor/Editor.tsx)

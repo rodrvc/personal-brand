@@ -193,7 +193,13 @@ export const carouselDocumentSchema = z.object({
     h: z.literal(1350),
   }),
   prompt: promptSchema,
-  template: templateRefSchema,
+  /**
+   * Optional: a document with no key has no template — a valid, deliberate
+   * choice, not an error state (see layout-template spec, "Template
+   * reference on the document"). `null` is not accepted; absence is the
+   * only way to say "no template".
+   */
+  template: templateRefSchema.optional(),
   slides: z.array(slideSchema),
 });
 

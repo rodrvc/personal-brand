@@ -2,6 +2,7 @@ import { loadBrand } from "../../../system/ig-carousel/brand-schema.js";
 import {
   validateDocument,
   type CarouselDocument,
+  type TemplateRef,
   type ValidateDocumentResult,
 } from "../../../system/ig-carousel/carousel-document.js";
 import { loadIndex } from "../../../system/assets/index.js";
@@ -53,6 +54,29 @@ export function readValidatedDocument(store: ProfileStore, carouselId: string): 
     );
   }
   return result.document;
+}
+
+/**
+ * Own subclass of `DocumentStoreError` for "no template, caller can't
+ * handle that yet" — lets a route map it to its own HTTP status without
+ * also catching unrelated `DocumentStoreError`s (malformed carousel id,
+ * on-disk validation failure) already mapped elsewhere.
+ */
+export class TemplateNotSupportedError extends DocumentStoreError {}
+
+/**
+ * Guards call sites that still assume every document has a template
+ * (`export-queue.ts`, `render.ts`) until the "no template" render path
+ * (C2b) exists. `template` became optional in C2a; nothing downstream can
+ * act on its absence yet. Message is developer-facing, replaced in C2b.
+ */
+export function requireTemplateRef(doc: CarouselDocument): TemplateRef {
+  if (!doc.template) {
+    throw new TemplateNotSupportedError(
+      "Document has no template reference; rendering without a template is not supported yet",
+    );
+  }
+  return doc.template;
 }
 
 export function writeDocument(store: ProfileStore, doc: CarouselDocument): void {

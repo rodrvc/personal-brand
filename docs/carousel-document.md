@@ -69,6 +69,10 @@ Key rules:
   `brand.colors` key on that object regardless of the slot's `colorRole`.
 - `source` is `'ai' | 'library' | 'manual'` — where the piece came from,
   shown per-piece in the UI (see `specs/piece-generation`).
+- `template?` is **optional**. Its absence means "no template": a free
+  composition on the brand's palette and fonts alone, no zone painted, no
+  slot imposed — a deliberate, valid choice, not an error state. Do not
+  confuse it with `template: null`, which the schema rejects; omit the key.
 - `objects[]` is stacking order: the last entry paints on top.
 - `pending?: boolean` marks a placeholder the background compose job hasn't
   filled in yet (text drafting, or a library-sourced visual still being
@@ -208,8 +212,28 @@ against its template slot:
   the old kind's slot geometry) is frozen as an explicit `geometry`, so it
   does not collapse to the canvas origin.
 
-Both functions are pure — they return a new value and never touch disk or
-mutate their input.
+`changeTemplate(doc, from, to)` swaps a document's template reference
+(layout-template spec's "Changing the reference"), applying the same
+per-object rule as `changeSlideKind` above — template varying, kind fixed,
+per slide:
+
+- `slot` exists in `to`'s slots for that `kind`: keeps content and `slot`,
+  drops any own `geometry` so `to`'s slot geometry applies.
+- `slot` absent from `to` for that `kind`: becomes free — `slot` cleared,
+  geometry (own override, or else `from`'s slot geometry) frozen explicitly.
+- No `slot` (already free): untouched.
+
+`template.params` are **dropped** on a swap — keyed to the old template's
+shape, carrying them over could silently misapply them or fail validation
+for a reason unrelated to the swap. `doc.template` becomes `{ id: to.id }`
+with no `params`, or is omitted entirely when `to` is the built-in free
+template (`freeLayoutTemplate()` / `FREE_TEMPLATE_ID`) — the same state as
+an absent `template` key. `changeTemplate` also bumps `updatedAt`, since —
+unlike `changeSlideKind`, which returns a `Slide` — it mutates a whole
+document.
+
+All of `resolveSlide`/`resetObjectToSlot`/`changeSlideKind`/`changeTemplate`
+are pure — they return a new value and never touch disk or mutate input.
 
 ## Rendering a document
 
