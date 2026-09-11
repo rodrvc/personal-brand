@@ -87,7 +87,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     async () => {
       const store = new ProfileStore(FULL_SLUG);
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, "explicativo");
+      const template = loadLayoutTemplate(store.roots.profileDir, "explicativo", brand);
       const doc = buildEmptyDocument(brand, template, "explicativo", "status-test", "Status test");
       writeDocument(store, { ...doc, status: "exported" });
 
