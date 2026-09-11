@@ -7,7 +7,7 @@ import { renderFreeLayoutSlide } from "../../../../system/ig-carousel/templates/
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../../../../system/ig-carousel/document.js";
 import { measureContrast } from "../../../../system/ig-carousel/contrast.js";
 
-import { documentExists, readDocumentRaw, validateAgainstProfile } from "../document-store.js";
+import { documentExists, readDocumentRaw, requireTemplateRef, TemplateNotSupportedError, validateAgainstProfile } from "../document-store.js";
 import { buildRenderContext } from "../render-context.js";
 import { getSharedBrowser } from "../browser.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
@@ -76,7 +76,8 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
+      const templateRef = requireTemplateRef(doc);
+      const template = loadLayoutTemplate(store.roots.profileDir, templateRef.id, brand, templateRef.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -111,7 +112,8 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
+      const templateRef = requireTemplateRef(doc);
+      const template = loadLayoutTemplate(store.roots.profileDir, templateRef.id, brand, templateRef.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
 
@@ -181,7 +183,8 @@ export function renderRouter(): Router {
       }
 
       const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, doc.template.id, brand, doc.template.params);
+      const templateRef = requireTemplateRef(doc);
+      const template = loadLayoutTemplate(store.roots.profileDir, templateRef.id, brand, templateRef.params);
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
 
@@ -210,6 +213,15 @@ export function renderRouter(): Router {
 function handleRenderError(error: unknown, res: import("express").Response): void {
   if (error instanceof ProfileStoreError || error instanceof LayoutTemplateError) {
     res.status(400).json({ error: error.message });
+    return;
+  }
+  // `requireTemplateRef` throws this specific subclass for a valid document
+  // with no template — 422 ("unprocessable"), not 400 ("malformed").
+  // Matching only this subclass (not every `DocumentStoreError`) keeps a
+  // malformed carousel id or an on-disk validation failure falling through
+  // to the same 500 catch-all they hit before this branch existed.
+  if (error instanceof TemplateNotSupportedError) {
+    res.status(422).json({ error: error.message });
     return;
   }
   res.status(500).json({ error: (error as Error).message });

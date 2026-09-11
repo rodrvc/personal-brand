@@ -62,6 +62,15 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
         if (!alive) return;
         setBrand(brandRes);
         setDoc(docRes);
+        // A document with no template reference is valid (carousel-document
+        // spec's "Template reference on the document"), but the editor
+        // canvas still assumes a template to resolve slots/zones against —
+        // that free-composition render path is not built yet (C2b/C2c).
+        // Reuse the existing error path rather than adding new UI for it.
+        if (!docRes.template) {
+          setError(t("editorRoute.noTemplateUnsupported"));
+          return;
+        }
         const [templateRes, statsRes] = await Promise.all([
           getTemplate(slug, docRes.template.id, docRes.template.params),
           getStats(slug, id).catch(() => null),

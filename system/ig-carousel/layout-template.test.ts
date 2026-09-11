@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadBrand } from "./brand-schema.js";
-import { listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "./layout-template.js";
+import { FREE_TEMPLATE_ID, freeLayoutTemplate, listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "./layout-template.js";
 
 const ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE_PROFILE_DIR = join(ENGINE_DIR, "..", "..", "profiles", "example");
@@ -118,6 +118,23 @@ const tests: Array<[string, () => void]> = [
     },
   ],
 
+  [
+    "freeLayoutTemplate() parses against the layout template schema",
+    () => {
+      // No schema is exported directly: round-trip the shape through
+      // loadLayoutTemplate's own validation by writing it as a full
+      // override of "explicativo" — it supplies every top-level key, so the
+      // deep merge replaces the default wholesale and the validated result
+      // equals the free template itself; a schema violation would throw.
+      const free = freeLayoutTemplate();
+      withTempProfile(free, (profileDir) => {
+        const resolved = loadLayoutTemplate(profileDir, "explicativo", exampleBrand);
+        assert.equal(resolved.id, free.id);
+        assert.deepEqual(resolved.zones, free.zones);
+        assert.deepEqual(resolved.slides, free.slides);
+      });
+    },
+  ],
   [
     "listLayoutTemplates: with no override, the engine default is listed with origin engine-default",
     () => {
@@ -239,6 +256,29 @@ const tests: Array<[string, () => void]> = [
     },
   ],
 
+  [
+    "listLayoutTemplates: never returns the free template's sentinel id, with or without a profile override",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "layout-template-test-no-free-"));
+      try {
+        const withoutOverride = listLayoutTemplates(dir);
+        assert.ok(
+          withoutOverride.every((t) => t.id !== FREE_TEMPLATE_ID),
+          "listLayoutTemplates must never list the free template's sentinel id",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+
+      withTempProfile({ zones: { footer: { height: 140 } } }, (profileDir) => {
+        const withOverride = listLayoutTemplates(profileDir);
+        assert.ok(
+          withOverride.every((t) => t.id !== FREE_TEMPLATE_ID),
+          "listLayoutTemplates must never list the free template's sentinel id, even with a profile override present",
+        );
+      });
+    },
+  ],
 ];
 
 let failed = 0;
