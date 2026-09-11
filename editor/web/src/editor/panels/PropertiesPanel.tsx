@@ -6,6 +6,8 @@ import { BucketPane } from "./BucketPane";
 import { SlidePane } from "./SlidePane";
 import { BrandPane } from "./BrandPane";
 import { TemplatesPane } from "./TemplatesPane";
+import { t } from "../../i18n";
+import type { LocaleKey } from "../../i18n";
 import "./PropertiesPanel.css";
 
 interface PropertiesPanelProps {
@@ -25,13 +27,18 @@ interface PropertiesPanelProps {
   onStatsRefresh: (stats: StatsResponse) => void;
 }
 
-const TABS: Array<{ id: PanelTab; label: string }> = [
-  { id: "sel", label: "Selección" },
-  { id: "bucket", label: "Bucket" },
-  { id: "lam", label: "Lámina" },
-  { id: "marca", label: "Marca" },
-  { id: "templates", label: "Templates" },
+/** Tab id → its LocaleKey, in display order. `t()` is called lazily, in `panelTabs()`, never at module load. */
+const TAB_LABEL_KEY: Array<{ id: PanelTab; labelKey: LocaleKey }> = [
+  { id: "sel", labelKey: "propertiesPanel.tab.selection" },
+  { id: "bucket", labelKey: "propertiesPanel.tab.bucket" },
+  { id: "lam", labelKey: "propertiesPanel.tab.slide" },
+  { id: "marca", labelKey: "propertiesPanel.tab.brand" },
+  { id: "templates", labelKey: "propertiesPanel.tab.templates" },
 ];
+
+function panelTabs(): Array<{ id: PanelTab; label: string }> {
+  return TAB_LABEL_KEY.map(({ id, labelKey }) => ({ id, label: t(labelKey) }));
+}
 
 export function PropertiesPanel(props: PropertiesPanelProps) {
   const { doc, activeIndex, panelTab, onPanelTabChange } = props;
@@ -40,7 +47,7 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
   return (
     <aside className="props-panel">
       <div className="props-tabs" role="tablist">
-        {TABS.map((tab) => (
+        {panelTabs().map((tab) => (
           <button
             key={tab.id}
             className="props-tab"
