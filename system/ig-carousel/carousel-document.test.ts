@@ -282,6 +282,25 @@ const tests: Array<[string, () => void]> = [
     },
   ],
   [
+    "resetObjectToSlot: also drops a text object's typographic overrides, but keeps text, slot and colorKey",
+    () => {
+      const doc = validDoc();
+      const object = doc.slides[0]!.objects[0] as any;
+      Object.assign(object, {
+        geometry: { x: 10, y: 20, w: 300, rotation: 0 },
+        fontKey: "body", fontSize: 48, lineHeight: 1.4, align: "center",
+        colorKey: "onSurface", text: "El texto que escribió el dueño",
+      });
+      const reset = resetObjectToSlot(object) as any;
+      for (const field of ["geometry", "fontKey", "fontSize", "lineHeight", "align"]) {
+        assert.ok(!(field in reset), `${field} dropped`);
+      }
+      assert.equal(reset.colorKey, "onSurface", "colorKey is a document-level pin, kept");
+      assert.equal(reset.text, "El texto que escribió el dueño", "text content kept");
+      assert.equal(reset.slot, "title", "slot reference kept");
+    },
+  ],
+  [
     "resetObjectToSlot: refuses to reset a free object with no slot",
     () => {
       const doc = validDoc();

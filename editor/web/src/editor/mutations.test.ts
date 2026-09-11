@@ -6,7 +6,7 @@ import { resolveSlide } from "../../../../system/ig-carousel/carousel-document-r
 import { validateDocument, type CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { addTextObject } from "./mutations.js";
+import { addTextObject, clampGeometryToCanvas, resetObjectToSlot, setObjectGeometry } from "./mutations.js";
 
 /**
  * `addTextObject` is the only path in the editor that can put text on a
@@ -120,4 +120,62 @@ function baseDoc(): CarouselDocument {
   assert.equal(resolvedOverflow.content.kind, "text");
 }
 
+// clampGeometryToCanvas keeps an object's whole box inside the canvas
+// (QA: a text object was dragged to geometry.y: -203 with no clamp).
+{
+  const canvas = { w: 1080, h: 1350 };
+
+  const inside = { x: 100, y: 100, w: 200, h: 100, rotation: 0 };
+  assert.deepEqual(clampGeometryToCanvas(inside, canvas), inside, "already inside the canvas is untouched");
+
+  const negative = clampGeometryToCanvas({ x: -50, y: -203, w: 200, h: 100, rotation: 0 }, canvas);
+  assert.deepEqual(negative, { x: 0, y: 0, w: 200, h: 100, rotation: 0 }, "negative origin clamps to 0, size untouched");
+
+  const overflow = clampGeometryToCanvas({ x: 1000, y: 1300, w: 200, h: 100, rotation: 0 }, canvas);
+  assert.equal(overflow.x + overflow.w, canvas.w, "far edge (x) touches the canvas edge");
+  assert.equal((overflow.y ?? 0) + (overflow.h ?? 0), canvas.h, "far edge (y) touches the canvas edge");
+
+  const bigger = clampGeometryToCanvas({ x: 500, y: 500, w: 1500, h: 2000, rotation: 0 }, canvas);
+  assert.deepEqual(bigger, { x: 0, y: 0, w: 1500, h: 2000, rotation: 0 }, "larger than canvas pinned at 0, size never shrunk");
+}
+
+function docWithObject(object: CarouselDocument["slides"][number]["objects"][number]): CarouselDocument {
+  const doc = baseDoc();
+  return { ...doc, slides: doc.slides.map((s) => (s.id === "slide-cover" ? { ...s, objects: [object] } : s)) };
+}
+
+// setObjectGeometry runs every geometry write through the clamp, not just
+// the overlay's drag handler.
+{
+  const doc = docWithObject({ id: "obj-1", pinned: false, locked: false, source: "manual", kind: "text", text: "hi", geometry: { x: 0, y: 0, w: 100, h: 50, rotation: 0 } });
+  const next = setObjectGeometry(doc, "slide-cover", "obj-1", { x: -50, y: -50, w: 100, h: 50, rotation: 0 });
+  const object = next.slides[0]!.objects[0]!;
+  assert.equal(object.geometry?.x, 0, "setObjectGeometry clamps too");
+  assert.equal(object.geometry?.y, 0, "setObjectGeometry clamps too");
+}
+
+// resetObjectToSlot (the editor wrapper) delegates to the engine's
+// resetObjectToSlot: drops geometry and typographic overrides, keeps text
+// and the document-level colorKey pin. The fuller field-dropping rule
+// itself is tested once in carousel-document.test.ts.
+{
+  const doc = docWithObject({
+    id: "obj-1", pinned: false, locked: false, source: "manual", kind: "text",
+    text: "El texto que escribió el dueño", slot: "headline",
+    geometry: { x: 10, y: 20, w: 300, h: 60, rotation: 0 },
+    fontSize: 48, colorKey: "onSurface", fontKey: "body", lineHeight: 1.4, align: "center",
+  });
+
+  const object = resetObjectToSlot(doc, "slide-cover", "obj-1").slides[0]!.objects[0]!;
+  assert.ok(object.kind === "text" && object.text === "El texto que escribió el dueño", "keeps the text");
+  assert.equal(object.geometry, undefined, "loses geometry");
+  for (const field of ["fontSize", "fontKey", "lineHeight", "align"]) {
+    assert.ok(!(field in object), `${field} dropped`);
+  }
+  assert.ok(object.kind === "text" && object.colorKey === "onSurface", "colorKey is a document-level pin, kept");
+  assert.equal(object.slot, "headline", "keeps the slot reference");
+}
+
 console.log("mutations: addTextObject seeds from a template slot, then falls back to a free object");
+console.log("mutations: clampGeometryToCanvas + setObjectGeometry keep objects on-canvas");
+console.log("mutations: resetObjectToSlot drops style overrides but keeps text");

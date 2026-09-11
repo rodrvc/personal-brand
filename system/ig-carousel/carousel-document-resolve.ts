@@ -113,14 +113,20 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
 }
 
 /**
- * "Reset to template": drops an object's own `geometry`, restoring
- * inheritance from its slot. Throws if the object has no `slot` — a free
- * object has nothing to reset to, and that's a caller error rather than
- * something this function should guess at silently.
+ * "Reset to template": drops `geometry` and, for a text object, its
+ * typographic overrides (`fontKey`/`fontSize`/`lineHeight`/`align`) too —
+ * dropping only `geometry` left a font-size reset a no-op. `colorKey` stays
+ * out: it's a document-level `brand.colors` pin, not slot-defined (a slot
+ * only names a `colorRole`), and the editor exposes it separately. Throws
+ * if the object has no `slot` — a caller error.
  */
 export function resetObjectToSlot<T extends SlideObject>(object: T): T {
   if (!object.slot) {
     throw new Error(`Object "${object.id}" has no slot — nothing to reset it to.`);
+  }
+  if (object.kind === "text") {
+    const { geometry: _geometry, fontKey: _fontKey, fontSize: _fontSize, lineHeight: _lineHeight, align: _align, ...rest } = object;
+    return rest as T;
   }
   const { geometry: _geometry, ...rest } = object;
   return rest as T;
