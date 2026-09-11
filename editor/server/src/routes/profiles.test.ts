@@ -79,6 +79,20 @@ const tests: Array<[string, () => Promise<void>]> = [
       const explicativo = templates.find((t) => t.id === "explicativo");
       assert.ok(explicativo, "engine default must be listed");
       assert.equal(explicativo!.origin, "engine-default");
+      const { freeTemplateId } = body as { freeTemplateId: string };
+      assert.equal(freeTemplateId, "__free__", "listing names the free template's sentinel as a field");
+      assert.ok(!templates.some((t) => t.id === freeTemplateId), "the sentinel is never a listing entry");
+    },
+  ],
+
+  [
+    "GET /api/profiles/:slug/template/__free__ validates the slug like any other id",
+    async () => {
+      const bad = await get("/api/profiles/INVALID_SLUG/template/__free__");
+      assert.equal(bad.status, 400, "a malformed slug is rejected before the sentinel is answered");
+      const ok = await get(`/api/profiles/${SLUG}/template/__free__`);
+      assert.equal(ok.status, 200);
+      assert.equal((ok.body as { zones: { footer: { height: number } } }).zones.footer.height, 0);
     },
   ],
 

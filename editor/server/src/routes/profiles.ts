@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { Router } from "express";
 
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
-import { listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
+import { FREE_TEMPLATE_ID, freeLayoutTemplate, listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { updateEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
@@ -101,15 +101,32 @@ export function profilesRouter(): Router {
         res.status(404).json({ error: `No profile "${req.params.slug}"` });
         return;
       }
-      res.json({ templates: listLayoutTemplates(store.roots.profileDir) });
+      // `freeTemplateId` is a field, not a listing entry: the picker renders
+      // "no template" from data without hardcoding the sentinel, and every
+      // `templates.map()` in the client stays free of it.
+      res.json({ templates: listLayoutTemplates(store.roots.profileDir), freeTemplateId: FREE_TEMPLATE_ID });
     } catch (error) {
       handleStoreError(error, res);
     }
   });
 
+  /**
+   * Resolves one template by id. The sentinel `__free__` (`FREE_TEMPLATE_ID`)
+   * is answered from `freeLayoutTemplate()` without touching disk — it is
+   * not a file and `loadLayoutTemplate` would 400 on it — so a picker that
+   * offers "sin template" can fetch the resulting geometry through the same
+   * endpoint as any real template. `GET .../templates` still never lists it:
+   * it is a choice the UI offers, not a template the brand owns.
+   */
   router.get("/api/profiles/:slug/template/:id", (req, res) => {
     try {
+      // Constructing the store validates the slug (400 on a malformed one)
+      // without any I/O, so the sentinel inherits the same check as a real id.
       const store = new ProfileStore(req.params.slug);
+      if (req.params.id === FREE_TEMPLATE_ID) {
+        res.json(freeLayoutTemplate());
+        return;
+      }
       const paramsRaw = req.query.params;
       const params =
         typeof paramsRaw === "string" && paramsRaw.length > 0
