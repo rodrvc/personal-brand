@@ -22,6 +22,7 @@ export function ExportDialog({ slug, carouselId, onClose, onExported }: ExportDi
   // shows the "Exportar igual" override instead of the plain error text.
   const [pendingWarning, setPendingWarning] = useState(false);
   const started = useRef(false);
+  const notified = useRef(false);
   // Consecutive poll failures (network hiccups etc.), reset on any success.
   // Distinct from a 404, which means the job itself is gone and stops
   // polling right away.
@@ -58,7 +59,12 @@ export function ExportDialog({ slug, carouselId, onClose, onExported }: ExportDi
           pollFailures.current = 0;
           setError(null);
           setJob(next);
-          if (next.status === "done") onExported();
+          // Latch: the interval can tick once more before the state commit
+          // stops it, and the editor's refresh must run exactly once.
+          if (next.status === "done" && !notified.current) {
+            notified.current = true;
+            onExported();
+          }
         })
         .catch((err: unknown) => {
           // Never show the raw server/network string here — a genuine
@@ -77,7 +83,7 @@ export function ExportDialog({ slug, carouselId, onClose, onExported }: ExportDi
         });
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [job, slug, carouselId]);
+  }, [job, slug, carouselId, onExported]);
 
   return (
     <Modal
