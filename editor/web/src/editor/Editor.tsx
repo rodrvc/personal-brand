@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate } from "../api/client";
-import { addTextObject } from "./mutations";
+import { addTextObject, newEditorId } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
@@ -70,7 +70,7 @@ export function Editor({
   const handleAddText = useCallback(() => {
     if (!activeSlide) return;
     const slideId = activeSlide.id;
-    const objectId = `obj-${slideId}-text-${Date.now()}`;
+    const objectId = newEditorId(`obj-${slideId}-text`);
     update((prev) => addTextObject(prev, slideId, objectId, template, brand));
     setSelection({ slideId, objectId });
     setPanelTab("sel");
@@ -134,7 +134,7 @@ export function Editor({
               update((d) => {
                 const slides = [...d.slides];
                 slides.splice(activeIndex + 1, 0, {
-                  id: `slide-${Date.now()}`,
+                  id: newEditorId("slide"),
                   kind: "step",
                   background: { mode: "color", colorKey, pinned: false, source: "manual" },
                   objects: [],
