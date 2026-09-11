@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { listTemplates } from "../../api/client";
 import type { LayoutTemplateSummary } from "../../api/types";
+import { t } from "../../i18n";
 
 interface TemplatesPaneProps {
   slug: string;
@@ -48,7 +49,7 @@ export function TemplatesPane({ slug, activeTemplateId }: TemplatesPaneProps) {
     return <p style={{ color: "var(--ui-danger)" }}>{error}</p>;
   }
   if (!templates) {
-    return <p className="props-hint">Cargando templates de {slug}…</p>;
+    return <p className="props-hint">{t("templatesPane.loading", { slug })}</p>;
   }
   if (templates.length === 0) {
     // Shouldn't happen in practice (the engine always ships at least one
@@ -56,48 +57,44 @@ export function TemplatesPane({ slug, activeTemplateId }: TemplatesPaneProps) {
     // this blank.
     return (
       <div className="props-card">
-        <div className="props-card-heading">Templates</div>
+        <div className="props-card-heading">{t("templatesPane.heading")}</div>
         <p className="props-hint">
-          La marca <b>{slug}</b> no tiene ningún template disponible.
+          {t("templatesPane.emptyPrefix")} <b>{slug}</b> {t("templatesPane.emptySuffix")}
         </p>
       </div>
     );
   }
 
-  const hasBrandOverride = templates.some((t) => t.origin === "brand-override");
+  const hasBrandOverride = templates.some((tpl) => tpl.origin === "brand-override");
 
   return (
     <div className="props-card">
-      <div className="props-card-heading">Templates</div>
-      {!hasBrandOverride && (
-        <p className="props-hint">
-          Esta marca no tiene templates propios todavía — se muestran los defaults del motor.
-        </p>
-      )}
+      <div className="props-card-heading">{t("templatesPane.heading")}</div>
+      {!hasBrandOverride && <p className="props-hint">{t("templatesPane.noOwnTemplates")}</p>}
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-        {templates.map((t) => (
+        {templates.map((tpl) => (
           <li
-            key={t.id}
+            key={tpl.id}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               padding: "6px 8px",
               borderRadius: "var(--ui-radius-sm, 6px)",
-              background: t.id === activeTemplateId ? "var(--ui-accent-soft, var(--ui-g100))" : "transparent",
-              border: t.id === activeTemplateId ? "1px solid var(--ui-accent)" : "1px solid transparent",
+              background: tpl.id === activeTemplateId ? "var(--ui-accent-soft, var(--ui-g100))" : "transparent",
+              border: tpl.id === activeTemplateId ? "1px solid var(--ui-accent)" : "1px solid transparent",
             }}
           >
             <span>
-              {t.displayName}
-              {t.id === activeTemplateId && (
+              {tpl.displayName}
+              {tpl.id === activeTemplateId && (
                 <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 600, color: "var(--ui-accent-ink)" }}>
-                  en uso
+                  {t("templatesPane.inUse")}
                 </span>
               )}
             </span>
             <span style={{ fontSize: 10.5, color: "var(--ui-ink-3)" }}>
-              {t.origin === "brand-override" ? "Marca" : "Motor"}
+              {tpl.origin === "brand-override" ? t("templatesPane.originBrand") : t("templatesPane.originEngine")}
             </span>
           </li>
         ))}
