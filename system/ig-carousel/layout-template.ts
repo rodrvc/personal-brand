@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import type { BrandTokens } from "./brand-schema.js";
+import { FREE_TEMPLATE_ID, humanizeId } from "./object-reset.js";
 
 /**
  * A layout template: `system/ig-carousel/layouts/<id>.json` (the generic
@@ -173,7 +174,11 @@ function deepMerge(base: unknown, override: unknown): unknown {
 /**
  * Loads the default template from `system/ig-carousel/layouts/<id>.json`
  * and, if `profiles/<slug>/templates/<id>.json` exists, deep-merges it on
- * top. When `params` is given (a carousel document's `template.params`,
+ * top. A brand may also declare a template the engine has no default for
+ * at all — `listLayoutTemplates` lists those — in which case the override
+ * is loaded standalone, with nothing to merge onto. Only an id backed by
+ * neither file is an error, so listing and loading agree on exactly which
+ * ids exist. When `params` is given (a carousel document's `template.params`,
  * layout-template spec's "Per-carousel template parameters"), it is
  * deep-merged again, last, so a single carousel can nudge a parameter (e.g.
  * `zones.footer.height`) without touching the profile's own override or any
@@ -198,18 +203,33 @@ export function loadLayoutTemplate(
 ): LayoutTemplate {
   const engineDir = dirname(fileURLToPath(import.meta.url));
   const defaultPath = join(engineDir, "layouts", `${id}.json`);
+  const overridePath = join(profileDir, "templates", `${id}.json`);
 
   let defaultRaw: unknown;
+  let hasDefault = true;
   try {
     defaultRaw = JSON.parse(readFileSync(defaultPath, "utf-8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      throw new LayoutTemplateError(`No default layout template found for id "${id}" at ${defaultPath}`);
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
     }
-    throw error;
+    // No engine default for this id. That is not automatically an error:
+    // `listLayoutTemplates` deliberately lists ids a brand declares on its
+    // own, with no engine counterpart, and a picker that offers them must
+    // be able to load them. Refusing here made every brand-only template
+    // unloadable — listed, then a raw error on selection. A brand-only
+    // template simply has nothing to merge onto, so it stands alone; it
+    // still parses against the full schema and is still cross-validated
+    // against the brand below, so "standalone" buys it no leniency.
+    if (!existsSync(overridePath)) {
+      throw new LayoutTemplateError(
+        `No layout template found for id "${id}": no engine default at ${defaultPath} and no profile override at ${overridePath}`,
+      );
+    }
+    hasDefault = false;
+    defaultRaw = undefined;
   }
 
-  const overridePath = join(profileDir, "templates", `${id}.json`);
   let resolved = defaultRaw;
   if (existsSync(overridePath)) {
     let overrideRaw: unknown;
@@ -218,7 +238,7 @@ export function loadLayoutTemplate(
     } catch (error) {
       throw new LayoutTemplateError(`Invalid JSON in template override at ${overridePath}: ${(error as Error).message}`);
     }
-    resolved = deepMerge(defaultRaw, overrideRaw);
+    resolved = hasDefault ? deepMerge(defaultRaw, overrideRaw) : overrideRaw;
   }
 
   if (params && Object.keys(params).length > 0) {
@@ -229,8 +249,8 @@ export function loadLayoutTemplate(
   if (!result.success) {
     const [issue] = result.error.issues;
     throw new LayoutTemplateError(
-      `Invalid layout template "${id}" (resolved from ${defaultPath}${
-        existsSync(overridePath) ? ` + ${overridePath}` : ""
+      `Invalid layout template "${id}" (resolved from ${hasDefault ? defaultPath : overridePath}${
+        hasDefault && existsSync(overridePath) ? ` + ${overridePath}` : ""
       }${params && Object.keys(params).length > 0 ? " + carousel template.params" : ""}): ${zodPath(
         issue.path,
       )} — ${issue.message}`,
@@ -288,12 +308,6 @@ export interface LayoutTemplateSummary {
   origin: LayoutTemplateOrigin;
 }
 
-/** "free-layout" -> "Free layout"; the id's only real content is its slug, so this is a mechanical humanization, not a translation. */
-function humanizeId(id: string): string {
-  const spaced = id.replace(/[-_]+/g, " ").trim();
-  return spaced.length > 0 ? spaced[0]!.toUpperCase() + spaced.slice(1) : id;
-}
-
 function idsFromJsonDir(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
@@ -336,13 +350,12 @@ export function listLayoutTemplates(profileDir: string): LayoutTemplateSummary[]
 }
 
 /**
- * Sentinel id for "no template". Never a file on disk — `loadLayoutTemplate`
- * never receives it and `listLayoutTemplates` never returns it — so a
- * caller can use it as an explicit "free" choice in a picker without it
- * colliding with a real template id (`idsFromJsonDir` only ever returns ids
- * backed by an actual `.json` file).
+ * Sentinel id for "no template" — defined in `object-reset.ts`, which has
+ * no value imports, so `editor/web` can name the free choice in a picker
+ * without pulling this module's `node:fs` into its bundle. Re-exported here
+ * because this is where callers expect template identity to live.
  */
-export const FREE_TEMPLATE_ID = "__free__";
+export { FREE_TEMPLATE_ID, humanizeId };
 
 /**
  * The template used for a document with no template reference (carousel-

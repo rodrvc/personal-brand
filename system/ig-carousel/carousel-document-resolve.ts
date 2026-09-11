@@ -1,6 +1,6 @@
-import { FREE_TEMPLATE_ID, type LayoutSlot, type LayoutTemplate } from "./layout-template.js";
+import type { LayoutTemplate } from "./layout-template.js";
 import type { AssetObject, CarouselDocument, Geometry, Slide, SlideKind, SlideObject, TextObject } from "./carousel-document.js";
-import type { TemplateRef } from "./carousel-document.js";
+import { findSlot } from "./object-reset.js";
 
 /**
  * Pure helpers that implement template → carousel → slide inheritance
@@ -56,10 +56,6 @@ export interface ResolvedSlide {
   objects: ResolvedObject[];
 }
 
-function findSlot(template: LayoutTemplate, kind: SlideKind, name: string): LayoutSlot | undefined {
-  return template.slides[kind]?.slots.find((slot) => slot.name === name);
-}
-
 /**
  * Resolves one slide's objects against the template's slots for its kind.
  * An object with `slot` and no `geometry` inherits the slot's geometry; an
@@ -113,90 +109,10 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
   return { id: slide.id, kind: slide.kind, background: slide.background, objects };
 }
 
-export { resetObjectToSlot } from "./object-reset.js";
-
 /**
- * Shared core of `changeSlideKind` and `changeTemplate` — per object: no
- * `slot` (free) is untouched; `slot` exists under `toKind` in `toTemplate`
- * keeps content and slot, drops own `geometry` so the destination slot's
- * applies; `slot` absent there demotes to free (slot cleared, geometry
- * frozen from its own override or else the *origin* slot's). Kind change
- * varies `toKind`/holds template fixed; template change varies the
- * template/holds kind fixed — one rule, two callers, provably in sync.
+ * The pure slot rules live in `object-reset.ts` — a module with no value
+ * imports, so `editor/web` can import them without pulling `node:fs` into
+ * its bundle (this module cannot: it sits next to modules that do). They
+ * are re-exported here so engine callers and tests keep one import path.
  */
-function remapObjects(
-  objects: SlideObject[],
-  fromTemplate: LayoutTemplate,
-  fromKind: SlideKind,
-  toTemplate: LayoutTemplate,
-  toKind: SlideKind,
-): SlideObject[] {
-  return objects.map((object) => {
-    if (!object.slot) {
-      return object;
-    }
-
-    const stillExists = findSlot(toTemplate, toKind, object.slot) !== undefined;
-    if (stillExists) {
-      // Keep the text/asset content and the slot reference; drop any own
-      // geometry override so the destination slot's geometry takes over.
-      const { geometry: _geometry, ...rest } = object;
-      return rest as SlideObject;
-    }
-
-    // Slot doesn't exist at the destination: become a free object, freezing
-    // the geometry it had (own override, or the origin slot's geometry) so
-    // it doesn't disappear to (0,0).
-    const originSlot = findSlot(fromTemplate, fromKind, object.slot);
-    const geometry = object.geometry ?? originSlot?.geometry;
-    if (!geometry) {
-      throw new Error(`Object "${object.id}" has no resolvable geometry to freeze when leaving slot "${object.slot}".`);
-    }
-    const { slot: _slot, ...rest } = object;
-    return { ...rest, geometry } as SlideObject;
-  });
-}
-
-/**
- * Changes a slide's `kind`, carrying over text for slots that exist under
- * both the old and new kind (keeping their text, taking the new kind's
- * geometry — i.e. dropping any per-object override so the slot's new
- * geometry applies), and turning objects whose slot doesn't exist under the
- * new kind into free objects (slot cleared, but their last-known geometry
- * is preserved as an explicit override so they don't collapse to the
- * origin).
- */
-export function changeSlideKind(slide: Slide, newKind: SlideKind, template: LayoutTemplate): Slide {
-  if (newKind === slide.kind) {
-    return slide;
-  }
-
-  const objects = remapObjects(slide.objects, template, slide.kind, template, newKind);
-  return { ...slide, kind: newKind, objects };
-}
-
-/**
- * Changes a document's template reference (layout-template spec's
- * "Changing the reference"): `remapObjects`'s rule, per slide, template
- * varying and kind fixed. `template.params` are dropped on the swap — keyed
- * to the old template's shape, they'd silently misapply or fail validation
- * for a reason unrelated to the swap. `doc.template` becomes `{ id: to.id }`
- * with no `params`, or is omitted when `to` is the free template's
- * sentinel (`FREE_TEMPLATE_ID`) — "no template" is the field's absence,
- * never a reference to the free template's own id.
- */
-export function changeTemplate(doc: CarouselDocument, from: LayoutTemplate, to: LayoutTemplate): CarouselDocument {
-  const slides = doc.slides.map((slide) => ({
-    ...slide,
-    objects: remapObjects(slide.objects, from, slide.kind, to, slide.kind),
-  }));
-
-  const template: TemplateRef | undefined = to.id === FREE_TEMPLATE_ID ? undefined : { id: to.id };
-
-  return {
-    ...doc,
-    template,
-    slides,
-    updatedAt: new Date().toISOString(),
-  };
-}
+export { changeSlideKind, changeTemplate, resetObjectToSlot } from "./object-reset.js";
