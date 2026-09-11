@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { resolveSlide } from "../../../../system/ig-carousel/carousel-document-resolve.js";
 import { validateDocument, type CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
-import { loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { addTextObject, clampGeometryToCanvas, newEditorId, resetObjectToSlot, setObjectGeometry } from "./mutations.js";
+import { freeLayoutTemplate, loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
+import { addTextObject, clampGeometryToCanvas, newEditorId, resetObjectToSlot, setObjectGeometry, setTemplateRef } from "./mutations.js";
 
 /**
  * `addTextObject` is the only path in the editor that can put text on a
@@ -325,3 +325,74 @@ console.log("mutations: resetObjectToSlot drops style overrides but keeps text")
   assert.equal(ids.size, 1000, "newEditorId must not collide within a burst");
   console.log("mutations: newEditorId stays unique within a burst");
 }
+
+// --- setTemplateRef (ACU-232) ---
+//
+// The swap rule itself is the engine's (`changeTemplate`, tested in
+// carousel-document.test.ts). What is tested here is what the web wrapper
+// adds on top: that the reference the panel intends is the one written,
+// including its *absence* for "sin template".
+{
+  const free = freeLayoutTemplate();
+  const doc = docWithObject({
+    id: "obj-1", pinned: false, locked: false, source: "manual", kind: "text",
+    text: "Kept", slot: "title", fontSize: 48,
+  });
+
+  // To the free template: nothing is slotted there, so every object demotes
+  // to free with its origin slot's geometry frozen, and `template` goes away
+  // entirely rather than pointing at the sentinel id.
+  const freed = setTemplateRef(doc, undefined, template, free);
+  assert.ok(!("template" in freed), "the free choice removes the reference, never records the sentinel id");
+  const demoted = freed.slides[0]!.objects[0]!;
+  assert.equal(demoted.slot, undefined, "slot cleared — the free template declares none");
+  assert.ok(demoted.geometry, "geometry frozen from the origin slot so it doesn't collapse to (0,0)");
+  assert.ok(demoted.kind === "text" && demoted.text === "Kept", "text survives the swap");
+
+  // And back: nothing was slotted, so objects come through untouched, and
+  // the agreeing reference is written.
+  const back = setTemplateRef(freed, { id: "explicativo" }, free, template);
+  assert.deepEqual(back.template, { id: "explicativo" }, "the agreeing ref is written");
+  assert.deepEqual(back.slides[0]!.objects[0], demoted, "a free object is untouched coming back");
+}
+
+// The ref and the resolved template must describe the same choice. They
+// arrive from different places — the clicked row and the fetched template —
+// so a mismatch is possible, and it is precisely the one that would leave a
+// document pointing at a template its slides were never remapped onto.
+{
+  const free = freeLayoutTemplate();
+  const doc = baseDoc();
+
+  assert.throws(
+    () => setTemplateRef(doc, { id: "explicativo" }, template, free),
+    /does not match the resolved template/,
+    "a real ref against the free template throws rather than recording a template that was not applied",
+  );
+  assert.throws(
+    () => setTemplateRef(doc, undefined, template, template),
+    /does not match the resolved template/,
+    "the free choice against a real template throws rather than dropping a reference that still applies",
+  );
+  assert.throws(
+    () => setTemplateRef(doc, { id: "some-other-id" }, free, template),
+    /does not match the resolved template/,
+    "two different real ids throw",
+  );
+}
+
+// addTextObject on the free template: its margins are all zero, so without
+// the inset a new box would sit flush at (0, 0) and span the whole canvas.
+{
+  const free = freeLayoutTemplate();
+  const next = addTextObject(baseDoc(), "slide-cover", "obj-1", free, brand);
+  const object = next.slides[0]!.objects[0]!;
+  assert.equal(object.slot, undefined, "the free template declares no slot to seed from");
+  assert.ok(object.geometry, "the fallback path always sets an explicit geometry");
+  assert.equal(object.geometry!.x, 80, "inset instead of the template's zero left margin");
+  assert.equal(object.geometry!.y, 80, "inset instead of the template's zero top margin");
+  assert.equal(object.geometry!.w, free.canvas.w - 160, "width inset on both sides, not full-bleed");
+}
+
+console.log("mutations: setTemplateRef writes the agreeing reference, and throws when ref and template disagree");
+console.log("mutations: addTextObject insets a new box when the template declares no margins");

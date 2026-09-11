@@ -48,11 +48,12 @@ export const es = {
   "newCarousel.titlePlaceholder": "ej: Cómo armar tu primer carrusel",
   "newCarousel.brandLabel": "Marca",
   "newCarousel.templateLabel": "Template (opcional)",
+  "newCarousel.templateLoading": "Cargando templates…",
+  "newCarousel.templateNone": "Sin template",
   "newCarousel.hint":
     "El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.",
 
   // Editor route (routes/EditorRoute.tsx)
-  "editorRoute.noTemplateUnsupported": "Este carrusel no tiene template; el editor todavía no lo soporta",
   "editorRoute.loading": "Cargando carrusel…",
 
   // Editor shell (editor/Editor.tsx)
@@ -196,6 +197,9 @@ export const es = {
   "slidePane.bleedBackground": "Fondo a sangre",
   "slidePane.footerLogo": "Footer + logo",
   "slidePane.margins": "Márgenes",
+  "slidePane.templateRow": "Template",
+  "slidePane.templateNone": "Sin template",
+  "slidePane.templatePointer": "Se elige y se cambia en la pestaña Templates.",
   "slidePane.structureNote":
     "Estas zonas no se arrastran. Se cambian en el template y el cambio entra en todas las láminas a la vez, así el carrusel no se desalinea lámina a lámina.",
   "slidePane.backgroundHeading": "Fondo de esta lámina",
@@ -271,4 +275,12 @@ export const es = {
   "templatesPane.inUse": "en uso",
   "templatesPane.originBrand": "Marca",
   "templatesPane.originEngine": "Motor",
+  "templatesPane.none": "Sin template",
+  "templatesPane.selectHint": "Elige el template de este carrusel. Se puede cambiar cuando quieras.",
+  "templatesPane.confirmTitle": "Cambiar el template",
+  "templatesPane.confirmBody":
+    "El carrusel pasa a «{name}». Los textos e imágenes que estén en un espacio que los dos templates comparten conservan su contenido y se mueven a la posición nueva. Los que estén en un espacio que el template nuevo no tiene se quedan donde están, pero sueltos, sin espacio asignado. Los ajustes de template propios de este carrusel se descartan. Se guarda una versión antes del cambio, así que se puede volver atrás.",
+  "templatesPane.confirmCancel": "Cancelar",
+  "templatesPane.confirmAccept": "Cambiar template",
+  "templatesPane.changing": "Cambiando…",
 } as const;

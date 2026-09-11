@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 
-import { getBrand, getCarousel, getStats, getTemplate } from "../api/client";
+import { getBrand, getCarousel, getStats, getTemplate, listTemplates } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { Editor } from "../editor/Editor";
@@ -63,16 +63,17 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
         setBrand(brandRes);
         setDoc(docRes);
         // A document with no template reference is valid (carousel-document
-        // spec's "Template reference on the document"), but the editor
-        // canvas still assumes a template to resolve slots/zones against —
-        // that free-composition render path is not built yet (C2b/C2c).
-        // Reuse the existing error path rather than adding new UI for it.
-        if (!docRes.template) {
-          setError(t("editorRoute.noTemplateUnsupported"));
-          return;
-        }
+        // spec's "Template reference on the document"). The canvas still
+        // needs *a* template to resolve against, so it gets the engine's
+        // free one — every zone inert, no slot on any kind — which the
+        // server serves under the sentinel id `listTemplates` reports. The
+        // id is read from that response rather than hardcoded here, so the
+        // web bundle never carries a copy of the engine's sentinel.
+        const templatePromise = docRes.template
+          ? getTemplate(slug, docRes.template.id, docRes.template.params)
+          : listTemplates(slug).then((listed) => getTemplate(slug, listed.freeTemplateId));
         const [templateRes, statsRes] = await Promise.all([
-          getTemplate(slug, docRes.template.id, docRes.template.params),
+          templatePromise,
           getStats(slug, id).catch(() => null),
         ]);
         if (!alive) return;
@@ -107,6 +108,11 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
       initialActiveSlide={readStoredActiveSlide(id)}
       theme={theme}
       onToggleTheme={onToggleTheme}
+      // A template swap re-renders the stage against the new template
+      // without refetching the route: the panel has already fetched the
+      // template it swapped to and written the new reference onto the
+      // document, so the only thing left here is to hold the new one.
+      onTemplateChange={setTemplate}
     />
   );
 }
@@ -120,6 +126,7 @@ function EditorLoaded({
   initialActiveSlide,
   theme,
   onToggleTheme,
+  onTemplateChange,
 }: {
   slug: string;
   brand: BrandTokens;
@@ -129,6 +136,7 @@ function EditorLoaded({
   initialActiveSlide: number;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  onTemplateChange: (next: LayoutTemplate) => void;
 }) {
   const editorState = useDocumentEditor(slug, initialDoc);
   return (
@@ -141,6 +149,7 @@ function EditorLoaded({
       initialActiveSlide={initialActiveSlide}
       theme={theme}
       onToggleTheme={onToggleTheme}
+      onTemplateChange={onTemplateChange}
     />
   );
 }

@@ -4,6 +4,7 @@ import { getAiPricing, getAssetGeneration, getContrast, regenerate } from "../..
 import type { BrandTokens, CarouselDocument, ContrastMeasurement, Slide, SlideKind } from "../../api/types";
 import { GenerateImageField } from "../GenerateImageField";
 import { setBackgroundColor, setSlideKind } from "../mutations";
+import { humanizeId } from "../../../../../system/ig-carousel/object-reset.js";
 import { t } from "../../i18n";
 import type { LocaleKey } from "../../i18n";
 
@@ -125,6 +126,12 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
         <div className="layer-row">
           <span className="layer-name">{t("slidePane.margins")}</span>
         </div>
+        {/* Reads the template, never sets it: the Templates tab owns selection (ACU-232). "Sin template" is the document simply carrying no reference. */}
+        <div className="layer-row">
+          <span className="layer-name">{t("slidePane.templateRow")}</span>
+          <span className="layer-name">{doc.template ? humanizeId(doc.template.id) : t("slidePane.templateNone")}</span>
+        </div>
+        <p className="props-note">{t("slidePane.templatePointer")}</p>
         <p className="props-note">{t("slidePane.structureNote")}</p>
       </div>
 

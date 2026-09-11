@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { createCarousel } from "../api/client";
-import type { CreateCarouselResponse } from "../api/types";
+import { createCarousel, listTemplates } from "../api/client";
+import type { CreateCarouselResponse, LayoutTemplateSummary } from "../api/types";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
 import { t } from "../i18n";
@@ -20,21 +20,51 @@ interface NewCarouselDialogProps {
  * prompt, no cost, no background work: submitting creates an empty
  * document and the caller navigates straight into the editor with it.
  *
- * Only one template ships today (system/ig-carousel/layouts/explicativo.json
- * is the only file there, and profiles/example/templates/ has none) — a
- * free-text input defaulting to "explicativo" is honest about that; a
- * `<select>` with real options is a separate issue (ACU-230/232) once a
- * list-templates endpoint exists.
+ * The template is picked from a `<select>` fed by `GET .../templates`
+ * (ACU-232), whose first option is "sin template" — a first-class choice,
+ * submitted as `templateId: null` so the document is created carrying no
+ * template reference at all. The sentinel id from that response is only
+ * ever the select's `value`; it is never sent to the server as an id.
+ *
+ * If the listing fails the field degrades to the free-text input it used to
+ * be rather than blocking creation: not knowing what templates exist is a
+ * reason to make the user type one, never a reason to refuse the carousel.
  */
 export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialogProps) {
   const [title, setTitle] = useState("");
-  const [templateId, setTemplateId] = useState("explicativo");
+  // Seeded empty, never with a guessed id: until the listing arrives this
+  // component has no idea which templates the brand actually has, and the
+  // fallback path below asks the user to type one rather than pre-filling
+  // an id that may not exist.
+  const [templateId, setTemplateId] = useState("");
+  const [listing, setListing] = useState<{ templates: LayoutTemplateSummary[]; freeTemplateId: string } | null>(null);
+  // Distinguishes "still loading" from "the listing failed, fall back to
+  // the text input" — `listing === null` alone cannot tell them apart.
+  const [listingFailed, setListingFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Don't show "required" the instant the dialog opens — only once the
   // user has interacted with the field (blurred it or typed and cleared
   // it), so an empty required field isn't scolded before it's been touched.
   const [titleTouched, setTitleTouched] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    listTemplates(slug)
+      .then((res) => {
+        if (!alive) return;
+        setListing(res);
+        // Default to the first real template when one exists, otherwise to
+        // "sin template" — never to an id that may not exist for this brand.
+        setTemplateId(res.templates[0]?.id ?? res.freeTemplateId);
+      })
+      .catch(() => {
+        if (alive) setListingFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [slug]);
 
   const trimmedTitle = title.trim();
 
@@ -43,7 +73,17 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
     setBusy(true);
     setError(null);
     try {
-      const result = await createCarousel(slug, { title: trimmedTitle, templateId });
+      // Three distinct intents, and the wire has a distinct shape for each:
+      // `null` is the explicit "sin template"; an omitted field lets the
+      // server pick its default (the fallback input left empty — the user
+      // named no template, which is not the same as refusing one); an id is
+      // an id.
+      const isFree = listing !== null && templateId === listing.freeTemplateId;
+      const trimmedTemplateId = templateId.trim();
+      const result = await createCarousel(slug, {
+        title: trimmedTitle,
+        ...(isFree ? { templateId: null } : trimmedTemplateId ? { templateId: trimmedTemplateId } : {}),
+      });
       onCreated(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -90,7 +130,21 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
         </label>
         <label className="new-carousel-label">
           {t("newCarousel.templateLabel")}
-          <input className="ui-input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} />
+          {listing ? (
+            <select className="ui-input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value={listing.freeTemplateId}>{t("newCarousel.templateNone")}</option>
+              {listing.templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>
+                  {tpl.displayName} —{" "}
+                  {tpl.origin === "brand-override" ? t("templatesPane.originBrand") : t("templatesPane.originEngine")}
+                </option>
+              ))}
+            </select>
+          ) : listingFailed ? (
+            <input className="ui-input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} />
+          ) : (
+            <input className="ui-input" value={t("newCarousel.templateLoading")} disabled />
+          )}
         </label>
         <p className="new-carousel-hint">{t("newCarousel.hint")}</p>
         {error && <p className="new-carousel-error">{error}</p>}
