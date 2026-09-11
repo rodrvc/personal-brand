@@ -11,6 +11,11 @@ import { documentExists, readDocumentRaw, validateAgainstProfile } from "../docu
 import { buildRenderContext } from "../render-context.js";
 import { getSharedBrowser } from "../browser.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { PngCache, pngCacheKey, Semaphore } from "./png-cache.js";
+
+/** One process-wide cache and slot pool for the PNG route — shared across requests, not per-request state. */
+const pngCache = new PngCache();
+const pngSemaphore = new Semaphore(2);
 
 function parseSlideIndex(raw: string): number | undefined {
   const n = Number(raw);
@@ -110,25 +115,42 @@ export function renderRouter(): Router {
       const ctx = buildRenderContext(store, brand, doc.slides[n]!.background);
       const html = renderFreeLayoutSlide(brand, template, doc, n, ctx);
 
-      const browser = await getSharedBrowser();
-      const page = await browser.newPage({
-        viewport: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
-        deviceScaleFactor: 1,
-      });
-      try {
-        // The HTML references `/api/profiles/:slug/assets/files/*` URLs —
-        // Chromium needs to reach this same server to fetch them, so
-        // `setContent` is paired with a `baseURL`-equivalent: routing asset
-        // requests back to this process rather than the network.
-        await routeAssetRequestsInProcess(page);
-        await page.setContent(html, { waitUntil: "networkidle" });
-        await page.evaluate(() => document.fonts.ready);
-        const png = await page.screenshot();
-        res.setHeader("Content-Type", "image/png");
-        res.send(png);
-      } finally {
-        await page.close();
+      // The rendered HTML string IS the true content key (same slide index
+      // can render differently across edits), so a cache hit skips Chromium
+      // entirely — the strip fires one request per slide on open and again
+      // on every save, and most of those are identical content.
+      const cacheKey = pngCacheKey(req.params.slug, req.params.id, n, html);
+      let png = pngCache.get(cacheKey);
+      if (!png) {
+        png = await pngSemaphore.withSlot(async () => {
+          const browser = await getSharedBrowser();
+          const page = await browser.newPage({
+            viewport: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
+            deviceScaleFactor: 1,
+          });
+          try {
+            // The HTML references `/api/profiles/:slug/assets/files/*` URLs —
+            // Chromium needs to reach this same server to fetch them, so
+            // `setContent` is paired with a `baseURL`-equivalent: routing asset
+            // requests back to this process rather than the network.
+            await routeAssetRequestsInProcess(page);
+            await page.setContent(html, { waitUntil: "networkidle" });
+            await page.evaluate(() => document.fonts.ready);
+            return await page.screenshot();
+          } finally {
+            await page.close();
+          }
+        });
+        pngCache.set(cacheKey, png);
       }
+
+      res.setHeader("Content-Type", "image/png");
+      // Not `immutable`: the client's `?r=renderVersion` buster restarts at 0
+      // on every page load, so the same URL must be revalidated. Express's
+      // default weak ETag on `send` answers 304 from the in-memory cache
+      // without touching Chromium, which is the expensive part.
+      res.setHeader("Cache-Control", "private, no-cache");
+      res.send(png);
     } catch (error) {
       handleRenderError(error, res);
     }
