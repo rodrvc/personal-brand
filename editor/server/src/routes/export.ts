@@ -8,6 +8,7 @@ import {
   ExportHasPendingPiecesError,
   getExportJob,
   listOutputVersions,
+  type ExportJob,
   type RenderFn,
 } from "../export/export-queue.js";
 import { getSharedBrowser } from "../browser.js";
@@ -18,6 +19,24 @@ const productionRender: RenderFn = async (opts) => {
   return renderCarouselDocument({ ...opts, browser });
 };
 
+/**
+ * Explicit projection to the wire shape both endpoints return — this is the
+ * one place a server-internal field (e.g. `outputDir`, an absolute host
+ * path) can leak into the response. Duplicated on the client as
+ * `web/src/api/types.ts`'s `ExportJob`; keeping the two in sync by hand is
+ * what caused the `jobId` drift this route used to have.
+ */
+function toExportJobResponse(job: ExportJob) {
+  return {
+    jobId: job.id,
+    slug: job.slug,
+    carouselId: job.carouselId,
+    status: job.status,
+    error: job.error,
+    version: job.version,
+  };
+}
+
 export function exportRouter(): Router {
   const router = Router();
 
@@ -26,7 +45,7 @@ export function exportRouter(): Router {
       const store = new ProfileStore(req.params.slug);
       const allowPending = (req.body as { allowPending?: boolean } | undefined)?.allowPending === true;
       const jobId = enqueueExport(store, req.params.id, productionRender, { allowPending });
-      res.status(202).json({ jobId });
+      res.status(202).json(toExportJobResponse(getExportJob(jobId)!));
     } catch (error) {
       if (error instanceof ExportHasPendingPiecesError) {
         res.status(409).json({ error: error.message });
@@ -44,7 +63,7 @@ export function exportRouter(): Router {
       res.status(404).json({ error: `No export job "${req.params.jobId}"` });
       return;
     }
-    res.json(job);
+    res.json(toExportJobResponse(job));
   });
 
   router.get("/api/profiles/:slug/carousels/:id/outputs", (req, res) => {

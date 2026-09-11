@@ -20,13 +20,17 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
   // shows the "Exportar igual" override instead of the plain error text.
   const [pendingWarning, setPendingWarning] = useState(false);
   const started = useRef(false);
+  // Consecutive poll failures (network hiccups etc.), reset on any success.
+  // Distinct from a 404, which means the job itself is gone and stops
+  // polling right away.
+  const pollFailures = useRef(0);
 
   const startExport = useCallback(
     (allowPending: boolean) => {
       setError(null);
       setPendingWarning(false);
       exportCarousel(slug, carouselId, { allowPending })
-        .then(({ jobId }) => setJob({ jobId, slug, carouselId, status: "queued" }))
+        .then(setJob)
         .catch((err: unknown) => {
           if (err instanceof ApiError && err.status === 409) {
             setPendingWarning(true);
@@ -48,10 +52,25 @@ export function ExportDialog({ slug, carouselId, onClose }: ExportDialogProps) {
     if (!job || job.status === "done" || job.status === "error") return;
     const timer = setInterval(() => {
       getExportJob(slug, carouselId, job.jobId)
-        .then(setJob)
+        .then((next) => {
+          pollFailures.current = 0;
+          setError(null);
+          setJob(next);
+        })
         .catch((err: unknown) => {
-          clearInterval(timer);
-          setError(err instanceof Error ? err.message : String(err));
+          // Never show the raw server/network string here — a genuine
+          // render failure surfaces via `job.status === "error"` /
+          // `job.error` below, which this catch never touches.
+          if (err instanceof ApiError && err.status === 404) {
+            clearInterval(timer);
+            setError("No se encontró la exportación. Cierra y exporta de nuevo.");
+            return;
+          }
+          pollFailures.current += 1;
+          if (pollFailures.current >= 3) {
+            clearInterval(timer);
+            setError("No se pudo consultar el estado de la exportación. Intenta cerrar y exportar de nuevo.");
+          }
         });
     }, POLL_MS);
     return () => clearInterval(timer);
