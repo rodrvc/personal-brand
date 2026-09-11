@@ -30,12 +30,19 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
   const [templateId, setTemplateId] = useState("explicativo");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Don't show "required" the instant the dialog opens — only once the
+  // user has interacted with the field (blurred it or typed and cleared
+  // it), so an empty required field isn't scolded before it's been touched.
+  const [titleTouched, setTitleTouched] = useState(false);
+
+  const trimmedTitle = title.trim();
 
   async function handleSubmit() {
+    if (!trimmedTitle) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await createCarousel(slug, { title: title.trim() || undefined, templateId });
+      const result = await createCarousel(slug, { title: trimmedTitle, templateId });
       onCreated(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -51,7 +58,7 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
       actions={
         <>
           <Button onClick={onClose}>Cancelar</Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={busy}>
+          <Button variant="primary" onClick={handleSubmit} disabled={busy || !trimmedTitle}>
             {busy ? "Creando…" : "Crear"}
           </Button>
         </>
@@ -63,10 +70,18 @@ export function NewCarouselDialog({ slug, onClose, onCreated }: NewCarouselDialo
           <input
             className="ui-input"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setTitleTouched(true);
+            }}
+            onBlur={() => setTitleTouched(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSubmit();
+            }}
             placeholder="ej: Cómo armar tu primer carrusel"
             autoFocus
           />
+          {titleTouched && !trimmedTitle && <span className="new-carousel-inline-hint">El título es obligatorio.</span>}
         </label>
         <label className="new-carousel-label">
           Marca

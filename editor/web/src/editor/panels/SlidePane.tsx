@@ -174,14 +174,17 @@ export function SlidePane({ slug, brand, doc, renderVersion, slide, activeIndex,
         <div className="props-card-heading">Contraste</div>
         {contrastError && <p className="props-hint">{contrastError}</p>}
         {!contrastError && !measurements && <p className="props-hint">Midiendo…</p>}
-        {measurements?.map((m) => (
-          <div key={m.label} className="contrast-row" style={{ color: m.passesAA ? "var(--ui-ok)" : "var(--ui-danger)" }}>
-            <span className="layer-name">{m.label}</span>
-            <span className="contrast-value">
-              {m.ratio.toFixed(1)}:1 {m.passesAA ? "AA ✓" : "AA ✗"}
-            </span>
-          </div>
-        ))}
+        {measurements?.map((m) => {
+          const object = slide.objects.find((o) => o.id === m.objectId);
+          return (
+            <div key={m.objectId} className="contrast-row" style={{ color: m.passesAA ? "var(--ui-ok)" : "var(--ui-danger)" }}>
+              <span className="layer-name">{object?.slot ?? m.objectId}</span>
+              <span className="contrast-value">
+                {m.ratio.toFixed(1)}:1 {m.passesAA ? "AA ✓" : "AA ✗"}
+              </span>
+            </div>
+          );
+        })}
         <p className="props-hint">Medido contra el fondo real de cada lámina, no estimado.</p>
       </div>
     </>
