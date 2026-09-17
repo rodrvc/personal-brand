@@ -346,6 +346,25 @@ export function addSlideWithColor(doc: CarouselDocument, afterIndex: number, col
   return { ...doc, slides, updatedAt: new Date().toISOString() };
 }
 
+/**
+ * Removes a slide. Returns the document unchanged (same reference) when
+ * `slideId` matches nothing, so `useDocumentEditor`'s `update` skips the
+ * undo push and the save for a no-op — the same contract the other
+ * mutations here rely on.
+ *
+ * Nothing is destroyed by this on disk: the slide count changes, which the
+ * PUT route reads as a structural change and snapshots the previous
+ * document to `carousels/<id>/versions/<stamp>.json` before writing. The
+ * caller asks for that snapshot explicitly too (Editor.tsx), so the version
+ * exists even if a later edit restores the count before the debounced save
+ * fires.
+ */
+export function removeSlide(doc: CarouselDocument, slideId: string): CarouselDocument {
+  const slides = doc.slides.filter((slide) => slide.id !== slideId);
+  if (slides.length === doc.slides.length) return doc;
+  return { ...doc, slides, updatedAt: new Date().toISOString() };
+}
+
 export function setSlideKind(doc: CarouselDocument, slideId: string, kind: SlideKind): CarouselDocument {
   return mapSlide(doc, slideId, (slide) => ({ ...slide, kind }));
 }

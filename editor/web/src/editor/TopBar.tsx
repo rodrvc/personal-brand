@@ -75,7 +75,8 @@ export function TopBar({
       <button className="topbar-tool" title={t("topbar.tool.deselect")} aria-label={t("topbar.tool.deselect")} onClick={onClearSelection} disabled={!hasSelection}>
         ▲
       </button>
-      <button className="topbar-tool" title={t("topbar.tool.addText")} aria-label={t("topbar.tool.addText")} onClick={onAddText}>
+      {/* No slide, nothing to put text on (Editor's handler no-ops) — disabled rather than silently inert. */}
+      <button className="topbar-tool" title={t("topbar.tool.addText")} aria-label={t("topbar.tool.addText")} onClick={onAddText} disabled={doc.slides.length === 0}>
         T
       </button>
       <button className="topbar-tool" title={t("topbar.tool.addAsset")} aria-label={t("topbar.tool.addAsset")} onClick={onOpenAssets}>
@@ -98,7 +99,8 @@ export function TopBar({
         {theme === "dark" ? "🌙" : "☀️"}
       </button>
       <div className="topbar-sep" />
-      <button className="ui-btn ui-btn-primary" onClick={onExport}>
+      {/* An empty deck exports nothing: the queue would produce a v<N> with no PNG in it. */}
+      <button className="ui-btn ui-btn-primary" onClick={onExport} disabled={doc.slides.length === 0}>
         {t("topbar.export", { count: doc.slides.length })}
       </button>
     </header>

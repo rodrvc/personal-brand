@@ -56,9 +56,6 @@ export const es = {
   // Editor route (routes/EditorRoute.tsx)
   "editorRoute.loading": "Cargando carrusel…",
 
-  // Editor shell (editor/Editor.tsx)
-  "editor.empty": "Este carrusel no tiene láminas.",
-
   // Top bar (editor/TopBar.tsx)
   "topbar.back": "← Carruseles",
   "topbar.status.draft": "borrador",
@@ -76,6 +73,7 @@ export const es = {
 
   // Status bar (editor/StatusBar.tsx)
   "statusBar.slideOfTotal": "Lámina {index} de {total}",
+  "statusBar.noSlides": "Sin láminas",
   "statusBar.textKind": "Texto",
   "statusBar.assetKind": "Asset",
   "statusBar.fontSize": " · {size} px",
@@ -91,6 +89,10 @@ export const es = {
   "stage.stripAriaLabel": "Láminas",
   "stage.thumbKind.cover": "POR",
   "stage.thumbKind.closing": "FIN",
+  "stage.empty.title": "Este carrusel todavía no tiene láminas.",
+  "stage.empty.hint": "Agrega la primera lámina para empezar: el fondo, el texto y el orden se ajustan después.",
+  "stage.empty.addFirst": "Agregar la primera lámina",
+  "stage.deleteSlide": "Eliminar esta lámina",
   "stage.addSlide": "Añadir lámina",
 
   // Prompt header (editor/PromptHeader.tsx)
@@ -239,6 +241,7 @@ export const es = {
   "bucketPane.savingsSuffix": "de este carrusel salió de la biblioteca.",
   "bucketPane.savingsHistory": " Hace un tiempo era {ratio}%.",
   "bucketPane.savingsNoHistory": " Sin historial previo aún.",
+  "bucketPane.noSlideHint": "Agrega una lámina para poder usar estos assets en el carrusel.",
   "bucketPane.usedHint": "Borde verde = ya está en este carrusel. ↻ = veces reutilizado.",
   "bucketPane.candidatesHeading": "Candidatos generados",
   "bucketPane.candidatesHint": "Al fijar una pieza, entra a la biblioteca clasificada.",

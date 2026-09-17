@@ -167,3 +167,42 @@
   color: var(--ui-accent);
   background: var(--ui-accent-soft);
 }
+
+/* Reuses `.stage-add-thumb`'s box (both classes are set on the element);
+   only the solid border and the danger hover differ. */
+.stage-delete-thumb {
+  border-style: solid;
+}
+
+.stage-delete-thumb:hover {
+  border-color: var(--ui-danger);
+  color: var(--ui-danger);
+  background: none;
+}
+
+/* The entry screen of an empty carousel, centered in the area the sheet
+   would occupy: `.stage` is a flex row with no justify-content, so the
+   width plus `margin: auto` centers it exactly as `.stage-sheet-container`
+   does. The chrome around it does not move. */
+.stage-empty {
+  width: 100%;
+  height: 100%;
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--ui-ink-3);
+}
+
+.stage-empty p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+.stage-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ui-ink);
+}

@@ -430,36 +430,28 @@ export async function applyCompositionPlan(
 
 /**
  * Builds the `CarouselDocument` for a brand-new carousel (editor/ESTADO.md,
- * 2026-09-08 — "New carousel always starts empty"). Every slide gets the
- * template's structure (cover/step*N/closing, via `planSlideKinds` with no
- * prompt text to parse — so always the template's own default step count)
- * but NO objects and a plain surface-colored background: no library lookup,
- * no AI call, no `pending` placeholder anywhere. Composition is something
- * the user asks for afterward, per piece, via `POST .../regenerate`.
- */
-/**
+ * 2026-09-08 — "New carousel always starts empty"). "Empty" now means an
+ * empty deck: `slides: []`. Pre-planning the template's structure
+ * (cover/step*N/closing) still handed the owner a deck whose shape someone
+ * else decided — the same decision-made-for-you the empty canvas exists to
+ * remove, and a structure the chat would later work around rather than build.
+ * `planSlideKinds` / `resolveStepCount` stay untouched: `buildCompositionPlan`
+ * still plans a deck's shape from a prompt, which is where a template's
+ * default step count belongs. With no slides to plan, the brand and the
+ * resolved `LayoutTemplate` stop being inputs — hence the narrower signature;
+ * the caller still resolves both, which is what rejects a bad id.
+ *
  * `templateId` is `undefined` for a document with NO template reference:
  * the `template` key is then omitted entirely rather than written as a
  * sentinel id, which is what "no template" means on disk (carousel-document
- * spec's "Template reference on the document"). `template` is still the
- * resolved `LayoutTemplate` in that case — `freeLayoutTemplate()` — since
- * the slide structure is planned against it either way.
+ * spec's "Template reference on the document").
  */
 export function buildEmptyDocument(
-  brand: BrandTokens,
-  template: LayoutTemplate,
   templateId: string | undefined,
   carouselId: string,
   title?: string,
 ): CarouselDocument {
   const now = new Date().toISOString();
-  const kinds = planSlideKinds("", template);
-  const slides: Slide[] = kinds.map((kind, slideIndex) => ({
-    id: `slide-${slideIndex + 1}`,
-    kind,
-    background: { mode: "color", colorKey: brand.roles.surface, pinned: false, source: "manual" },
-    objects: [],
-  }));
 
   return {
     schemaVersion: 1,
@@ -471,7 +463,7 @@ export function buildEmptyDocument(
     canvas: { w: 1080, h: 1350 },
     prompt: { text: "", createdAt: now, runs: [] },
     ...(templateId === undefined ? {} : { template: { id: templateId } }),
-    slides,
+    slides: [],
   };
 }
 

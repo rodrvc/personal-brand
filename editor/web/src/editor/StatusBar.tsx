@@ -21,7 +21,9 @@ export function StatusBar({ doc, activeIndex, selection, pinnedCount, totalPiece
     <div className="status-bar">
       <span className="status-group">
         <i className="status-dot" />
-        {t("statusBar.slideOfTotal", { index: activeIndex + 1, total: doc.slides.length })}
+        {doc.slides.length === 0
+          ? t("statusBar.noSlides")
+          : t("statusBar.slideOfTotal", { index: activeIndex + 1, total: doc.slides.length })}
       </span>
       {selectedObject && (
         <span className="status-group">

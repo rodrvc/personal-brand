@@ -96,7 +96,10 @@ const tests: Array<[string, () => Promise<void>]> = [
       const store = new ProfileStore(SLUG);
       const onDisk = readDocumentRaw(store, "free-one") as Record<string, unknown>;
       assert.equal("template" in onDisk, false, "persisted document must omit `template`");
-      assert.ok(Array.isArray(onDisk.slides) && (onDisk.slides as unknown[]).length > 0);
+      // A new carousel is born with an empty deck: no slide shape is
+      // decided for the owner, by this route or by the template.
+      assert.deepEqual(onDisk.slides, [], "persisted document must have no slides");
+      assert.deepEqual((document as { slides: unknown[] }).slides, [], "response document must have no slides either");
     },
   ],
 
@@ -184,6 +187,23 @@ const tests: Array<[string, () => Promise<void>]> = [
   [
     "GET /slides/0/html renders a template-less document with no footer zone",
     async () => {
+      // The deck is empty on create, so this test supplies the one slide it
+      // needs to render — the same shape the editor's "+" writes.
+      const store = new ProfileStore(SLUG);
+      const free = readDocumentRaw(store, "free-one") as Record<string, unknown>;
+      const withSlide = {
+        ...free,
+        slides: [
+          {
+            id: "slide-1",
+            kind: "cover",
+            background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" },
+            objects: [],
+          },
+        ],
+      };
+      assert.equal((await put(`/api/profiles/${SLUG}/carousels/free-one`, withSlide)).status, 200);
+
       const res = await fetch(`${base}/api/profiles/${SLUG}/carousels/free-one/slides/0/html`);
       assert.equal(res.status, 200);
       const html = await res.text();

@@ -43,6 +43,12 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
     setDirty(value);
   }, []);
   const inFlight = useRef(false);
+  // Counted, not flagged, and decremented only by a successful PUT that
+  // carried those requests: a failed or superseded save must not drop the
+  // snapshot the caller asked for. The server versions what is on disk
+  // *before* applying the write, which is what puts a deleted slide in
+  // `carousels/<id>/versions/` and not only in this session's undo stack.
+  const snapshotRequests = useRef(0);
   // Bumped by schedulePersist and applyRemote. A PUT captures this before
   // sending; if it moved by the time the PUT resolves, that result is
   // stale (a newer edit or a server replacement arrived meanwhile), so
@@ -80,19 +86,29 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       if (inFlight.current) {
         if (unloading) {
           abortController.current?.abort();
-          putCarousel(slug, docRef.current, { keepalive: true }).catch(() => {});
+          putCarousel(slug, docRef.current, {
+            keepalive: true,
+            ...(snapshotRequests.current > 0 ? { snapshot: true } : {}),
+          }).catch(() => {});
         }
         return;
       }
 
       const sent = docRef.current;
       const myGeneration = generation.current;
+      const snapshotAtSend = snapshotRequests.current;
       inFlight.current = true;
       abortController.current = unloading ? null : new AbortController();
-      putCarousel(slug, sent, unloading ? { keepalive: true } : { signal: abortController.current!.signal })
+      putCarousel(slug, sent, {
+        ...(snapshotAtSend > 0 ? { snapshot: true } : {}),
+        ...(unloading ? { keepalive: true } : { signal: abortController.current!.signal }),
+      })
         .then(() => {
           inFlight.current = false;
           abortController.current = null;
+          // Subtract what this PUT satisfied rather than zeroing: a request
+          // raised while it was in flight must survive into the next save.
+          snapshotRequests.current -= snapshotAtSend;
           if (!alive.current) return;
           setSaveError(null);
           setRenderVersion((v) => v + 1);
@@ -132,9 +148,14 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
     [persist, setDirtyBoth],
   );
 
-  /** A user edit: pushes the previous state for undo, clears redo, persists. */
+  /**
+   * A user edit: pushes the previous state for undo, clears redo, persists.
+   * `snapshot` asks the server to version the on-disk document before this
+   * edit's save lands — for an edit that removes content (deleting a slide),
+   * where the client-side undo stack alone is not a durable way back.
+   */
   const update = useCallback(
-    (updater: (prev: CarouselDocument) => CarouselDocument) => {
+    (updater: (prev: CarouselDocument) => CarouselDocument, options?: { snapshot?: boolean }) => {
       // Compute from `docRef` outside the state updater: React StrictMode
       // double-invokes updaters, so side effects inside one (undo push,
       // dirty flag) ran twice and a stale `setDirty(true)` landed after the
@@ -145,6 +166,7 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       undoStack.current.push(prev);
       if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift();
       redoStack.current = [];
+      if (options?.snapshot) snapshotRequests.current += 1;
       // Order matters: `schedulePersist` assigns `docRef.current = next`
       // synchronously, which is what lets a second `update` in the same
       // event handler read the fresh document instead of the rendered one.
@@ -236,7 +258,12 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
         clearTimeout(persistTimer.current);
         persistTimer.current = null;
       }
-      if (dirtyRef.current) putCarousel(slug, docRef.current, { keepalive: true }).catch(() => {});
+      if (dirtyRef.current) {
+        putCarousel(slug, docRef.current, {
+          keepalive: true,
+          ...(snapshotRequests.current > 0 ? { snapshot: true } : {}),
+        }).catch(() => {});
+      }
     };
   }, [slug]);
 
