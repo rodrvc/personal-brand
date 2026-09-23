@@ -217,9 +217,8 @@ export function Stage({
             </div>
           </div>
         )}
-        {/* The entry screen, not an error state: a carousel is created with no slides. It lives
-            inside the stage so the chrome stays mounted — the guard it replaces returned before
-            the top bar and left the owner with no controls at all. */}
+        {/* The entry screen: a carousel is created with no slides. It lives inside the stage
+            so the chrome stays mounted. */}
         {!activeSlide && (
           <div className="stage-empty">
             <p className="stage-empty-title">{t("stage.empty.title")}</p>

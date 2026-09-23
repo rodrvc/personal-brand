@@ -108,10 +108,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       writeDocument(store, doc);
       assert.deepEqual(listVersions(store, doc.id), [], "no versions before any PUT");
 
-      // What the editor's delete button sends: one slide fewer. The slide
-      // count moving is itself the structural change the route versions on,
-      // so the deleted slide is recoverable from disk even if the client's
-      // explicit `?snapshot=true` never arrives.
+      // What the editor's delete button sends: one slide fewer.
       const { status } = await put(`/api/profiles/${FULL_SLUG}/carousels/${doc.id}`, { ...doc, slides: [slide("slide-1")] });
       assert.equal(status, 200);
       const [version] = listVersions(store, doc.id);

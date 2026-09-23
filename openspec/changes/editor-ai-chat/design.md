@@ -166,36 +166,6 @@ has nowhere today. The real wait is *applying*, and that has a proven shape: the
 `plan/apply` persists after each slot and answers `202 partial` on failure. Revisit SSE only if a single
 proposal call routinely exceeds a few seconds.
 
-### D8. Empty carousel
-
-- `buildEmptyDocument` (`planner.ts:448`) drops its `planSlideKinds("", template)` call and returns
-  `slides: []`. With no slides to plan, `brand` and the resolved `LayoutTemplate` stop being inputs, so
-  the signature narrows to `(templateId, carouselId, title?)`; the create route keeps loading both, which
-  is what rejects a broken `brand.json` or an unknown template id before either is persisted.
-- `resolveStepCount` / `planSlideKinds` stay untouched: `buildCompositionPlan` (`planner.ts:188`) still
-  uses them, and `explicativo.json:4`'s `"defaultSlideCount": 6` stays for the same reason — it is that
-  path's step count, not a creation default.
-- `?mode=plan` (preview branch, `routes/compose.ts:99`) and `plan/apply` (`:148`) are **unaffected**:
-  neither calls `buildEmptyDocument`, which only the non-preview branch reaches. `editor/web` never calls
-  `mode=plan` at all (`api/client.ts:117`, `previewCompositionPlan`, for script callers, and its JSDoc
-  says so).
-- **What breaks — corrected, two tests do**, against the earlier claim that none did:
-  `profiles.test.ts:38,105` imports and calls it on the old five-argument signature, and
-  `compose.test.ts:99` asserts `slides.length > 0` on a freshly created carousel while `:185` renders
-  `/slides/0/html` of that same carousel, which has no slide 0 once the deck is empty. PR 1 inverts the
-  first assertion and supplies the slide the second needs.
-- One UI site changes meaning: `Editor.tsx:106`'s `if (!activeSlide)` branch — dead today — becomes the
-  normal entry state. That guard returns *before* `TopBar` mounts, so a zero-slide document would strand
-  the owner with no controls; it is replaced by an empty-state block rendered inside the stage, above the
-  filmstrip that adds the first slide. `activeIndex` already clamps to 0 safely (`Editor.tsx:47`).
-- **Every control assuming an active slide has to be found, not guessed at** — `doc.slides[activeIndex]`
-  is `undefined` at zero slides, and four sites dereference it because until now it could not happen.
-  `TopBar`'s "add text" and export, and `PromptHeader`'s "regenerate unpinned" (its dialog needs a slide),
-  are disabled. `BucketPane`'s place actions (`panels/BucketPane.tsx:95,100`) outright **crash** on
-  `prev.slides[activeIndex]!.id` — `PropertiesPanel.tsx:62` renders that tab unguarded, unlike `sel` and
-  `lam` — so the library stays browsable and placing is refused with a hint. The export *route* stays
-  open: a script may export an empty deck; the UI may not.
-
 ## PR split (dependency order, each ≤600 lines including tests)
 
 1. **Empty deck + entry screen** — `buildEmptyDocument` returns `slides: []`, the empty branch becomes the

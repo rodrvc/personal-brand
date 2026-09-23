@@ -355,9 +355,7 @@ export function addSlideWithColor(doc: CarouselDocument, afterIndex: number, col
  * Nothing is destroyed by this on disk: the slide count changes, which the
  * PUT route reads as a structural change and snapshots the previous
  * document to `carousels/<id>/versions/<stamp>.json` before writing. The
- * caller asks for that snapshot explicitly too (Editor.tsx), so the version
- * exists even if a later edit restores the count before the debounced save
- * fires.
+ * caller asks for that snapshot explicitly too (Editor.tsx).
  */
 export function removeSlide(doc: CarouselDocument, slideId: string): CarouselDocument {
   const slides = doc.slides.filter((slide) => slide.id !== slideId);

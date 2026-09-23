@@ -114,11 +114,8 @@ export function Editor({
   );
 
   /**
-   * Undo is the way back in-session; `snapshot: true` is the way back after
-   * it, versioning the on-disk document before the save lands so the slide
-   * survives in `carousels/<id>/versions/`. That version is the last SAVED
-   * document — an edit made inside the 600ms debounce is not in it — and no
-   * UI reads versions yet, so recovering one is a file, not a button.
+   * `snapshot: true` versions the last SAVED document — an edit made inside
+   * the 600ms debounce is not in it.
    */
   const handleDeleteSlide = useCallback(() => {
     if (!activeSlide) return;

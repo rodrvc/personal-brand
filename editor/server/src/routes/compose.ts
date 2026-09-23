@@ -56,13 +56,9 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
   });
 
   /**
-   * Creates a new carousel. Owner decision (editor/ESTADO.md, 2026-09-08 —
-   * "New carousel always starts empty"): the editor never composes on
-   * entry. This handler is INERT — it returns a document with no slides at
-   * all (`buildEmptyDocument`): no AI provider call, no library lookup, no
-   * cost, no job id, and no deck shape decided on the owner's behalf.
-   * Slides are added afterward from the editor, and composition happens per
-   * piece through the existing controls (`POST .../regenerate`).
+   * Creates a new carousel. This handler is INERT — it returns a document
+   * with no slides at all (`buildEmptyDocument`): no AI provider call, no
+   * library lookup, no cost, and no job id.
    *
    * `?mode=plan` (or `{ preview: true }` in the body) is kept for
    * API/script callers that still want the OLD prompt-driven
@@ -132,12 +128,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      // An empty deck has no slides to plan, so neither the brand nor the
-      // resolved template is an input to the document any more. Both loads
-      // stay, and `void` marks the discarded result as deliberate: they are
-      // what reject a broken `brand.json` or an unknown template id here,
-      // instead of persisting a reference that resolves to nothing the first
-      // time the editor opens it.
+      // These two loads are the input validation: they reject a broken
+      // `brand.json` or an unknown template id, so the result is discarded.
       const brand = loadBrand(store.roots.profileDir);
       if (templateId !== null) void loadLayoutTemplate(store.roots.profileDir, templateId, brand);
       const document = buildEmptyDocument(templateId ?? undefined, carouselId, body.title);

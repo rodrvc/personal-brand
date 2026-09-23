@@ -429,17 +429,7 @@ export async function applyCompositionPlan(
 }
 
 /**
- * Builds the `CarouselDocument` for a brand-new carousel (editor/ESTADO.md,
- * 2026-09-08 — "New carousel always starts empty"). "Empty" now means an
- * empty deck: `slides: []`. Pre-planning the template's structure
- * (cover/step*N/closing) still handed the owner a deck whose shape someone
- * else decided — the same decision-made-for-you the empty canvas exists to
- * remove, and a structure the chat would later work around rather than build.
- * `planSlideKinds` / `resolveStepCount` stay untouched: `buildCompositionPlan`
- * still plans a deck's shape from a prompt, which is where a template's
- * default step count belongs. With no slides to plan, the brand and the
- * resolved `LayoutTemplate` stop being inputs — hence the narrower signature;
- * the caller still resolves both, which is what rejects a bad id.
+ * Builds the `CarouselDocument` for a brand-new carousel, with no slides.
  *
  * `templateId` is `undefined` for a document with NO template reference:
  * the `template` key is then omitted entirely rather than written as a
