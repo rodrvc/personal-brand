@@ -1,10 +1,8 @@
-import { hashContent } from "../../../../system/assets/index.js";
+import { hashContent, loadIndex, registerFile } from "../../../../system/assets/index.js";
 
-import { assertValidCarouselId } from "../document-store.js";
 import type { ProfileStore } from "../profile-store.js";
 
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
-const REFERENCE_ID = /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/;
 
 export interface ChatReference {
   id: string;
@@ -13,25 +11,28 @@ export interface ChatReference {
 
 export class ChatReferenceError extends Error {}
 
-/** Stored beside the carousel, outside the asset index: a reference feeds generation and never becomes library material. */
-function referencePath(carouselId: string, id: string): string {
-  assertValidCarouselId(carouselId);
-  if (!REFERENCE_ID.test(id)) throw new ChatReferenceError(`Invalid reference id "${id}"`);
-  return `carousels/${carouselId}/references/${id}`;
-}
-
-export function saveReference(store: ProfileStore, carouselId: string, mime: string, bytes: Buffer): string {
+/** Registered as a reference asset: indexed so generation can resolve it by id, kept out of the library. */
+export function saveReference(store: ProfileStore, mime: string, bytes: Buffer): string {
   const ext = EXTENSIONS[mime];
   if (!ext) throw new ChatReferenceError(`Unsupported reference type "${mime}"`);
-  const id = `${hashContent(bytes)}.${ext}`;
-  store.writeFile(referencePath(carouselId, id), bytes);
-  return id;
+  return registerFile(store.roots.profileDir, bytes, {
+    kind: "unclassified",
+    origin: "reference",
+    status: "candidate",
+    destRelPath: `assets/references/${hashContent(bytes)}.${ext}`,
+  }).id;
 }
 
-export function loadReferenceImages(store: ProfileStore, carouselId: string, ids: string[]): Array<{ mime: string; base64: string }> {
+export function readAssetFile(store: ProfileStore, assetId: string): { bytes: Buffer; mime: string } | undefined {
+  const entry = loadIndex(store.roots.profileDir).entries.find((e) => e.id === assetId);
+  if (!entry || !store.exists(entry.path)) return undefined;
+  return { bytes: store.readFile(entry.path), mime: entry.mime };
+}
+
+export function loadReferenceImages(store: ProfileStore, ids: string[]): Array<{ mime: string; base64: string }> {
   return ids.map((id) => {
-    if (!store.exists(referencePath(carouselId, id))) throw new ChatReferenceError(`Reference "${id}" not found`);
-    const mime = Object.entries(EXTENSIONS).find(([, ext]) => id.endsWith(`.${ext}`))![0];
-    return { mime, base64: store.readFile(referencePath(carouselId, id)).toString("base64") };
+    const file = readAssetFile(store, id);
+    if (!file || !EXTENSIONS[file.mime]) throw new ChatReferenceError(`Reference "${id}" is not an image in this profile`);
+    return { mime: file.mime, base64: file.bytes.toString("base64") };
   });
 }

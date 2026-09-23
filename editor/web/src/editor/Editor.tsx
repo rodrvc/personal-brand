@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BrandTokens, CarouselDocument, ChatRecord, Currency, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate, getCarousel } from "../api/client";
-import { addSlideWithColor, addTextObject, newEditorId, removeSlide } from "./mutations";
+import { addSlideWithColor, addTextObject, newEditorId, removeObject, removeSlide } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
@@ -55,6 +55,7 @@ export function Editor({
   const [showRegenDialog, setShowRegenDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -67,6 +68,12 @@ export function Editor({
   useEffect(() => {
     setSelection(null);
   }, [activeIndex]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const activeSlide = doc.slides[activeIndex];
 
@@ -136,6 +143,30 @@ export function Editor({
     setSpend({ total: formatCost(totalCents, currency), breakdown: lines.length > 0 ? lines.join("\n") : t("statusBar.spendNone") });
   }, []);
 
+  const handleDeleteObject = useCallback(() => {
+    if (!selection) return;
+    const object = doc.slides.find((s) => s.id === selection.slideId)?.objects.find((o) => o.id === selection.objectId);
+    if (!object) return;
+    if (object.locked) {
+      setNotice(t("editor.deleteBlocked"));
+      return;
+    }
+    update((d) => removeObject(d, selection.slideId, selection.objectId));
+    setSelection(null);
+  }, [doc.slides, selection, update]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!selection || (e.key !== "Delete" && e.key !== "Backspace")) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      handleDeleteObject();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleDeleteObject, selection]);
+
   const handleChatApplied = useCallback(
     (next: CarouselDocument) => {
       applyRemote(next);
@@ -153,6 +184,7 @@ export function Editor({
         doc={doc}
         hasSelection={selection !== null}
         onClearSelection={() => setSelection(null)}
+        onDeleteSelection={handleDeleteObject}
         onOpenAssets={() => setPanelTab("bucket")}
         onAddText={handleAddText}
         canUndo={canUndo}
@@ -206,6 +238,11 @@ export function Editor({
           onTemplateChange={onTemplateChange}
         />
       </div>
+      {notice && (
+        <div className="editor-toast" role="alert">
+          {notice}
+        </div>
+      )}
       <StatusBar
         doc={doc}
         activeIndex={activeIndex}

@@ -77,6 +77,10 @@ const tests: Array<[string, () => void]> = [
           .provenance.map((p) => p.source),
         ["document", "generation"],
       );
+      assert.deepEqual(
+        resolveAction(ctx, { type: "generate_visual", slideId: "slide-3", prompt: "a chair", kind: "decoration", why: "" }).provenance[0],
+        { source: "free", detail: "3" },
+      );
       assert.deepEqual(resolveAction(ctx, { type: "set_text", slideId: "slide-3", slot: "title", text: "Hi", why: "" }).provenance, [
         { source: "document", detail: "3 · title" },
         { source: "request", detail: "Hi" },
@@ -85,6 +89,24 @@ const tests: Array<[string, () => void]> = [
         resolveAction(ctx, { type: "add_slide", afterIndex: 1, kind: "step", why: "" }).provenance.map((p) => p.source),
         ["template", "brand"],
       );
+    },
+  ],
+  [
+    "delete_object removes only the named object, pinned or not, and refuses a locked one",
+    () => {
+      const after = apply({ type: "delete_object", slideId: "slide-3", objectId: "title-3", why: "" });
+      const expected = structuredClone(doc) as CarouselDocument;
+      expected.slides[2]!.objects = [];
+      assert.deepEqual({ ...after, updatedAt: now }, expected);
+      assert.deepEqual(resolveAction(ctx, { type: "delete_object", slideId: "slide-3", slot: "title", why: "" }).provenance, [
+        { source: "document", detail: "3 · title · text" },
+      ]);
+      const pinnedGone = apply({ type: "delete_object", slideId: "slide-2", objectId: "title-2", why: "" });
+      assert.deepEqual(pinnedGone.slides[1]!.objects, [], "a pinned object is deleted when the owner asks");
+      const locked = { ...ctx, doc: structuredClone(doc) as CarouselDocument };
+      locked.doc.slides[2]!.objects[0]!.locked = true;
+      assert.throws(() => resolveAction(locked, { type: "delete_object", slideId: "slide-3", objectId: "title-3", why: "" }), /bloqueado/);
+      assert.throws(() => resolveAction(ctx, { type: "delete_object", slideId: "slide-3", objectId: "nope", why: "" }), /no tiene/);
     },
   ],
   [

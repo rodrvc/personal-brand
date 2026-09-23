@@ -4,9 +4,17 @@ import type { BrandTokens } from "../../../../system/ig-carousel/brand-schema.js
 import type { CarouselDocument, Slide, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import type { LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
 import type { AssetEntry } from "../../../../system/assets/index.js";
+import { removeObject } from "../../../../system/ig-carousel/free-objects.js";
 import { newChatId } from "./chat-log.js";
 
-export const CHAT_ACTION_TYPES = ["set_text", "set_visual_from_library", "generate_visual", "add_slide", "delete_slide"] as const;
+export const CHAT_ACTION_TYPES = [
+  "set_text",
+  "set_visual_from_library",
+  "generate_visual",
+  "add_slide",
+  "delete_slide",
+  "delete_object",
+] as const;
 
 const why = z.string().default("");
 export const modelActionSchema = z.discriminatedUnion("type", [
@@ -22,22 +30,23 @@ export const modelActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("generate_visual"),
     slideId: z.string(),
-    slot: z.string(),
+    slot: z.string().optional(),
     prompt: z.string().min(1),
     kind: z.enum(["background", "character", "photo", "decoration"]),
     why,
   }),
   z.object({ type: z.literal("add_slide"), afterIndex: z.number().int(), kind: z.enum(["cover", "step", "closing"]), why }),
   z.object({ type: z.literal("delete_slide"), slideId: z.string(), why }),
+  z.object({ type: z.literal("delete_object"), slideId: z.string(), objectId: z.string().optional(), slot: z.string().optional(), why }),
 ]);
 export type ModelAction = z.infer<typeof modelActionSchema>;
 
 export interface Provenance {
-  source: "template" | "document" | "library" | "generation" | "reference" | "brand" | "request";
+  source: "template" | "document" | "free" | "library" | "generation" | "reference" | "reference_described" | "brand" | "request";
   detail: string;
 }
 
-export type ChatAction = ModelAction & { id: string; provenance: Provenance[] };
+export type ChatAction = ModelAction & { id: string; provenance: Provenance[]; referenceIds?: string[] };
 
 export type LibraryEntry = Pick<AssetEntry, "id" | "kind" | "tags" | "w" | "h"> & { name: string };
 
@@ -62,10 +71,31 @@ function templateSlot(ctx: ActionContext, slide: Slide, name: string, type: "tex
   return ctx.template.slides[slide.kind]?.slots.find((s) => s.name === name && s.type === type);
 }
 
+function objectTarget(slide: Slide, action: Extract<ModelAction, { type: "delete_object" }>): SlideObject | undefined {
+  return slide.objects.find((o) => (action.objectId ? o.id === action.objectId : action.slot !== undefined && o.slot === action.slot));
+}
+
 function textTarget(slide: Slide, action: Extract<ModelAction, { type: "set_text" }>): SlideObject | undefined {
   return slide.objects.find(
     (o) => o.kind === "text" && (action.objectId ? o.id === action.objectId : o.slot === action.slot),
   );
+}
+
+type VisualAction = Extract<ModelAction, { type: "set_visual_from_library" | "generate_visual" }>;
+
+export function visualSlot(action: VisualAction): string | undefined {
+  if (action.slot) return action.slot;
+  return action.type === "generate_visual" && action.kind === "background" ? BACKGROUND_SLOT : undefined;
+}
+
+/** A generated image with no slot the slide can take is placed as a loose object instead. */
+export function isFreePlacement(ctx: ActionContext, action: ModelAction): boolean {
+  if (action.type !== "generate_visual") return false;
+  const slot = visualSlot(action);
+  if (slot === BACKGROUND_SLOT) return false;
+  const slide = ctx.doc.slides.find((s) => s.id === action.slideId);
+  if (!slot || !slide) return true;
+  return !slide.objects.some((o) => o.kind === "asset" && o.slot === slot) && !templateSlot(ctx, slide, slot, "asset");
 }
 
 /** Checks one action against the current document and derives where each part of it comes from. */
@@ -89,16 +119,19 @@ export function resolveAction(ctx: ActionContext, action: ModelAction): ChatActi
     case "set_visual_from_library":
     case "generate_visual": {
       const { slide, number } = slideOf(ctx.doc, action.slideId);
-      if (action.slot === BACKGROUND_SLOT) {
+      const slot = visualSlot(action) ?? "";
+      if (isFreePlacement(ctx, action)) {
+        provenance.push({ source: "free", detail: String(number) });
+      } else if (slot === BACKGROUND_SLOT) {
         if (slide.background.pinned) throw new ChatActionError(`El fondo de la lámina ${number} está fijado.`);
         provenance.push({ source: "document", detail: `${number} · ${BACKGROUND_SLOT}` });
       } else {
-        const target = slide.objects.find((o) => o.kind === "asset" && o.slot === action.slot);
+        const target = slide.objects.find((o) => o.kind === "asset" && o.slot === slot);
         if (target?.pinned) throw new ChatActionError(`La imagen de la lámina ${number} está fijada.`);
-        if (target) provenance.push({ source: "document", detail: `${number} · ${action.slot}` });
-        else if (templateSlot(ctx, slide, action.slot, "asset"))
-          provenance.push({ source: "template", detail: `${ctx.template.id} · ${action.slot}` });
-        else throw new ChatActionError(`La lámina ${number} no tiene el espacio de imagen "${action.slot}".`);
+        if (target) provenance.push({ source: "document", detail: `${number} · ${slot}` });
+        else if (templateSlot(ctx, slide, slot, "asset"))
+          provenance.push({ source: "template", detail: `${ctx.template.id} · ${slot}` });
+        else throw new ChatActionError(`La lámina ${number} no tiene el espacio de imagen "${slot}".`);
       }
       if (action.type === "generate_visual") {
         provenance.push({ source: "generation", detail: action.prompt });
@@ -119,6 +152,16 @@ export function resolveAction(ctx: ActionContext, action: ModelAction): ChatActi
           : { source: "request", detail: action.kind },
       );
       provenance.push({ source: "brand", detail: `surface · ${ctx.brand.roles.surface}` });
+      break;
+    }
+    case "delete_object": {
+      const { slide, number } = slideOf(ctx.doc, action.slideId);
+      const target = objectTarget(slide, action);
+      if (!target) throw new ChatActionError(`La lámina ${number} no tiene ese objeto.`);
+      if (target.locked) {
+        throw new ChatActionError(`Ese objeto de la lámina ${number} está bloqueado: desbloquéalo primero.`);
+      }
+      provenance.push({ source: "document", detail: `${number} · ${target.slot ?? target.id} · ${target.kind}` });
       break;
     }
     case "delete_slide": {
@@ -202,6 +245,11 @@ export function applyAction(ctx: ActionContext, action: ChatAction): { document:
     case "delete_slide":
       doc = { ...doc, slides: doc.slides.filter((s) => s.id !== action.slideId) };
       break;
+    case "delete_object": {
+      const slide = doc.slides.find((s) => s.id === action.slideId)!;
+      doc = removeObject(doc, action.slideId, objectTarget(slide, action)!.id);
+      break;
+    }
   }
   return { document: { ...doc, updatedAt: new Date().toISOString() }, slideIds };
 }

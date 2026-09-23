@@ -60,7 +60,7 @@ export interface AssetEntry {
   id: string;
   kind: AssetKind;
   status: AssetStatus;
-  origin: "manual" | "ai";
+  origin: "manual" | "ai" | "reference";
   tags?: string[];
   path: string;
   usageCount?: number;

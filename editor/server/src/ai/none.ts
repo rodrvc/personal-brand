@@ -30,6 +30,10 @@ export class NonePieceGenerator implements PieceGenerator {
     );
   }
 
+  acceptsReference(): boolean {
+    return false;
+  }
+
   async completeJson(_request: JsonCompletionRequest): Promise<JsonCompletionResult> {
     throw new GenerationUnavailableError(
       "El chat con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",

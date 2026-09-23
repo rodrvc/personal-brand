@@ -26,6 +26,11 @@ function usedAssetIds(doc: CarouselDocument): Set<string> {
   return ids;
 }
 
+/** A chat reference joins the library only once it is placed on a slide (and so approved). */
+function isLibraryEntry(entry: AssetEntry): boolean {
+  return entry.origin !== "reference" || entry.status === "approved";
+}
+
 export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: BucketPaneProps) {
   const [entries, setEntries] = useState<AssetEntry[] | null>(null);
   const [outputs, setOutputs] = useState<OutputVersion[] | null>(null);
@@ -34,7 +39,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
 
   const reloadAssets = useCallback(() => {
     listAssets(slug)
-      .then((res) => setEntries(res.entries))
+      .then((res) => setEntries(res.entries.filter(isLibraryEntry)))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [slug]);
 
@@ -42,7 +47,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
     let alive = true;
     listAssets(slug)
       .then((res) => {
-        if (alive) setEntries(res.entries);
+        if (alive) setEntries(res.entries.filter(isLibraryEntry));
       })
       .catch((err: unknown) => {
         if (alive) setError(err instanceof Error ? err.message : String(err));

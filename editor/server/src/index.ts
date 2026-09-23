@@ -5,7 +5,8 @@ import { loadRepoRootEnv } from "./env.js";
 loadRepoRootEnv();
 
 import { checkChromiumAvailable, closeSharedBrowser } from "./browser.js";
-import { listProfiles } from "./profile-store.js";
+import { listProfiles, ProfileStore } from "./profile-store.js";
+import { readAssetFile } from "./chat/chat-references.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { assetsRouter } from "./routes/assets.js";
 import { renderRouter } from "./routes/render.js";
@@ -45,11 +46,11 @@ const apiKey = process.env.OPENAI_API_KEY?.trim();
 // Never logged, never returned — only its presence is reported.
 console.log(apiKey ? "AI: configured" : "AI: not configured (set OPENAI_API_KEY in .env to enable generation)");
 
-function getGenerator(_slug: string): PieceGenerator {
+function getGenerator(slug: string): PieceGenerator {
   // One instance is enough today (no per-profile provider config exists),
   // but routes ask by slug so a future per-brand override has a seam to
   // land in without changing every call site.
-  return apiKey ? new OpenAiPieceGenerator(apiKey) : new NonePieceGenerator();
+  return apiKey ? new OpenAiPieceGenerator(apiKey, (id) => readAssetFile(new ProfileStore(slug), id)) : new NonePieceGenerator();
 }
 
 const app = express();

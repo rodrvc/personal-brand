@@ -1,9 +1,10 @@
-import { estimateImageCostCents, estimateTextCostCents, IMAGE_MODEL, TEXT_MODEL } from "./pricing.js";
+import { estimateImageCostFromUsage, estimateTextCostCents, IMAGE_MODEL, TEXT_MODEL } from "./pricing.js";
 import type {
   DraftCopyPlan,
   DraftCopyResult,
   DraftedSlideCopy,
   GenerateImageSpec,
+  AssetFileResolver,
   GeneratedImage,
   JsonCompletionRequest,
   JsonCompletionResult,
@@ -19,6 +20,9 @@ import type {
 
 const CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const IMAGES_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
+const IMAGES_EDITS_URL = "https://api.openai.com/v1/images/edits";
+const EDIT_INPUT_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const MAX_EDIT_INPUTS = 16;
 
 /**
  * The system instruction sent with every `draftCopy` call. Two hard rules,
@@ -78,6 +82,9 @@ function brandContextForImage(brand?: GenerateImageSpec["brand"]): string {
   return clauses.length > 0 ? "\n\n" + clauses.join(" ") : "";
 }
 
+const CUTOUT_INSTRUCTION =
+  "Only the isolated subject on a fully transparent background: no scene, no floor, no ground plane, no cast shadow.";
+
 async function readJsonOrThrow(response: Response, context: string): Promise<any> {
   const text = await response.text();
   if (!response.ok) {
@@ -91,7 +98,14 @@ async function readJsonOrThrow(response: Response, context: string): Promise<any
 }
 
 export class OpenAiPieceGenerator implements PieceGenerator {
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly resolveAsset: AssetFileResolver = () => undefined,
+  ) {}
+
+  acceptsReference(_kind: GenerateImageSpec["kind"], mime: string): boolean {
+    return EDIT_INPUT_MIMES.has(mime);
+  }
 
   async draftCopy(plan: DraftCopyPlan): Promise<DraftCopyResult> {
     const userPrompt = JSON.stringify({
@@ -178,24 +192,39 @@ export class OpenAiPieceGenerator implements PieceGenerator {
   }
 
   async generateImage(spec: GenerateImageSpec): Promise<GeneratedImage> {
-    const prompt = `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}`;
+    const cutout = spec.kind !== "background";
+    const prompt = `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}${cutout ? `\n\n${CUTOUT_INSTRUCTION}` : ""}`;
     logPrompt("generateImage", prompt);
-    const response = await fetch(IMAGES_GENERATIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: IMAGE_MODEL,
-        prompt,
-        quality: "low",
-        size: pickSize(spec.canvas),
-        n: 1,
-      }),
-    });
+    const fields: Record<string, string> = {
+      model: IMAGE_MODEL,
+      prompt,
+      quality: "low",
+      size: cutout ? "1024x1024" : pickSize(spec.canvas),
+      n: "1",
+      ...(cutout ? { background: "transparent", output_format: "png" } : {}),
+    };
+    const references = (spec.referenceAssetIds ?? [])
+      .map((id) => ({ id, file: this.resolveAsset(id) }))
+      .filter((r) => r.file && this.acceptsReference(spec.kind, r.file.mime))
+      .slice(0, MAX_EDIT_INPUTS);
 
-    const json = await readJsonOrThrow(response, "image generation");
+    let response: Response;
+    if (references.length > 0) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      for (const { id, file } of references) {
+        form.append("image[]", new Blob([new Uint8Array(file!.bytes)], { type: file!.mime }), `${id}.${file!.mime.split("/")[1]}`);
+      }
+      response = await fetch(IMAGES_EDITS_URL, { method: "POST", headers: { Authorization: `Bearer ${this.apiKey}` }, body: form });
+    } else {
+      response = await fetch(IMAGES_GENERATIONS_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...fields, n: 1 }),
+      });
+    }
+
+    const json = await readJsonOrThrow(response, references.length > 0 ? "image edit" : "image generation");
     const b64: string | undefined = json.data?.[0]?.b64_json;
     if (!b64) {
       throw new Error("OpenAI image generation response had no b64_json payload.");
@@ -205,7 +234,8 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       buffer: Buffer.from(b64, "base64"),
       mime: "image/png",
       model: IMAGE_MODEL,
-      costCents: estimateImageCostCents(),
+      costCents: estimateImageCostFromUsage(json.usage),
+      usedReferenceIds: references.map((r) => r.id),
     };
   }
 }

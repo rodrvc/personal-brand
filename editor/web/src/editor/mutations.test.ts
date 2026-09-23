@@ -11,6 +11,7 @@ import {
   addTextObject,
   clampGeometryToCanvas,
   newEditorId,
+  removeObject,
   removeSlide,
   resetObjectToSlot,
   setObjectGeometry,
@@ -434,3 +435,20 @@ console.log("mutations: addTextObject insets a new box when the template declare
 }
 
 console.log("mutations: removeSlide drops one slide, keeps the document valid, and no-ops by identity on an unknown id");
+
+{
+  const withText = addTextObject(baseDoc(), "slide-cover", "obj-a", template, brand);
+  const withTwo = addTextObject(withText, "slide-cover", "obj-b", template, brand);
+
+  const next = removeObject(withTwo, "slide-cover", "obj-a");
+  assert.deepEqual(
+    next.slides[0]!.objects.map((o) => o.id),
+    withTwo.slides[0]!.objects.map((o) => o.id).filter((id) => id !== "obj-a"),
+    "only the named object is gone",
+  );
+  assert.deepEqual(next.slides[0]!.objects.find((o) => o.id === "obj-b"), withTwo.slides[0]!.objects.find((o) => o.id === "obj-b"));
+  assert.equal(removeObject(withTwo, "slide-cover", "no-such-object"), withTwo, "an unknown id returns the same document reference");
+  assert.equal(removeObject(withTwo, "no-such-slide", "obj-a"), withTwo, "so does an unknown slide");
+}
+
+console.log("mutations: removeObject drops only the named object and no-ops by identity on an unknown id");

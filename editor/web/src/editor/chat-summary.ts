@@ -7,6 +7,18 @@ function slideNumber(doc: CarouselDocument, slideId: string): number {
   return doc.slides.findIndex((s) => s.id === slideId) + 1;
 }
 
+function isLoose(action: ChatAction): boolean {
+  return action.provenance.some((p) => p.source === "free");
+}
+
+function objectName(doc: CarouselDocument, action: Extract<ChatAction, { type: "delete_object" }>): string {
+  const object = doc.slides
+    .find((s) => s.id === action.slideId)
+    ?.objects.find((o) => (action.objectId ? o.id === action.objectId : o.slot === action.slot));
+  if (object?.kind === "text") return t("chat.piece.textQuoted", { text: object.text });
+  return object?.slot ? t("chat.piece.imageInSlot", { slot: object.slot }) : t("chat.piece.image");
+}
+
 function pieceName(slot: string | undefined): string {
   return slot === BACKGROUND_SLOT ? t("chat.piece.background") : (slot ?? t("chat.piece.text"));
 }
@@ -18,13 +30,17 @@ export function describeAction(doc: CarouselDocument, action: ChatAction): strin
     case "set_visual_from_library":
       return t("chat.action.setVisual", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot) });
     case "generate_visual":
-      return t("chat.action.generateVisual", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot) });
+      return isLoose(action)
+        ? t("chat.action.generateLoose", { n: slideNumber(doc, action.slideId) })
+        : t("chat.action.generateVisual", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot) });
     case "add_slide":
       return action.afterIndex < 0
         ? t("chat.action.addSlideFirst", { kind: t(`chat.kind.${action.kind}`) })
         : t("chat.action.addSlide", { kind: t(`chat.kind.${action.kind}`), n: action.afterIndex + 1 });
     case "delete_slide":
       return t("chat.action.deleteSlide", { n: slideNumber(doc, action.slideId) });
+    case "delete_object":
+      return t("chat.action.deleteObject", { n: slideNumber(doc, action.slideId), piece: objectName(doc, action) });
   }
 }
 
@@ -38,9 +54,12 @@ export function describeIntact(doc: CarouselDocument, actions: ChatAction[]): st
   const deleted = new Set<string>();
   for (const action of actions) {
     if (action.type === "delete_slide") deleted.add(action.slideId);
+    if (action.type === "delete_object") {
+      changedPieces.set(action.slideId, [...(changedPieces.get(action.slideId) ?? []), objectName(doc, action)]);
+    }
     if (action.type === "set_text" || action.type === "set_visual_from_library" || action.type === "generate_visual") {
       const pieces = changedPieces.get(action.slideId) ?? [];
-      changedPieces.set(action.slideId, [...pieces, pieceName(action.slot)]);
+      changedPieces.set(action.slideId, isLoose(action) ? pieces : [...pieces, pieceName(action.slot)]);
     }
   }
   const untouched = doc.slides
@@ -51,7 +70,8 @@ export function describeIntact(doc: CarouselDocument, actions: ChatAction[]): st
     untouched.length > 0 ? t("chat.intact.slides", { list: untouched.join(", ") }) : t("chat.intact.none"),
   ];
   for (const [slideId, pieces] of changedPieces) {
-    lines.push(t("chat.intact.onlyPieces", { n: slideNumber(doc, slideId), pieces: pieces.join(", ") }));
+    const n = slideNumber(doc, slideId);
+    lines.push(pieces.length > 0 ? t("chat.intact.onlyPieces", { n, pieces: pieces.join(", ") }) : t("chat.intact.onlyAdds", { n }));
   }
   return lines;
 }

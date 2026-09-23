@@ -60,15 +60,19 @@ function reset(): void {
 let nextReply: unknown;
 let seenImages = 0;
 let failGeneration = false;
+let seenReferenceIds: string[] = [];
 const fakeGenerator = {
   async completeJson(request: { images?: unknown[] }) {
     seenImages = request.images?.length ?? 0;
     return { json: nextReply, model: "fake", costCents: 0 };
   },
-  async generateImage() {
+  async generateImage(spec: { referenceAssetIds?: string[] }) {
     if (failGeneration) throw new Error("provider down");
-    return { buffer: Buffer.from(TINY_PNG.toString("hex") + "00", "hex"), mime: "image/png", model: "fake", costCents: 4 };
+    seenReferenceIds = spec.referenceAssetIds ?? [];
+    const buffer = Buffer.from(TINY_PNG.toString("hex") + "00", "hex");
+    return { buffer, mime: "image/png", model: "fake", costCents: 4, usedReferenceIds: seenReferenceIds };
   },
+  acceptsReference: () => true,
 };
 
 const { default: express } = await import("express");
@@ -122,15 +126,36 @@ const tests: Array<[string, () => Promise<void>]> = [
       const generate = { type: "generate_visual", slideId: "slide-3", slot: "background", prompt: "a beach", kind: "background" };
       const assistant = await propose({ text: "", actions: [generate] }, [upload.body.reference]);
       assert.equal(seenImages, 1);
+      assert.equal(assistant.proposal.actions[0].referenceIds[0], upload.body.reference.id);
       assert.deepEqual(assistant.proposal.actions[0].provenance.at(-1), { source: "reference", detail: "sunset.png" });
 
       const { status, body } = await post(`/proposals/${assistant.proposal.id}/apply`);
       assert.equal(status, 200);
-      assert.equal(body.document.slides[2].background.source, "ai");
+      const onDisk = JSON.parse(readFileSync(join(carouselDir, "carousel.json"), "utf-8"));
+      assert.equal(onDisk.slides[2].background.assetId, body.records[0].results[0].assetIds[0]);
+      assert.equal(onDisk.slides[2].background.source, "ai");
       assert.equal(body.records[0].costCents, 4);
+      assert.deepEqual(seenReferenceIds, [upload.body.reference.id], "the reference reaches the image generator by asset id");
       assert.deepEqual((await (await fetch(base)).json()).currency, { code: "USD", rate: 1 });
       appendFileSync(join(profileDir, "config.yaml"), "\ncurrency:\n  code: eur\n  rate: 0.9\n");
       assert.deepEqual((await (await fetch(base)).json()).currency, { code: "EUR", rate: 0.9 });
+    },
+  ],
+  [
+    "a generated object with no slot is added loose, with its own geometry",
+    async () => {
+      reset();
+      const chair = { type: "generate_visual", slideId: "slide-2", prompt: "a chair", kind: "decoration" };
+      const assistant = await propose({ text: "", actions: [chair] });
+      const { status, body } = await post(`/proposals/${assistant.proposal.id}/apply`);
+      assert.equal(status, 200);
+      const onDisk = JSON.parse(readFileSync(join(carouselDir, "carousel.json"), "utf-8"));
+      const added = onDisk.slides[1].objects.find((o: { assetId?: string }) => o.assetId === body.records[0].results[0].assetIds[0]);
+      assert.ok(added, "the generated asset must be on the named slide in the persisted document");
+      assert.equal(added.slot, undefined);
+      assert.equal(added.source, "ai");
+      assert.ok(added.geometry && added.assetId);
+      assert.deepEqual(body.document.slides[1].background, document.slides[1]!.background);
     },
   ],
   [
