@@ -91,6 +91,7 @@ export interface GeneratedImage {
 export interface JsonCompletionRequest {
   instructions: string;
   input: string;
+  images?: Array<{ mime: string; base64: string }>;
 }
 
 export interface JsonCompletionResult {

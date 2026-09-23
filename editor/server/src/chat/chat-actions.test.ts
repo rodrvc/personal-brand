@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { applyActions, resolveAction, type ActionContext, type ModelAction } from "./chat-actions.js";
+import { applyAction, resolveAction, type ActionContext, type ModelAction } from "./chat-actions.js";
 import { pendingProposal, type ChatRecord } from "./chat-log.js";
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "profiles", "example");
@@ -37,13 +37,13 @@ const ctx: ActionContext = {
   doc,
   brand,
   template: loadLayoutTemplate(EXAMPLE, "explicativo", brand),
-  library: [{ id: ASSET, kind: "background", tags: ["sky"], w: 1080, h: 1350 }],
+  library: [{ id: ASSET, name: "beach.png", kind: "background", tags: ["sky"], w: 1080, h: 1350 }],
 };
 
 const swapBackground: ModelAction = { type: "set_visual_from_library", slideId: "slide-3", slot: "background", assetId: ASSET, why: "" };
 
 function apply(action: ModelAction): CarouselDocument {
-  return applyActions(ctx, [resolveAction(ctx, action)]).document;
+  return applyAction(ctx, resolveAction(ctx, action)).document;
 }
 
 const tests: Array<[string, () => void]> = [
@@ -68,9 +68,14 @@ const tests: Array<[string, () => void]> = [
   [
     "each action declares where its parts come from",
     () => {
+      assert.deepEqual(resolveAction(ctx, swapBackground).provenance, [
+        { source: "document", detail: "3 · background" },
+        { source: "library", detail: "beach.png · sky" },
+      ]);
       assert.deepEqual(
-        resolveAction(ctx, swapBackground).provenance.map((p) => p.source),
-        ["document", "library"],
+        resolveAction(ctx, { type: "generate_visual", slideId: "slide-3", slot: "background", prompt: "a beach", kind: "background", why: "" })
+          .provenance.map((p) => p.source),
+        ["document", "generation"],
       );
       assert.deepEqual(resolveAction(ctx, { type: "set_text", slideId: "slide-3", slot: "title", text: "Hi", why: "" }).provenance, [
         { source: "document", detail: "3 · title" },
@@ -96,7 +101,7 @@ const tests: Array<[string, () => void]> = [
       const proposal = (id: string): ChatRecord => ({ id: `m-${id}`, at: now, role: "assistant", text: "", proposal: { id, actions: [] } });
       assert.equal(pendingProposal([proposal("p1")])?.id, "p1");
       assert.equal(pendingProposal([proposal("p1"), proposal("p2")])?.id, "p2");
-      const applied: ChatRecord = { id: "e", at: now, role: "event", kind: "applied", proposalId: "p2", results: [] };
+      const applied: ChatRecord = { id: "e", at: now, role: "event", kind: "applied", proposalId: "p2", costCents: 0, results: [] };
       assert.equal(pendingProposal([proposal("p1"), proposal("p2"), applied]), undefined);
       const discard: ChatRecord = { id: "u", at: now, role: "user", text: "", resolves: { proposalId: "p1", decision: "discard" } };
       assert.equal(pendingProposal([proposal("p1"), discard]), undefined);

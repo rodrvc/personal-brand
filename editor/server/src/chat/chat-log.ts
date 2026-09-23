@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { assertValidCarouselId } from "../document-store.js";
 import type { ProfileStore } from "../profile-store.js";
 import type { ChatAction } from "./chat-actions.js";
+import type { ChatReference } from "./chat-references.js";
 
 export interface ChatProposal {
   id: string;
@@ -17,6 +18,7 @@ export type ChatRecord =
       at: string;
       role: "user";
       text: string;
+      references?: ChatReference[];
       resolves?: { proposalId: string; decision: "discard" };
     }
   | { id: string; at: string; role: "assistant"; text: string; proposal?: ChatProposal; costCents?: number }
@@ -24,10 +26,12 @@ export type ChatRecord =
       id: string;
       at: string;
       role: "event";
-      kind: "applied";
+      kind: "applied" | "failed";
       proposalId: string;
+      error?: string;
       documentVersion?: string;
-      results: Array<{ actionId: string; slideIds: string[] }>;
+      costCents: number;
+      results: Array<{ actionId: string; slideIds: string[]; assetIds?: string[]; costCents?: number }>;
     };
 
 type WithoutStamp<R> = R extends unknown ? Omit<R, "id" | "at"> : never;

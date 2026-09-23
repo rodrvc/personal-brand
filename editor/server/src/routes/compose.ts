@@ -329,7 +329,7 @@ function isSlotGenerated(doc: CarouselDocument, slideIndex: number, slot: string
   return slide.objects.some((o) => o.slot === slot && o.kind === "asset" && Boolean(o.assetId));
 }
 
-function attachGeneratedAsset(
+export function attachGeneratedAsset(
   brand: BrandTokens,
   doc: CarouselDocument,
   slideIndex: number,
@@ -482,7 +482,7 @@ async function regenerateObject(
 }
 
 /** Reads back the cost an image generation call just recorded in its own sidecar — `generateForSlot`/`AssetEntry` itself carries no cost field (system/assets/index.ts), so this is the one place the number survives past the call. */
-function readGeneratedAssetCostCents(store: ProfileStore, assetId: string): number {
+export function readGeneratedAssetCostCents(store: ProfileStore, assetId: string): number {
   try {
     const sidecar = store.readJson<{ costCents?: number }>(`assets/generated/${assetId}.json`);
     return sidecar.costCents ?? 0;

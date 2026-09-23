@@ -147,7 +147,16 @@ export class OpenAiPieceGenerator implements PieceGenerator {
         model: TEXT_MODEL,
         messages: [
           { role: "system", content: request.instructions },
-          { role: "user", content: request.input },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: request.input },
+              ...(request.images ?? []).map((image) => ({
+                type: "image_url",
+                image_url: { url: `data:${image.mime};base64,${image.base64}` },
+              })),
+            ],
+          },
         ],
         response_format: { type: "json_object" },
         temperature: 0.2,

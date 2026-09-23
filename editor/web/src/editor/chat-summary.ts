@@ -17,6 +17,8 @@ export function describeAction(doc: CarouselDocument, action: ChatAction): strin
       return t("chat.action.setText", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot), text: action.text });
     case "set_visual_from_library":
       return t("chat.action.setVisual", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot) });
+    case "generate_visual":
+      return t("chat.action.generateVisual", { n: slideNumber(doc, action.slideId), piece: pieceName(action.slot) });
     case "add_slide":
       return action.afterIndex < 0
         ? t("chat.action.addSlideFirst", { kind: t(`chat.kind.${action.kind}`) })
@@ -36,7 +38,7 @@ export function describeIntact(doc: CarouselDocument, actions: ChatAction[]): st
   const deleted = new Set<string>();
   for (const action of actions) {
     if (action.type === "delete_slide") deleted.add(action.slideId);
-    if (action.type === "set_text" || action.type === "set_visual_from_library") {
+    if (action.type === "set_text" || action.type === "set_visual_from_library" || action.type === "generate_visual") {
       const pieces = changedPieces.get(action.slideId) ?? [];
       changedPieces.set(action.slideId, [...pieces, pieceName(action.slot)]);
     }

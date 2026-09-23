@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,9 +58,16 @@ function reset(): void {
 }
 
 let nextReply: unknown;
+let seenImages = 0;
+let failGeneration = false;
 const fakeGenerator = {
-  async completeJson() {
+  async completeJson(request: { images?: unknown[] }) {
+    seenImages = request.images?.length ?? 0;
     return { json: nextReply, model: "fake", costCents: 0 };
+  },
+  async generateImage() {
+    if (failGeneration) throw new Error("provider down");
+    return { buffer: Buffer.from(TINY_PNG.toString("hex") + "00", "hex"), mime: "image/png", model: "fake", costCents: 4 };
   },
 };
 
@@ -82,9 +89,9 @@ async function post(path: string, body?: unknown): Promise<{ status: number; bod
   return { status: res.status, body: await res.json() };
 }
 
-async function propose(reply: unknown): Promise<any> {
+async function propose(reply: unknown, references: unknown[] = []): Promise<any> {
   nextReply = reply;
-  const { status, body } = await post("/messages", { text: "the third one, please" });
+  const { status, body } = await post("/messages", { text: "the third one, please", references });
   assert.equal(status, 200);
   return body.records[1];
 }
@@ -107,12 +114,48 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "generate_visual generates on apply, attaches the image and logs what it cost",
+    async () => {
+      reset();
+      const upload = await post("/references", { name: "sunset.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") });
+      assert.equal(upload.status, 200);
+      const generate = { type: "generate_visual", slideId: "slide-3", slot: "background", prompt: "a beach", kind: "background" };
+      const assistant = await propose({ text: "", actions: [generate] }, [upload.body.reference]);
+      assert.equal(seenImages, 1);
+      assert.deepEqual(assistant.proposal.actions[0].provenance.at(-1), { source: "reference", detail: "sunset.png" });
+
+      const { status, body } = await post(`/proposals/${assistant.proposal.id}/apply`);
+      assert.equal(status, 200);
+      assert.equal(body.document.slides[2].background.source, "ai");
+      assert.equal(body.records[0].costCents, 4);
+      assert.deepEqual((await (await fetch(base)).json()).currency, { code: "USD", rate: 1 });
+      appendFileSync(join(profileDir, "config.yaml"), "\ncurrency:\n  code: eur\n  rate: 0.9\n");
+      assert.deepEqual((await (await fetch(base)).json()).currency, { code: "EUR", rate: 0.9 });
+    },
+  ],
+  [
+    "a proposal that fails midway is logged as failed and stops being pending",
+    async () => {
+      reset();
+      failGeneration = true;
+      const generate = { type: "generate_visual", slideId: "slide-2", slot: "background", prompt: "a beach", kind: "background" };
+      const assistant = await propose({ text: "", actions: [swapBackground, generate] });
+      const { status } = await post(`/proposals/${assistant.proposal.id}/apply`);
+      failGeneration = false;
+      assert.equal(status, 500);
+      const { records } = await (await fetch(base)).json();
+      assert.equal(records.at(-1).kind, "failed");
+      assert.equal((await post(`/proposals/${assistant.proposal.id}/apply`)).status, 409);
+      assert.equal((await post("/messages", { text: "x", references: [null] })).status, 400);
+    },
+  ],
+  [
     "an action outside the closed set is refused with a message naming it",
     async () => {
       reset();
-      const assistant = await propose({ text: "", actions: [{ type: "generate_visual", slideId: "slide-1" }] });
+      const assistant = await propose({ text: "", actions: [{ type: "move_piece", slideId: "slide-1" }] });
       assert.equal(assistant.proposal, undefined);
-      assert.match(assistant.text, /generate_visual/);
+      assert.match(assistant.text, /move_piece/);
     },
   ],
   [
