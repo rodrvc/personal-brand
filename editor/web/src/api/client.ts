@@ -4,6 +4,7 @@ import type {
   BrandTokens,
   CarouselDocument,
   CarouselSummary,
+  ChatRecord,
   CompositionPlanResponse,
   ContrastMeasurement,
   CreateCarouselResponse,
@@ -266,4 +267,24 @@ export function getExportJob(slug: string, carouselId: string, jobId: string): P
 
 export function listOutputs(slug: string, carouselId: string): Promise<{ versions: OutputVersion[] }> {
   return request(`/profiles/${slug}/carousels/${carouselId}/outputs`);
+}
+
+export function getChat(slug: string, carouselId: string): Promise<{ records: ChatRecord[]; pendingProposalId: string | null }> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/chat`);
+}
+
+export function sendChatMessage(slug: string, carouselId: string, text: string): Promise<{ records: ChatRecord[] }> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/chat/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function resolveProposal(
+  slug: string,
+  carouselId: string,
+  proposalId: string,
+  decision: "apply" | "discard",
+): Promise<{ records: ChatRecord[]; document?: CarouselDocument }> {
+  return request(`/profiles/${slug}/carousels/${carouselId}/chat/proposals/${proposalId}/${decision}`, { method: "POST" });
 }
