@@ -31,6 +31,11 @@ export type {
 export type { AssetKind } from "../../../../system/assets/index.ts";
 export type { ChatProposal, ChatRecord } from "../../../server/src/chat/chat-log.ts";
 export type { ChatAction, Provenance } from "../../../server/src/chat/chat-actions.ts";
+export type { ChatReference } from "../../../server/src/chat/chat-references.ts";
+export interface Currency {
+  code: string;
+  rate: number;
+}
 
 import type { CarouselDocument, SlideKind } from "../../../../system/ig-carousel/carousel-document.ts";
 import type { AssetKind } from "../../../../system/assets/index.ts";

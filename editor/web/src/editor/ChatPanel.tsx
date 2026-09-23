@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { CarouselDocument, ChatProposal, ChatRecord } from "../api/types";
-import { getChat, resolveProposal, sendChatMessage } from "../api/client";
+import type { CarouselDocument, ChatProposal, ChatRecord, ChatReference, Currency } from "../api/types";
+import { getChat, resolveProposal, sendChatMessage, uploadChatReference } from "../api/client";
 import { t } from "../i18n";
 import { describeAction, describeIntact, describeProvenance } from "./chat-summary";
 import "./ChatPanel.css";
@@ -15,6 +15,7 @@ interface ChatPanelProps {
   /** Unsaved local edits would be overwritten by the server's copy, so applying waits for the save. */
   dirty: boolean;
   onApplied: (next: CarouselDocument) => void;
+  onLogChange: (records: ChatRecord[], currency: Currency) => void;
 }
 
 function initialCollapsed(doc: CarouselDocument): boolean {
@@ -23,24 +24,29 @@ function initialCollapsed(doc: CarouselDocument): boolean {
   return stored === null ? doc.slides.length > 0 : stored === "1";
 }
 
-export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
+export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPanelProps) {
   const [collapsed, setCollapsed] = useState(() => initialCollapsed(doc));
   const [records, setRecords] = useState<ChatRecord[]>([]);
   const [pending, setPending] = useState<ChatProposal | null>(null);
+  const [currency, setCurrency] = useState<Currency | null>(null);
+  const [references, setReferences] = useState<ChatReference[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getChat(slug, doc.id)
-      .then(({ records: loaded, pendingProposalId }) => {
+      .then(({ records: loaded, pendingProposalId, currency: profileCurrency }) => {
         setRecords(loaded);
+        setCurrency(profileCurrency);
         const owner = loaded.find((r) => r.role === "assistant" && r.proposal?.id === pendingProposalId);
         setPending(owner?.role === "assistant" && owner.proposal ? owner.proposal : null);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [slug, doc.id]);
+
+  useEffect(load, [load]);
 
   useEffect(() => {
     const query = window.matchMedia(NARROW_QUERY);
@@ -48,6 +54,10 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
     query.addEventListener("change", onChange);
     return () => query.removeEventListener("change", onChange);
   }, []);
+
+  useEffect(() => {
+    if (currency) onLogChange(records, currency);
+  }, [records, currency, onLogChange]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -75,9 +85,10 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
   const send = async () => {
     const text = draft.trim();
     if (!text) return;
-    const result = await run(() => sendChatMessage(slug, doc.id, text));
+    const result = await run(() => sendChatMessage(slug, doc.id, text, references));
     if (!result) return;
     setDraft("");
+    setReferences([]);
     setRecords((prev) => [...prev, ...result.records]);
     const assistant = result.records.find((r) => r.role === "assistant");
     if (assistant?.role === "assistant" && assistant.proposal) setPending(assistant.proposal);
@@ -86,10 +97,16 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
   const resolve = async (decision: "apply" | "discard") => {
     if (!pending) return;
     const result = await run(() => resolveProposal(slug, doc.id, pending.id, decision));
-    if (!result) return;
+    if (!result) return load();
     setRecords((prev) => [...prev, ...result.records]);
     setPending(null);
     if (result.document) onApplied(result.document);
+  };
+
+  const attach = async (files: FileList) => {
+    const images = [...files].filter((file) => file.type.startsWith("image/"));
+    const uploaded = await run(() => Promise.all(images.map((file) => uploadChatReference(slug, doc.id, file))));
+    if (uploaded) setReferences((prev) => [...prev, ...uploaded]);
   };
 
   if (collapsed) {
@@ -104,7 +121,14 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
   }
 
   return (
-    <aside className="chat-panel">
+    <aside
+      className="chat-panel"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        void attach(e.dataTransfer.files);
+      }}
+    >
       <header className="chat-head">
         <span>{t("chat.title")}</span>
         <button type="button" className="chat-collapse" onClick={toggle} title={t("chat.collapse")}>
@@ -116,11 +140,17 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
         {records.map((record) =>
           record.role === "event" ? (
             <p key={record.id} className="chat-event">
-              {t("chat.appliedEvent")}
+              {record.kind === "failed" ? t("chat.failedEvent", { error: record.error ?? "" }) : t("chat.appliedEvent")}
             </p>
           ) : record.text ? (
             <p key={record.id} className={`chat-msg chat-msg--${record.role}`}>
               {record.text}
+              {record.role === "user" &&
+                record.references?.map((r) => (
+                  <span key={r.id} className="chat-ref">
+                    {t("chat.referenceChip", { name: r.name })}
+                  </span>
+                ))}
             </p>
           ) : null,
         )}
@@ -148,7 +178,7 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
           </div>
           <div className="chat-proposal-buttons">
             <button type="button" className="chat-apply" disabled={busy || dirty} onClick={() => resolve("apply")}>
-              {dirty ? t("chat.waitSave") : t("chat.apply")}
+              {dirty ? t("chat.waitSave") : busy ? t("chat.applying") : t("chat.apply")}
             </button>
             <button type="button" disabled={busy} onClick={() => resolve("discard")}>
               {t("chat.discard")}
@@ -157,6 +187,15 @@ export function ChatPanel({ slug, doc, dirty, onApplied }: ChatPanelProps) {
         </section>
       )}
       {error && <p className="chat-error">{error}</p>}
+      {references.length > 0 && (
+        <div className="chat-refs">
+          {references.map((r) => (
+            <button key={r.id} type="button" className="chat-ref" onClick={() => setReferences((prev) => prev.filter((x) => x !== r))}>
+              {t("chat.referenceChip", { name: r.name })} ✕
+            </button>
+          ))}
+        </div>
+      )}
       <form
         className="chat-compose"
         onSubmit={(e) => {

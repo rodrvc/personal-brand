@@ -167,3 +167,22 @@
   background: var(--ui-surface);
   color: var(--ui-ink);
 }
+
+.chat-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.chat-ref {
+  display: block;
+  font-size: 11px;
+  color: var(--ui-ink-2);
+}
+
+.chat-refs .chat-ref {
+  padding: 2px 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-pill);
+}
