@@ -122,6 +122,21 @@ export function readProfilePrimaryLanguage(profileDir: string): string | undefin
   }
 }
 
+/** The profile's `currency: { code, rate }` block, where `rate` converts one US dollar into `code`; undefined when absent or malformed. */
+export function readProfileCurrency(profileDir: string): { code: string; rate: number } | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(join(profileDir, "config.yaml"), "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  const block = raw.match(/^currency:[ \t]*\n((?:[ \t]+.*(?:\n|$))+)/m)?.[1] ?? "";
+  const code = block.match(/^\s+code:[ \t]*["']?([A-Za-z]{3})["']?/m)?.[1];
+  const rate = Number(block.match(/^\s+rate:[ \t]*([0-9.]+)/m)?.[1]);
+  return code && rate > 0 ? { code: code.toUpperCase(), rate } : undefined;
+}
+
 /**
  * Absolute base directory for a profile's generated output. `base_dir` may be
  * relative (resolved against the profile's own folder) or absolute/"~"-prefixed

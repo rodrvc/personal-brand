@@ -42,3 +42,9 @@ outputs:
   # (render-brand.ts). It lives here rather than in brand.json because it is
   # an output-layout concern, not a brand token.
   brand_message: brand-intro
+
+# Editor spend meter: provider costs arrive in US cents and are shown in
+# `code`, converting one US dollar at `rate`. Without this block, USD.
+# currency:
+#   code: EUR
+#   rate: 0.92
