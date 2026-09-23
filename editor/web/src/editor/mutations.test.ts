@@ -6,7 +6,16 @@ import { resolveSlide } from "../../../../system/ig-carousel/carousel-document-r
 import { validateDocument, type CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { freeLayoutTemplate, loadLayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { addTextObject, clampGeometryToCanvas, newEditorId, resetObjectToSlot, setObjectGeometry, setTemplateRef } from "./mutations.js";
+import {
+  addSlideWithColor,
+  addTextObject,
+  clampGeometryToCanvas,
+  newEditorId,
+  removeSlide,
+  resetObjectToSlot,
+  setObjectGeometry,
+  setTemplateRef,
+} from "./mutations.js";
 
 /**
  * `addTextObject` is the only path in the editor that can put text on a
@@ -395,3 +404,33 @@ console.log("mutations: resetObjectToSlot drops style overrides but keeps text")
 
 console.log("mutations: setTemplateRef writes the agreeing reference, and throws when ref and template disagree");
 console.log("mutations: addTextObject insets a new box when the template declares no margins");
+
+// removeSlide is the only path that drops a slide, and the document it
+// returns is what gets persisted — so it must still validate, and it must
+// return the SAME reference when nothing matched: `useDocumentEditor.update`
+// reads that identity to decide whether to push an undo entry and save, and
+// a fresh object for a no-op would version the document for nothing.
+{
+  // -1 is what Editor.tsx passes for the first slide of an empty deck: it
+  // must land at index 0, not be dropped or appended past the end.
+  const first = addSlideWithColor({ ...baseDoc(), slides: [] }, -1, "paper");
+  assert.equal(first.slides.length, 1, "an empty deck takes its first slide at -1");
+
+  const withSecond = addSlideWithColor(baseDoc(), 0, "paper");
+  const secondId = withSecond.slides[1]!.id;
+
+  const next = removeSlide(withSecond, "slide-cover");
+  assert.equal(next.slides.length, 1, "the named slide is gone");
+  assert.equal(next.slides[0]!.id, secondId, "and the other one is untouched");
+  const result = validateDocument(next, { brand, assetExists: () => true });
+  assert.ok(result.valid, `document should validate: ${JSON.stringify("errors" in result ? result.errors : [])}`);
+
+  const emptied = removeSlide(next, secondId);
+  assert.deepEqual(emptied.slides, [], "removing the last slide leaves an empty deck, not an error");
+  const emptyResult = validateDocument(emptied, { brand, assetExists: () => true });
+  assert.ok(emptyResult.valid, "an empty deck is a valid document — it is what a new carousel is");
+
+  assert.equal(removeSlide(withSecond, "no-such-slide"), withSecond, "an unknown id returns the same document reference");
+}
+
+console.log("mutations: removeSlide drops one slide, keeps the document valid, and no-ops by identity on an unknown id");

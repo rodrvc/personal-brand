@@ -34,10 +34,8 @@ cpSync(join(REPO_ROOT, "profiles", "example"), join(root, FULL_SLUG), { recursiv
 const { default: express } = await import("express");
 const { profilesRouter } = await import("./profiles.js");
 const { ProfileStore } = await import("../profile-store.js");
-const { writeDocument, readDocumentRaw } = await import("../document-store.js");
+const { writeDocument, readDocumentRaw, listVersions } = await import("../document-store.js");
 const { buildEmptyDocument } = await import("../compose/planner.js");
-const { loadBrand } = await import("../../../../system/ig-carousel/brand-schema.js");
-const { loadLayoutTemplate } = await import("../../../../system/ig-carousel/layout-template.js");
 
 const app = express();
 app.use(express.json());
@@ -97,12 +95,38 @@ const tests: Array<[string, () => Promise<void>]> = [
   ],
 
   [
+    "deleting a slide versions the document before the write, without asking for a snapshot",
+    async () => {
+      const store = new ProfileStore(FULL_SLUG);
+      const slide = (id: string) => ({
+        id,
+        kind: "step" as const,
+        background: { mode: "color" as const, colorKey: "paper", pinned: false, source: "manual" as const },
+        objects: [],
+      });
+      const doc = { ...buildEmptyDocument("explicativo", "delete-slide", "Delete slide"), slides: [slide("slide-1"), slide("slide-2")] };
+      writeDocument(store, doc);
+      assert.deepEqual(listVersions(store, doc.id), [], "no versions before any PUT");
+
+      // What the editor's delete button sends: one slide fewer.
+      const { status } = await put(`/api/profiles/${FULL_SLUG}/carousels/${doc.id}`, { ...doc, slides: [slide("slide-1")] });
+      assert.equal(status, 200);
+      const [version] = listVersions(store, doc.id);
+      assert.ok(version, "removing a slide writes a version");
+
+      // The version must be the document as it was BEFORE the delete —
+      // a snapshot taken after the write would be worth nothing.
+      const snapshot = store.readJson(`carousels/${doc.id}/versions/${version}.json`) as { slides: unknown[] };
+      assert.equal(snapshot.slides.length, 2, "the version holds the deck as it was before the delete");
+      assert.equal((readDocumentRaw(store, doc.id) as { slides: unknown[] }).slides.length, 1, "and the write itself lands");
+    },
+  ],
+
+  [
     "PUT /api/profiles/:slug/carousels/:id keeps the on-disk lifecycle status over the client's copy",
     async () => {
       const store = new ProfileStore(FULL_SLUG);
-      const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, "explicativo", brand);
-      const doc = buildEmptyDocument(brand, template, "explicativo", "status-test", "Status test");
+      const doc = buildEmptyDocument("explicativo", "status-test", "Status test");
       writeDocument(store, { ...doc, status: "exported" });
 
       // A stale client (its copy predates the export) saves "draft" back.

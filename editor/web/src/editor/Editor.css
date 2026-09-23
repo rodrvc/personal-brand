@@ -27,8 +27,3 @@
   overflow-y: auto;
   min-width: 0;
 }
-
-.editor-empty {
-  padding: 24px;
-  color: var(--ui-ink-3);
-}

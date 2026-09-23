@@ -39,7 +39,7 @@ const { composeRouter } = await import("./compose.js");
 const { profilesRouter } = await import("./profiles.js");
 const { renderRouter } = await import("./render.js");
 const { ProfileStore } = await import("../profile-store.js");
-const { readDocumentRaw, listVersions } = await import("../document-store.js");
+const { readDocumentRaw, listVersions, documentExists } = await import("../document-store.js");
 const { FREE_TEMPLATE_ID } = await import("../../../../system/ig-carousel/layout-template.js");
 
 const app = express();
@@ -96,7 +96,8 @@ const tests: Array<[string, () => Promise<void>]> = [
       const store = new ProfileStore(SLUG);
       const onDisk = readDocumentRaw(store, "free-one") as Record<string, unknown>;
       assert.equal("template" in onDisk, false, "persisted document must omit `template`");
-      assert.ok(Array.isArray(onDisk.slides) && (onDisk.slides as unknown[]).length > 0);
+      assert.deepEqual(onDisk.slides, [], "persisted document must have no slides");
+      assert.deepEqual((document as { slides: unknown[] }).slides, [], "response document must have no slides either");
     },
   ],
 
@@ -110,6 +111,21 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal(status, 201);
       const { document } = body as { document: { template?: { id: string } } };
       assert.equal(document.template?.id, "explicativo");
+    },
+  ],
+
+  [
+    "POST /carousels with an unknown templateId is a 400 and writes nothing to disk",
+    async () => {
+      const { status } = await post(`/api/profiles/${SLUG}/carousels`, {
+        id: "bad-template",
+        title: "Bad template",
+        templateId: "does-not-exist",
+      });
+      assert.equal(status, 400);
+
+      const store = new ProfileStore(SLUG);
+      assert.equal(documentExists(store, "bad-template"), false, "a rejected create must not persist a document");
     },
   ],
 
@@ -184,6 +200,22 @@ const tests: Array<[string, () => Promise<void>]> = [
   [
     "GET /slides/0/html renders a template-less document with no footer zone",
     async () => {
+      // Seed the one slide this test needs to render.
+      const store = new ProfileStore(SLUG);
+      const free = readDocumentRaw(store, "free-one") as Record<string, unknown>;
+      const withSlide = {
+        ...free,
+        slides: [
+          {
+            id: "slide-1",
+            kind: "cover",
+            background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" },
+            objects: [],
+          },
+        ],
+      };
+      assert.equal((await put(`/api/profiles/${SLUG}/carousels/free-one`, withSlide)).status, 200);
+
       const res = await fetch(`${base}/api/profiles/${SLUG}/carousels/free-one/slides/0/html`);
       assert.equal(res.status, 200);
       const html = await res.text();

@@ -85,7 +85,8 @@ export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpin
         </div>
         {regenerateUnpinnedError && <p className="prompt-error">{regenerateUnpinnedError}</p>}
       </div>
-      <button className="prompt-redo" onClick={onRegenerateUnpinned}>
+      {/* Nothing to regenerate on an empty deck, and its dialog needs an active slide — disabled, not inert. */}
+      <button className="prompt-redo" onClick={onRegenerateUnpinned} disabled={slideCount === 0}>
         ↻ {t("promptHeader.regenerateUnpinned")}
       </button>
     </div>

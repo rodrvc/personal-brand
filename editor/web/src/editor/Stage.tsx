@@ -26,6 +26,8 @@ interface StageProps {
   /** Color key to seed a newly added slide's background with (usually the active slide's, when it has a color background). */
   fallbackColorKey: string;
   onAddSlide: (colorKey: string) => void;
+  /** Removes the active slide. Undefined active slide → the strip hides the control rather than disabling it. */
+  onDeleteSlide: () => void;
 }
 
 /** One thumbnail in the filmstrip. A real PNG render, with a number/kind fallback badge if the image fails to load (e.g. a slide whose render errors). */
@@ -101,6 +103,7 @@ export function Stage({
   onDocUpdate,
   fallbackColorKey,
   onAddSlide,
+  onDeleteSlide,
 }: StageProps) {
   const activeSlide = doc.slides[activeIndex];
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -214,6 +217,17 @@ export function Stage({
             </div>
           </div>
         )}
+        {/* The entry screen: a carousel is created with no slides. It lives inside the stage
+            so the chrome stays mounted. */}
+        {!activeSlide && (
+          <div className="stage-empty">
+            <p className="stage-empty-title">{t("stage.empty.title")}</p>
+            <p>{t("stage.empty.hint")}</p>
+            <button type="button" className="ui-btn ui-btn-primary" onClick={() => onAddSlide(colorKeyForNewSlide)}>
+              {t("stage.empty.addFirst")}
+            </button>
+          </div>
+        )}
       </div>
 
       <nav
@@ -248,6 +262,19 @@ export function Stage({
         >
           +
         </button>
+        {/* Deletes the active slide, beside "+" rather than on each thumb: a thumb is itself a <button>. */}
+        {activeSlide && (
+          <button
+            type="button"
+            className="stage-add-thumb stage-delete-thumb"
+            title={t("stage.deleteSlide")}
+            aria-label={t("stage.deleteSlide")}
+            onClick={onDeleteSlide}
+          >
+            {/* U+2715, not U+00D7: the i18n guard reads the Latin-1 block as Spanish text. */}
+            ✕
+          </button>
+        )}
       </nav>
     </div>
   );

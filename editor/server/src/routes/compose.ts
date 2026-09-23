@@ -1,7 +1,7 @@
 import { Router } from "express";
 
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
-import { freeLayoutTemplate, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
+import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { loadIndex, type AssetEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
@@ -56,14 +56,9 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
   });
 
   /**
-   * Creates a new carousel. Owner decision (editor/ESTADO.md, 2026-09-08 —
-   * "New carousel always starts empty"): the editor never composes on
-   * entry. This handler is INERT — it builds the template's slide
-   * structure (cover/step*N/closing, same shape `planSlideKinds` would
-   * seed) with every slot empty and no `pending` placeholder anywhere, and
-   * returns it. No AI provider call, no library lookup, no cost, no job
-   * id. Composition happens afterward, per piece, through the existing
-   * per-piece generation controls (`POST .../regenerate`).
+   * Creates a new carousel. This handler is INERT — it returns a document
+   * with no slides at all (`buildEmptyDocument`): no AI provider call, no
+   * library lookup, no cost, and no job id.
    *
    * `?mode=plan` (or `{ preview: true }` in the body) is kept for
    * API/script callers that still want the OLD prompt-driven
@@ -133,10 +128,11 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
+      // These two loads are the input validation: they reject a broken
+      // `brand.json` or an unknown template id, so the result is discarded.
       const brand = loadBrand(store.roots.profileDir);
-      const template =
-        templateId === null ? freeLayoutTemplate() : loadLayoutTemplate(store.roots.profileDir, templateId, brand);
-      const document = buildEmptyDocument(brand, template, templateId ?? undefined, carouselId, body.title);
+      if (templateId !== null) void loadLayoutTemplate(store.roots.profileDir, templateId, brand);
+      const document = buildEmptyDocument(templateId ?? undefined, carouselId, body.title);
       writeDocument(store, document);
 
       res.status(201).json({ document });

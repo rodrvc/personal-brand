@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate, getCarousel } from "../api/client";
-import { addTextObject, newEditorId } from "./mutations";
+import { addSlideWithColor, addTextObject, newEditorId, removeSlide } from "./mutations";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
@@ -103,9 +103,27 @@ export function Editor({
       .catch((error: unknown) => console.warn("Could not refresh the carousel after export", error));
   }, [slug, doc.id, applyRemote]);
 
-  if (!activeSlide) {
-    return <div className="editor-empty">{t("editor.empty")}</div>;
-  }
+  /** `-1` is the insert position for the first slide of an empty deck: `addSlideWithColor` splices after that index, so the slide lands at 0 and the active index follows it there. */
+  const handleAddSlide = useCallback(
+    (colorKey: string) => {
+      const insertAfter = doc.slides.length === 0 ? -1 : activeIndex;
+      update((d) => addSlideWithColor(d, insertAfter, colorKey));
+      setActiveIndex(insertAfter + 1);
+    },
+    [activeIndex, doc.slides.length, update],
+  );
+
+  /**
+   * `snapshot: true` versions the last SAVED document — an edit made inside
+   * the 600ms debounce is not in it.
+   */
+  const handleDeleteSlide = useCallback(() => {
+    if (!activeSlide) return;
+    const slideId = activeSlide.id;
+    update((d) => removeSlide(d, slideId), { snapshot: true });
+    setSelection(null);
+    setActiveIndex((index) => Math.max(0, Math.min(index, doc.slides.length - 2)));
+  }, [activeSlide, doc.slides.length, update]);
 
   return (
     <div className="editor-app">
@@ -145,19 +163,8 @@ export function Editor({
             onSelectionChange={setSelection}
             onDocUpdate={update}
             fallbackColorKey={Object.keys(brand.colors)[0] ?? ""}
-            onAddSlide={(colorKey) => {
-              update((d) => {
-                const slides = [...d.slides];
-                slides.splice(activeIndex + 1, 0, {
-                  id: newEditorId("slide"),
-                  kind: "step",
-                  background: { mode: "color", colorKey, pinned: false, source: "manual" },
-                  objects: [],
-                });
-                return { ...d, slides, updatedAt: new Date().toISOString() };
-              });
-              setActiveIndex(activeIndex + 1);
-            }}
+            onAddSlide={handleAddSlide}
+            onDeleteSlide={handleDeleteSlide}
           />
         </div>
         <PropertiesPanel
@@ -187,7 +194,7 @@ export function Editor({
         dirty={dirty}
         saveError={saveError}
       />
-      {showRegenDialog && (
+      {showRegenDialog && activeSlide && (
         <RegenerateUnpinnedDialog
           slide={activeSlide}
           onCancel={() => setShowRegenDialog(false)}

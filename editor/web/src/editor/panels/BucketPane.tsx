@@ -91,13 +91,20 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
     setEntries((prev) => prev?.map((e) => (e.id === entry.id ? { ...e, usageCount: (e.usageCount ?? 0) + 1 } : e)) ?? prev);
   }
 
+  // An empty deck has no slide to place anything on. The library stays
+  // browsable and uploadable — that is half of what this tab is for — but
+  // placing is refused here rather than indexing past the end of `slides`.
+  const targetSlide = doc.slides[activeIndex];
+
   function handleUseAsBackground(entry: AssetEntry) {
-    onDocUpdate((prev) => setBackgroundAsset(prev, prev.slides[activeIndex]!.id, entry.id));
+    if (!targetSlide) return;
+    onDocUpdate((prev) => setBackgroundAsset(prev, targetSlide.id, entry.id));
     bumpUsage(entry);
   }
 
   function handleAddToSlide(entry: AssetEntry) {
-    onDocUpdate((prev) => addLibraryAssetObject(prev, prev.slides[activeIndex]!.id, entry.id));
+    if (!targetSlide) return;
+    onDocUpdate((prev) => addLibraryAssetObject(prev, targetSlide.id, entry.id));
     bumpUsage(entry);
   }
 
@@ -191,7 +198,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
               );
             })}
           </div>
-          <p className="props-hint">{t("bucketPane.usedHint")}</p>
+          <p className="props-hint">{targetSlide ? t("bucketPane.usedHint") : t("bucketPane.noSlideHint")}</p>
         </div>
       ))}
 
