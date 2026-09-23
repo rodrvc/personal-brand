@@ -11,6 +11,7 @@ import { assetsRouter } from "./routes/assets.js";
 import { renderRouter } from "./routes/render.js";
 import { composeRouter } from "./routes/compose.js";
 import { exportRouter } from "./routes/export.js";
+import { chatRouter } from "./routes/chat.js";
 import { NonePieceGenerator } from "./ai/none.js";
 import { OpenAiPieceGenerator } from "./ai/openai.js";
 import type { PieceGenerator } from "./ai/piece-generator.js";
@@ -59,6 +60,7 @@ app.use(assetsRouter());
 app.use(renderRouter());
 app.use(composeRouter(getGenerator));
 app.use(exportRouter());
+app.use(chatRouter(getGenerator));
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });

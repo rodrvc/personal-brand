@@ -5,6 +5,8 @@ import type {
   DraftedSlideCopy,
   GenerateImageSpec,
   GeneratedImage,
+  JsonCompletionRequest,
+  JsonCompletionResult,
   PieceGenerator,
 } from "./piece-generator.js";
 
@@ -130,6 +132,39 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       slides,
       model: TEXT_MODEL,
       costCents: estimateTextCostCents(userPrompt, content),
+    };
+  }
+
+  async completeJson(request: JsonCompletionRequest): Promise<JsonCompletionResult> {
+    logPrompt("completeJson", `${request.instructions}\n\n${request.input}`);
+    const response = await fetch(CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: TEXT_MODEL,
+        messages: [
+          { role: "system", content: request.instructions },
+          { role: "user", content: request.input },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+      }),
+    });
+    const json = await readJsonOrThrow(response, "chat completion");
+    const content: string = json.choices?.[0]?.message?.content ?? "{}";
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      throw new Error(`OpenAI returned a completion that was not valid JSON: ${content.slice(0, 500)}`);
+    }
+    return {
+      json: parsed,
+      model: TEXT_MODEL,
+      costCents: estimateTextCostCents(request.instructions + request.input, content),
     };
   }
 

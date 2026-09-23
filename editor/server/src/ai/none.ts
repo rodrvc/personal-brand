@@ -4,6 +4,8 @@ import {
   type DraftCopyResult,
   type GenerateImageSpec,
   type GeneratedImage,
+  type JsonCompletionRequest,
+  type JsonCompletionResult,
   type PieceGenerator,
 } from "./piece-generator.js";
 
@@ -25,6 +27,12 @@ export class NonePieceGenerator implements PieceGenerator {
   async generateImage(_spec: GenerateImageSpec): Promise<GeneratedImage> {
     throw new GenerationUnavailableError(
       "La generación de imágenes con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
+    );
+  }
+
+  async completeJson(_request: JsonCompletionRequest): Promise<JsonCompletionResult> {
+    throw new GenerationUnavailableError(
+      "El chat con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
     );
   }
 }
