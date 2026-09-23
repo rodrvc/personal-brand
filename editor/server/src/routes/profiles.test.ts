@@ -136,6 +136,23 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal((readDocumentRaw(store, doc.id) as { status: string }).status, "exported", "disk keeps the server's status");
     },
   ],
+
+  [
+    "PUT /api/profiles/:slug/carousels/:id refuses a copy that does not descend from the saved revision",
+    async () => {
+      const store = new ProfileStore(FULL_SLUG);
+      const doc = buildEmptyDocument("explicativo", "revision-test", "Revision test");
+      writeDocument(store, doc);
+      const path = `/api/profiles/${FULL_SLUG}/carousels/${doc.id}`;
+      const edited = { ...doc, title: "Edited", updatedAt: "2026-01-01T00:00:01.000Z" };
+
+      assert.equal((await put(`${path}?base=${encodeURIComponent(doc.updatedAt)}`, edited)).status, 200);
+      const stale = await put(`${path}?base=${encodeURIComponent(doc.updatedAt)}`, { ...doc, title: "Stale" });
+      assert.equal(stale.status, 409, "a second writer still on the old revision is refused");
+      assert.equal((readDocumentRaw(store, doc.id) as { title: string }).title, "Edited", "and the file keeps the newer write");
+      assert.equal((await put(`${path}?base=${encodeURIComponent(edited.updatedAt)}`, { ...edited, title: "Next" })).status, 200);
+    },
+  ],
 ];
 
 let failed = 0;

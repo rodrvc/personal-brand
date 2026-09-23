@@ -88,9 +88,12 @@ export function getCarousel(slug: string, id: string): Promise<CarouselDocument>
 export function putCarousel(
   slug: string,
   doc: CarouselDocument,
-  opts?: { snapshot?: boolean; keepalive?: boolean; signal?: AbortSignal },
+  opts?: { snapshot?: boolean; keepalive?: boolean; signal?: AbortSignal; base?: string },
 ): Promise<CarouselDocument> {
-  const query = opts?.snapshot ? "?snapshot=true" : "";
+  const params = new URLSearchParams();
+  if (opts?.snapshot) params.set("snapshot", "true");
+  if (opts?.base) params.set("base", opts.base);
+  const query = params.size > 0 ? `?${params}` : "";
   return request(`/profiles/${slug}/carousels/${doc.id}${query}`, {
     method: "PUT",
     body: JSON.stringify(doc),

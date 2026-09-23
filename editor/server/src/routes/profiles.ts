@@ -201,6 +201,11 @@ export function profilesRouter(): Router {
       let previousDocForPinDiff: RawDocumentShape | undefined;
       if (documentExists(store, req.params.id)) {
         const previousRaw = readDocumentRaw(store, req.params.id) as RawDocumentShape;
+        const base = req.query.base;
+        if (typeof base === "string" && base !== previousRaw.updatedAt) {
+          res.status(409).json({ error: "The carousel changed on disk since this copy was loaded." });
+          return;
+        }
         previousDocForPinDiff = previousRaw;
         const previousShape = (previousRaw.slides ?? []).map((s) => s.kind).join(",");
         const nextShape = result.document.slides.map((s) => s.kind).join(",");
@@ -258,6 +263,7 @@ export function profilesRouter(): Router {
 /** Loose shape used only to diff the previous on-disk document against the incoming one — deliberately untyped/partial since it reads whatever was actually persisted, which a full `CarouselDocument` cast would hide errors in. */
 interface RawDocumentShape {
   status?: CarouselDocument["status"];
+  updatedAt?: string;
   slides?: Array<{
     kind?: string;
     background?: { mode?: string; assetId?: string; pinned?: boolean };
