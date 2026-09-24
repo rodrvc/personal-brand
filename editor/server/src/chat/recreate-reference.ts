@@ -38,6 +38,10 @@ export const posterTextSchema = z.object({
   from: z.enum(["content", "layout"]).default("content"),
   original: z.string().optional(),
   box: boxSchema.optional(),
+  /** The day a date text stands for, YYYY-MM-DD: its weekday is written from it, not by the model. */
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** CSS weight measured on the layout's line. */
+  weight: z.number().int().min(100).max(900).optional(),
 });
 export type PosterText = z.infer<typeof posterTextSchema>;
 export type PlacedText = PosterText & { zone: Zone; box: Box };
@@ -321,18 +325,100 @@ export function toSlide(box: Box, referenceAspect: number, canvas: CarouselDocum
 const BOX_PER_EM = { flat: 0.88, descending: 1.1 };
 const DESCENDERS = /[gjpqy,;]/;
 const GLYPH_WIDTH = { lower: 0.58, upper: 0.72 };
+/** A bold weight sets about this much wider. */
+const BOLD_WIDTH = 1.08;
 /** A chip's pill is about this much wider than the text measured in it. */
 export const CHIP_SLACK = 1.3;
 const LARGE_TEXT = 24;
+/** A text centred past this fraction of the slide's width is aligned right, on its measured right edge. */
+const RIGHT_ALIGNED = 0.6;
+
+/** The CSS weight of a measured stroke-to-height ratio (see `inkReader`). */
+export function weightFor(stroke: number): number {
+  return stroke >= 0.18 ? 700 : stroke >= 0.145 ? 600 : 400;
+}
+
+const COLUMN_TOLERANCE = 0.012;
+
+/**
+ * Texts that start at about the same x on the layout share one column: each gets the column's median start, so a
+ * card's captions and values line up instead of following each line's own measuring error. Right-aligned and
+ * chip texts keep their boxes.
+ */
+export function alignColumns(texts: PlacedText[]): PlacedText[] {
+  const leftAligned = (t: PlacedText) => t.zone !== "chip" && t.box.x + t.box.w / 2 <= RIGHT_ALIGNED;
+  const starts = texts.filter(leftAligned).map((t) => t.box.x).sort((a, b) => a - b);
+  const columns: number[][] = [];
+  for (const x of starts) {
+    const column = columns.at(-1);
+    if (column && x - column.at(-1)! <= COLUMN_TOLERANCE) column.push(x);
+    else columns.push([x]);
+  }
+  const columnOf = (x: number) => columns.find((c) => x >= c[0]! && x <= c.at(-1)!)!;
+  return texts.map((t) => {
+    if (!leftAligned(t)) return t;
+    const column = columnOf(t.box.x);
+    const x = column[column.length >> 1]!;
+    return { ...t, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
+  });
+}
+
+/**
+ * Writes the weekday of `iso` in the profile's locale over the text's leading word, in that word's case, when the
+ * text shows that day of the month; any other text is returned as it is.
+ */
+export function withWeekday(text: string, iso: string, locale: string): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  if (Number.isNaN(date.getTime()) || !new RegExp(`(^|\\D)0?${date.getUTCDate()}(\\D|$)`).test(text)) return text;
+  const leading = /^(\p{L}+)\.?(?=\s)/u.exec(text);
+  if (!leading) return text;
+  const word = leading[1]!;
+  const name = new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(date).replace(/\.$/, "");
+  const upper = word === word.toLocaleUpperCase(locale);
+  const capital = word[0] === word[0]!.toLocaleUpperCase(locale);
+  const cased = upper ? name.toLocaleUpperCase(locale) : capital ? name[0]!.toLocaleUpperCase(locale) + name.slice(1) : name;
+  return cased + text.slice(leading[0].length);
+}
+
+/**
+ * What the model cannot be trusted with, settled from the layout and the profile: each text's weight and start
+ * measured on the layout's ink, columns lined up, a date's weekday written from its day, and a chip named after
+ * one of the profile's categories.
+ */
+export function refineTexts(
+  texts: PlacedText[],
+  profile: { locale: string; categories: string[] },
+  ink?: { stroke: (box: Box) => number; left: (box: Box) => number },
+): PlacedText[] {
+  const measured = texts.map((t): PlacedText => {
+    if (!ink || t.line === undefined) return t;
+    const weight = weightFor(ink.stroke(t.box));
+    if (t.zone === "chip") return { ...t, weight };
+    const x = ink.left(t.box);
+    return { ...t, weight, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
+  });
+  return alignColumns(measured).map((t) => {
+    const dated = t.date ? { ...t, text: withWeekday(t.text, t.date, profile.locale) } : t;
+    return t.zone === "chip" ? { ...dated, text: asCategory(dated.text, profile.categories, t.original), from: "content" } : dated;
+  });
+}
+
+/** The profile's category closest to the chip's text, in the case the layout's chip was written in. */
+export function asCategory(text: string, categories: string[], original?: string): string {
+  const best = categories.map((name) => ({ name, score: similarity(name, text) })).sort((a, b) => b.score - a.score)[0];
+  if (!best || best.score < 0.4) return text;
+  return original && original === original.toUpperCase() ? best.name.toUpperCase() : best.name;
+}
 
 export function fontSizeFor(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): number {
   const perEm = DESCENDERS.test(t.original ?? t.text) ? BOX_PER_EM.descending : BOX_PER_EM.flat;
   return snapToScale(brand, (box.h * canvas.h) / perEm);
 }
 
-/** About how wide the text sets at that size, in pixels. */
-export function textWidth(text: string, fontSize: number): number {
-  return text.length * fontSize * (text === text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower);
+/** About how wide the text sets at that size and weight, in pixels. */
+export function textWidth(text: string, fontSize: number, weight = 400): number {
+  const glyph = text === text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower;
+  return text.length * fontSize * glyph * (weight >= 600 ? BOLD_WIDTH : 1);
 }
 
 function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: string): SlideObject {
@@ -341,11 +427,11 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
   const measuredW = box.w * canvas.w;
   const measured = fontSizeFor(t, box, canvas, brand);
   // A chip's text must stay inside its pill: past it, the size leaves the brand's scale and shrinks without a floor.
-  const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1));
+  const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1, t.weight));
   const fontSize = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
-  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize));
+  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize, t.weight));
   const w = Math.round(Math.max(measuredW, neededW));
-  const align = role === "chip" ? "center" : box.x + box.w / 2 > 0.6 ? "right" : "left";
+  const align = role === "chip" ? "center" : box.x + box.w / 2 > RIGHT_ALIGNED ? "right" : "left";
   const left = align === "right" ? box.x * canvas.w + measuredW - w : align === "center" ? box.x * canvas.w + (measuredW - w) / 2 : box.x * canvas.w;
   const x = Math.round(Math.min(Math.max(left, 0), canvas.w - w));
   const height = Math.round(fontSize * 1.3);
@@ -356,6 +442,7 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
     geometry: { x, y: Math.round(box.y * canvas.h - (height - box.h * canvas.h) / 2), w, h: height, rotation: 0 },
     fontKey: style.font,
     fontSize,
+    ...(t.weight ? { fontWeight: t.weight } : {}),
     lineHeight: 1.15,
     align,
     colorKey: ink ?? brand.roles[style.color as keyof BrandRoles],

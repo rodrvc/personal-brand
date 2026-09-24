@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import type { Slide } from "../../../../system/ig-carousel/carousel-document.js";
 import {
+  alignColumns,
   anchorLines,
+  asCategory,
   IDENTITY,
   classifyLines,
   completeTexts,
@@ -14,11 +16,15 @@ import {
   letterbox,
   measureTexts,
   placePoster,
+  refineTexts,
   register,
   settleTexts,
   similarity,
   toSlide,
   unregister,
+  weightFor,
+  withWeekday,
+  type PlacedText,
   type PosterText,
 } from "./recreate-reference.js";
 
@@ -173,5 +179,39 @@ const lines = [
   assert.deepEqual(framed!.geometry, { x: 324, y: 338, w: 432, h: 540, rotation: 0 });
   assert.equal(framed!.pinned, false, "the picture can be moved");
   assert.notEqual(chip!.kind === "text" && chip.colorKey, brand.roles.surface, "a chip's surface-coloured ink does not vanish on the surface");
+}
+{
+  assert.equal(withWeekday("THU 26 SEP", "2026-09-26", "en-US"), "SAT 26 SEP", "the weekday comes from the date, in the text's case");
+  assert.equal(withWeekday("Thu 26 Sep", "2026-09-26", "en-US"), "Sat 26 Sep");
+  assert.equal(withWeekday("26 SEP", "2026-09-26", "en-US"), "26 SEP", "no leading word: nothing to rewrite");
+  assert.equal(withWeekday("THU 27 SEP", "2026-09-26", "en-US"), "THU 27 SEP", "a text for another day is left alone");
+  assert.equal(withWeekday("VIE 25 SEP", "2026-09-26", "es-CL"), "VIE 25 SEP");
+  assert.match(withWeekday("VIE 26 SEP", "2026-09-26", "es-CL"), /^S\u00c1B 26 SEP$/, "in the profile's locale");
+
+  assert.equal(asCategory("LIVE MUSIC", ["Music", "Sports", "Arts"], "ARTS"), "MUSIC", "a category of the profile, in the layout chip's case");
+  assert.equal(asCategory("sports", ["Music", "Sports"]), "Sports");
+  assert.equal(asCategory("Zzz", ["Music"]), "Zzz", "nothing close: the text stays");
+
+  assert.deepEqual([0.1, 0.15, 0.2].map(weightFor), [400, 600, 700]);
+
+  const row = (x: number, y: number, text: string): PlacedText => ({ zone: "body", text, from: "layout", box: { x, y, w: 0.3, h: 0.02 } });
+  const card = alignColumns([row(0.138, 0.76, "Place"), row(0.151, 0.78, "Hall"), row(0.147, 0.82, "Time"), { ...row(0.75, 0.1, "Date"), box: { x: 0.75, y: 0.1, w: 0.13, h: 0.02 } }]);
+  assert.deepEqual(card.slice(0, 3).map((t) => t.box.x), [0.147, 0.147, 0.147], "one column, one start: its median");
+  assert.ok(Math.abs(card[0]!.box.x + card[0]!.box.w - 0.438) < 1e-9, "the right edge stays");
+  assert.equal(card[3]!.box.x, 0.75, "a right-aligned text keeps its box");
+
+  const refined = refineTexts(
+    [
+      { line: 0, zone: "chip", text: "LIVE MUSIC", original: "ARTS", from: "layout", box: { x: 0.07, y: 0.1, w: 0.1, h: 0.015 } },
+      { line: 1, zone: "date", text: "THU 26 SEP", date: "2026-09-26", from: "content", box: { x: 0.75, y: 0.1, w: 0.13, h: 0.016 } },
+      row(0.138, 0.76, "Place"),
+    ].map((t) => ({ line: 2, ...t })) as PlacedText[],
+    { locale: "en-US", categories: ["Music", "Arts"] },
+    { stroke: (box) => (box.y < 0.5 ? 0.2 : 0.1), left: (box) => box.x + 0.01 },
+  );
+  assert.deepEqual(refined.map((t) => [t.text, t.weight]), [["MUSIC", 700], ["SAT 26 SEP", 700], ["Place", 400]]);
+  assert.equal(refined[0]!.from, "content", "a chip never keeps the layout's category");
+  assert.equal(refined[0]!.box.x, 0.07, "a chip's box is not moved to its ink: it is centred on its pill");
+  assert.ok(Math.abs(refined[2]!.box.x - 0.148) < 1e-9, "a text starts where its ink starts");
 }
 console.log("ok - recreate-reference");
