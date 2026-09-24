@@ -57,3 +57,25 @@ export function isRenderableImage(entry: Pick<AssetEntry, "path">): boolean {
   const ext = entry.path.toLowerCase().split(".").pop() ?? "";
   return RENDERABLE_IMAGE_EXTENSIONS.has(ext);
 }
+
+/**
+ * Extensions `chat-references.ts`'s `saveReference` accepts on the server
+ * (png/jpeg/webp/gif — no svg, unlike `RENDERABLE_IMAGE_EXTENSIONS` above).
+ * Only these are worth making draggable into the chat: anything else would
+ * always 400 on drop, so the Bucket tile doesn't offer a drag that can't work.
+ */
+const CHAT_REFERENCEABLE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+
+/** Whether an asset can become a chat reference (dragged from the Bucket into the chat). */
+export function isChatReferenceable(entry: Pick<AssetEntry, "path">): boolean {
+  const ext = entry.path.toLowerCase().split(".").pop() ?? "";
+  return CHAT_REFERENCEABLE_EXTENSIONS.has(ext);
+}
+
+/** Custom drag MIME carrying `{ assetId, name }` JSON — shared between `BucketPane` (drag source) and `ChatPanel` (drop target) so a Bucket-asset drag is never confused with an OS file drop. */
+export const BUCKET_ASSET_DRAG_MIME = "application/x-bucket-asset";
+
+export interface BucketAssetDragPayload {
+  assetId: string;
+  name: string;
+}

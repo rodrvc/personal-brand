@@ -3,7 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 import { assetFileUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
 import type { AssetEntry, AssetKind, CarouselDocument, OutputVersion, StatsResponse } from "../../api/types";
 import { addLibraryAssetObject, setBackgroundAsset } from "../mutations";
-import { ASSET_KIND_LABEL_KEY, assetKindLabel, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
+import {
+  ASSET_KIND_LABEL_KEY,
+  assetKindLabel,
+  BUCKET_ASSET_DRAG_MIME,
+  groupAssetsByKind,
+  isChatReferenceable,
+  isRenderableImage,
+} from "./asset-grouping";
 import { t } from "../../i18n";
 
 interface BucketPaneProps {
@@ -31,6 +38,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
   const [outputs, setOutputs] = useState<OutputVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const reloadAssets = useCallback(() => {
     listAssets(slug)
@@ -163,10 +171,11 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
             {kindEntries.map((entry) => {
               const renderable = isRenderableImage(entry);
               const fileName = entry.path.split("/").pop() ?? entry.id;
+              const referenceable = isChatReferenceable(entry);
               return (
                 <div
                   key={entry.id}
-                  className={`asset-tile ${used.has(entry.id) ? "used" : ""}`}
+                  className={`asset-tile ${used.has(entry.id) ? "used" : ""} ${draggingId === entry.id ? "dragging" : ""}`}
                   style={
                     renderable
                       ? { backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }
@@ -174,6 +183,17 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                   }
                   title={entry.tags?.join(", ") ?? entry.id}
                   onClick={() => handleAddToSlide(entry)}
+                  draggable={referenceable}
+                  onDragStart={
+                    referenceable
+                      ? (e) => {
+                          e.dataTransfer.effectAllowed = "copy";
+                          e.dataTransfer.setData(BUCKET_ASSET_DRAG_MIME, JSON.stringify({ assetId: entry.id, name: fileName }));
+                          setDraggingId(entry.id);
+                        }
+                      : undefined
+                  }
+                  onDragEnd={referenceable ? () => setDraggingId(null) : undefined}
                 >
                   {!renderable && (
                     <span className="asset-tile-file">

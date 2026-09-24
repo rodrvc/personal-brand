@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CarouselDocument, ChatProposal, ChatRecord, ChatReference, Currency } from "../api/types";
-import { getChat, resolveProposal, sendChatMessage, uploadChatReference } from "../api/client";
+import { addReferenceFromAsset, getChat, resolveProposal, sendChatMessage, uploadChatReference } from "../api/client";
 import { t } from "../i18n";
 import { describeAction, describeIntact, describeProvenance } from "./chat-summary";
+import { BUCKET_ASSET_DRAG_MIME, type BucketAssetDragPayload } from "./panels/asset-grouping";
 import "./ChatPanel.css";
 
 const COLLAPSED_STORAGE_PREFIX = "editor-chat-collapsed:";
@@ -33,7 +34,12 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dropHighlight, setDropHighlight] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  // Counts nested enter/leave pairs so a child element's dragleave (fired
+  // while the pointer is still over the panel, just over a descendant)
+  // doesn't flicker the highlight off before the real leave.
+  const dragDepth = useRef(0);
 
   const load = useCallback(() => {
     getChat(slug, doc.id)
@@ -109,6 +115,11 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
     if (uploaded) setReferences((prev) => [...prev, ...uploaded]);
   };
 
+  const attachFromAsset = async (payload: BucketAssetDragPayload) => {
+    const reference = await run(() => addReferenceFromAsset(slug, doc.id, payload.assetId, payload.name));
+    if (reference) setReferences((prev) => [...prev, reference]);
+  };
+
   if (collapsed) {
     return (
       <aside className="chat-panel chat-panel--collapsed">
@@ -122,10 +133,26 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
 
   return (
     <aside
-      className="chat-panel"
+      className={`chat-panel ${dropHighlight ? "chat-panel--drop" : ""}`}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDropHighlight(true);
+      }}
       onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDropHighlight(false);
+      }}
       onDrop={(e) => {
         e.preventDefault();
+        dragDepth.current = 0;
+        setDropHighlight(false);
+        const assetPayload = e.dataTransfer.getData(BUCKET_ASSET_DRAG_MIME);
+        if (assetPayload) {
+          void attachFromAsset(JSON.parse(assetPayload) as BucketAssetDragPayload);
+          return;
+        }
         void attach(e.dataTransfer.files);
       }}
     >
@@ -135,6 +162,7 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
           ‹
         </button>
       </header>
+      {dropHighlight && <div className="chat-drop-overlay">{t("chat.dropHint")}</div>}
       <div className="chat-log" ref={logRef}>
         {records.length === 0 && <p className="chat-hint">{t("chat.emptyHint")}</p>}
         {records.map((record) =>

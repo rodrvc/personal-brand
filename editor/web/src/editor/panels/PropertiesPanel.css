@@ -312,6 +312,16 @@
   border-color: var(--ui-p400);
 }
 
+/* A referenceable tile can also be dragged into the chat as a reference (drag doesn't change the click-to-add behaviour). */
+.asset-tile[draggable="true"] {
+  cursor: grab;
+}
+
+.asset-tile.dragging {
+  cursor: grabbing;
+  opacity: 0.5;
+}
+
 .asset-tile.used {
   border-color: var(--ui-ok);
 }

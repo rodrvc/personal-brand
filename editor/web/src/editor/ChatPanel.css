@@ -5,6 +5,26 @@
   background: var(--ui-surface);
   border-right: 1px solid var(--ui-line);
   font-size: 13px;
+  position: relative;
+}
+
+.chat-panel--drop {
+  outline: 2px dashed var(--ui-accent);
+  outline-offset: -2px;
+}
+
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--ui-accent-ink);
+  background: var(--ui-accent-soft);
+  pointer-events: none;
 }
 
 .chat-rail {

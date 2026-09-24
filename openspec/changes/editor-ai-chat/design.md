@@ -76,6 +76,12 @@ A reference is a **generation input only**: excluded from library candidate reso
 Bucket panel, never placed on canvas by itself. Promoting one to usable art is a deliberate manual
 reclassification, not something the chat can do.
 
+A reference can also come from a library asset dragged out of the Bucket panel instead of a dropped OS
+file: `POST .../chat/references` additionally accepts `{ assetId }`, and `chat-references.ts`'s
+`referenceFromAsset` copies that asset's bytes into the carousel's references. The source library asset and
+its index entry are left untouched — a reference never becomes library material, and this path never makes
+a library asset become reference-only either.
+
 ### D4. Chat action → plan mutation (closed set, v1)
 
 | action | maps onto |
