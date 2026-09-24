@@ -428,7 +428,8 @@ export function findPill(png: Buffer, box: PixelBox): { x0: number; x1: number; 
   while (y0 > 0 && same(cx, y0 - 1)) y0--;
   while (y1 < height - 1 && same(cx, y1 + 1)) y1++;
   const reaches = x0 < box.x * width && x1 > (box.x + box.w) * width && y0 < box.y * height && y1 > (box.y + box.h) * height;
-  const bounded = x0 > 0 && x1 < width - 1 && y1 - y0 < height / 4;
+  // A pill hugs its line of text; a taller region of one colour is a card or a panel, not a pill.
+  const bounded = x0 > 0 && x1 < width - 1 && y1 - y0 <= 3 * box.h * height;
   return reaches && bounded ? { x0, x1, y0, y1 } : undefined;
 }
 
@@ -445,6 +446,86 @@ export function widenPill(png: Buffer, pill: { x0: number; x1: number; y0: numbe
       pixels.copyWithin((y * width + x) * 4, (y * width + x - by) * 4, (y * width + x - by) * 4 + 4);
     }
     for (let x = mid + 1; x < mid + by && x < width; x++) pixels.copyWithin((y * width + x) * 4, (y * width + mid) * 4, (y * width + mid) * 4 + 4);
+  }
+  return encodePng(width, height, pixels);
+}
+
+/**
+ * Reads the ink of the text inside a box (fractions) of one decoded image: the ink is whichever side of the box's
+ * mid luminance is the minority, so dark text on a light card and light text on a dark pill read the same way.
+ */
+export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; left: (box: PixelBox) => number } {
+  const { width, height, pixels } = toRgba(png);
+  const luma = (x: number, y: number) => {
+    const i = (y * width + x) * 4;
+    return 0.3 * pixels[i]! + 0.59 * pixels[i + 1]! + 0.11 * pixels[i + 2]!;
+  };
+  const scan = (box: PixelBox) => {
+    const x0 = Math.max(0, Math.floor(box.x * width));
+    const x1 = Math.min(width, Math.ceil((box.x + box.w) * width));
+    const y0 = Math.max(0, Math.floor(box.y * height));
+    const y1 = Math.min(height, Math.ceil((box.y + box.h) * height));
+    const values: number[] = [];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) values.push(luma(x, y));
+    values.sort((a, b) => a - b);
+    const mid = ((values[Math.floor(values.length * 0.05)] ?? 0) + (values[Math.floor(values.length * 0.95)] ?? 255)) / 2;
+    const dark = values.filter((v) => v < mid).length < values.length / 2;
+    const ink = (x: number, y: number) => (dark ? luma(x, y) < mid : luma(x, y) > mid);
+    return { x0, x1, y0, y1, ink };
+  };
+  return {
+    // Mean width of the horizontal runs of ink over the box's height: about 0.11 for a regular weight, 0.16 for a
+    // semibold and 0.2 or more for a bold.
+    stroke: (box) => {
+      const { x0, x1, y0, y1, ink } = scan(box);
+      let [total, runs] = [0, 0];
+      for (let y = y0; y < y1; y++) {
+        let inside = false;
+        for (let x = x0; x < x1; x++) {
+          const on = ink(x, y);
+          if (on) total++;
+          if (on && !inside) runs++;
+          inside = on;
+        }
+      }
+      return runs > 0 && y1 > y0 ? total / runs / (y1 - y0) : 0;
+    },
+    // Where the ink starts: OCR boxes carry some padding before the first letter, a different amount per line.
+    left: (box) => {
+      const { x0, x1, y0, y1, ink } = scan(box);
+      for (let x = x0; x < x1; x++) {
+        let hits = 0;
+        for (let y = y0; y < y1; y++) if (ink(x, y)) hits++;
+        if (hits >= 2) return x / width;
+      }
+      return box.x;
+    },
+  };
+}
+
+/**
+ * Repaints the pill in another colour, keeping its anti-aliased edge: each pixel is placed on the line from the
+ * surface around the pill to the pill's own colour, and moved to the same point on the line to the new colour.
+ */
+export function recolourPill(png: Buffer, pill: { x0: number; x1: number; y0: number; y1: number }, hex: string): Buffer {
+  const { width, height, pixels } = toRgba(png);
+  const at = (x: number, y: number) => [...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)];
+  const cy = Math.round((pill.y0 + pill.y1) / 2);
+  const fill = at(Math.round((pill.x0 + pill.x1) / 2), cy);
+  const surface = at(Math.max(0, pill.x0 - 4), cy);
+  const target = [0, 2, 4].map((i) => parseInt(hex.replace("#", "").slice(i, i + 2), 16));
+  const span = fill.map((v, c) => v - surface[c]!);
+  const length = span.reduce((sum, v) => sum + v * v, 0);
+  if (length === 0) return png;
+  const margin = 3;
+  for (let y = Math.max(0, pill.y0 - margin); y <= Math.min(height - 1, pill.y1 + margin); y++) {
+    for (let x = Math.max(0, pill.x0 - margin); x <= Math.min(width - 1, pill.x1 + margin); x++) {
+      const p = at(x, y);
+      const t = Math.min(1, Math.max(0, p.reduce((sum, v, c) => sum + (v - surface[c]!) * span[c]!, 0) / length));
+      const off = Math.sqrt(p.reduce((sum, v, c) => sum + (v - surface[c]! - t * span[c]!) ** 2, 0));
+      if (off > PILL_TOLERANCE || t === 0) continue;
+      for (let c = 0; c < 3; c++) pixels[(y * width + x) * 4 + c] = Math.round(surface[c]! + t * (target[c]! - surface[c]!));
+    }
   }
   return encodePng(width, height, pixels);
 }
