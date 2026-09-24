@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 
 import { detectImage } from "../../../system/assets/index.js";
-import { cropToSize, edgeColor, padToSize } from "./image-tools.js";
+import { cropToSize, edgeColor, encodePng, eraseBoxes, findPicture, padToSize, remap, toRgba } from "./image-tools.js";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -16,7 +16,62 @@ if (existsSync("/usr/bin/sips")) {
   assert.deepEqual([cropped.w, cropped.h], [40, 50], "cropped to the exact size");
   const white = padToSize(TINY_PNG, 20, 40, "FFFFFF");
   assert.equal(edgeColor(white), "FFFFFF", "the colour of the band above the picture");
+  const blackSquare = padToSize(TINY_PNG, 20, 40, "FFFFFF");
+  const erased = eraseBoxes(blackSquare, [{ x: 0, y: 0.25, w: 1, h: 0.5 }]);
+  assert.equal(edgeColor(cropToSize(erased, 20, 4)), "FFFFFF", "the square is painted with the colour around it");
+  assert.equal(edgeColor(cropToSize(blackSquare, 20, 4)), "000000");
   console.log("ok - image-tools");
 } else {
   console.log("skip - no sips on this system");
+}
+{
+  // A horizontal gradient with a black bar across its middle rows.
+  const w = 40;
+  const h = 20;
+  const gradient = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const bar = y >= 8 && y < 12 && x >= 10 && x < 30;
+      gradient.set(bar ? [0, 0, 0, 255] : [100 + x, 100 + x, 100 + x, 255], (y * w + x) * 4);
+    }
+  }
+  const png = encodePng(w, h, gradient);
+  const erased = toRgba(eraseBoxes(png, [{ x: 10 / w, y: 8 / h, w: 20 / w, h: 4 / h }])).pixels;
+  for (const x of [12, 20, 28]) {
+    assert.ok(Math.abs(erased[(10 * w + x) * 4]! - (100 + x)) <= 3, `the gradient continues through the erased bar at x=${x}`);
+  }
+  const shifted = toRgba(remap(png, { sx: 1, ox: 0.25, sy: 1, oy: 0 })).pixels;
+  assert.equal(shifted[(2 * w + 5) * 4], 100 + 15, "each point reads the image a quarter further right");
+  assert.equal(shifted[(2 * w + 39) * 4], 100 + 39, "past the edge, the edge repeats");
+  const same = toRgba(remap(png, { sx: 1, ox: 0, sy: 1, oy: 0 })).pixels;
+  assert.deepEqual(same, toRgba(png).pixels, "the identity leaves the image as it is");
+  const filled = toRgba(remap(png, { sx: 1, ox: 0.5, sy: 1, oy: 0 }, undefined, undefined, "FF0000")).pixels;
+  assert.deepEqual([...filled.slice((2 * w + 39) * 4, (2 * w + 39) * 4 + 4)], [255, 0, 0, 255], "past the edge, the fill colour");
+  const small = toRgba(remap(png, { sx: 1, ox: 0, sy: 1, oy: 0 }, 20, 10));
+  assert.deepEqual([small.width, small.height], [20, 10], "resampled into the requested size");
+  // A dark icon touching the bar's left edge must not streak into the fill.
+  const withIcon = new Uint8Array(gradient);
+  for (let y = 8; y < 12; y++) for (let x = 5; x < 10; x++) withIcon.set([0, 0, 0, 255], (y * w + x) * 4);
+  const clean = toRgba(eraseBoxes(encodePng(w, h, withIcon), [{ x: 10 / w, y: 8 / h, w: 20 / w, h: 4 / h }])).pixels;
+  assert.ok(clean[(10 * w + 14) * 4]! > 100, "the icon's pixels count as the surface, not as black");
+  console.log("ok - image-tools pixels");
+}
+if (existsSync("/usr/bin/sips")) {
+  // A pale page with a thin dark line of "text" and a framed, noisy picture below it.
+  const [w, h] = [432, 540];
+  const page = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const text = y >= 40 && y < 56 && x >= 30 && x < 300 && x % 6 < 3;
+      const picture = x >= 130 && x < 300 && y >= 140 && y < 360;
+      const noise = (x * 7 + y * 13) % 90;
+      page.set(text ? [20, 20, 20, 255] : picture ? [120 + noise, 60, 150 - noise, 255] : [246, 243, 248, 255], (y * w + x) * 4);
+    }
+  }
+  const found = findPicture(encodePng(w, h, page))!;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+  assert.ok(near(found.x, 130 / w) && near(found.y, 140 / h), `the picture's corner, not the text above it: ${JSON.stringify(found)}`);
+  assert.ok(near(found.w, 170 / w) && near(found.h, 220 / h));
+  assert.equal(findPicture(encodePng(w, h, new Uint8Array(w * h * 4).fill(250))), undefined, "a blank page has no picture");
+  console.log("ok - image-tools picture");
 }
