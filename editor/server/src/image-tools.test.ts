@@ -112,5 +112,6 @@ if (existsSync("/usr/bin/sips")) {
   const thick = { x: 60 / w, y: 10 / h, w: 50 / w, h: 20 / h };
   assert.ok(Math.abs(ink.stroke(thin) - 0.1) < 1e-9 && Math.abs(ink.stroke(thick) - 0.25) < 1e-9, "stroke width over line height");
   assert.equal(ink.left(thin), 20 / w, "the first column with ink, past the box's padding");
+  assert.equal(ink.colour(thick), "#141414", "the ink's own colour, not the page's");
   console.log("ok - image-tools ink");
 }

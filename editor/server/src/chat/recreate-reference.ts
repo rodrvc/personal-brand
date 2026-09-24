@@ -42,6 +42,8 @@ export const posterTextSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   /** CSS weight measured on the layout's line. */
   weight: z.number().int().min(100).max(900).optional(),
+  /** The ink colour measured on the layout's line, #rrggbb. */
+  color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
 });
 export type PosterText = z.infer<typeof posterTextSchema>;
 export type PlacedText = PosterText & { zone: Zone; box: Box };
@@ -330,6 +332,8 @@ const BOLD_WIDTH = 1.08;
 /** A chip's pill is about this much wider than the text measured in it. */
 export const CHIP_SLACK = 1.3;
 const LARGE_TEXT = 24;
+/** Colour distance (RGB) under which a measured ink is taken as a brand colour. */
+const SAME_COLOUR = 28;
 /** A text centred past this fraction of the slide's width is aligned right, on its measured right edge. */
 const RIGHT_ALIGNED = 0.6;
 
@@ -388,14 +392,15 @@ export function withWeekday(text: string, iso: string, locale: string): string {
 export function refineTexts(
   texts: PlacedText[],
   profile: { locale: string; categories: string[] },
-  ink?: { stroke: (box: Box) => number; left: (box: Box) => number },
+  ink?: { stroke: (box: Box) => number; left: (box: Box) => number; colour: (box: Box) => string },
 ): PlacedText[] {
   const measured = texts.map((t): PlacedText => {
     if (!ink || t.line === undefined) return t;
     const weight = weightFor(ink.stroke(t.box));
-    if (t.zone === "chip") return { ...t, weight };
+    const color = ink.colour(t.box);
+    if (t.zone === "chip") return { ...t, weight, color };
     const x = ink.left(t.box);
-    return { ...t, weight, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
+    return { ...t, weight, color, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
   });
   return alignColumns(measured).map((t) => {
     const dated = t.date ? { ...t, text: withWeekday(t.text, t.date, profile.locale) } : t;
@@ -421,7 +426,9 @@ export function textWidth(text: string, fontSize: number, weight = 400): number 
   return text.length * fontSize * glyph * (weight >= 600 ? BOLD_WIDTH : 1);
 }
 
-function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: string): SlideObject {
+type Ink = { colorKey: string } | { color: string };
+
+function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: Ink): SlideObject {
   const role = ZONE_TYPE[t.zone];
   const style = typeStyle(brand, role);
   const measuredW = box.w * canvas.w;
@@ -445,11 +452,30 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
     ...(t.weight ? { fontWeight: t.weight } : {}),
     lineHeight: 1.15,
     align,
-    colorKey: ink ?? brand.roles[style.color as keyof BrandRoles],
+    ...(ink ?? { colorKey: brand.roles[style.color as keyof BrandRoles] }),
     pinned: false,
     locked: false,
     source: "ai",
   };
+}
+
+/**
+ * Each text (box on the slide) as an editable text object in the brand's typography: its measured colour, as a brand
+ * colour when it is one, else the role's; replaced by the best-contrast brand colour when it would not read on what
+ * `behind` says is under it (a hex without `#`).
+ */
+function textObjects(texts: PlacedText[], canvas: CarouselDocument["canvas"], brand: BrandTokens, behind?: (box: Box) => string): SlideObject[] {
+  const ink = (t: PlacedText): Ink | undefined => {
+    const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
+    const wanted: Ink = t.color ? inkFor(brand, t.color) : { colorKey: roleKey };
+    if (!behind) return t.color ? wanted : undefined;
+    const under = `#${behind(t.box)}`;
+    const hex = "color" in wanted ? wanted.color : brand.colors[wanted.colorKey]!;
+    // WCAG AA: 3:1 is enough for large text, 4.5:1 below that.
+    const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
+    return contrast(hex, under) >= needed ? wanted : { colorKey: bestContrastColorKey(brand, hex, under) };
+  };
+  return texts.map((t) => textObject(t, t.box, canvas, brand, ink(t)));
 }
 
 /**
@@ -488,14 +514,7 @@ export function placePoster(
         },
       ]
     : [];
-  const ink = (t: PlacedText) => {
-    if (!options.behind) return undefined;
-    const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
-    const behind = `#${options.behind(t.box)}`;
-    // WCAG AA: 3:1 is enough for large text, 4.5:1 below that.
-    const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
-    return contrast(brand.colors[roleKey]!, behind) >= needed ? roleKey : bestContrastColorKey(brand, brand.colors[roleKey]!, behind);
-  };
+  const placed = textObjects(texts, canvas, brand, options.behind);
   return {
     id: slide?.id ?? newChatId("slide"),
     kind: slide?.kind ?? "cover",
@@ -504,9 +523,17 @@ export function placePoster(
       ...(slide?.objects ?? []).filter((o) => o.pinned || o.locked),
       background,
       ...picture,
-      ...texts.map((t) => textObject(t, t.box, canvas, brand, ink(t))),
+      ...placed,
     ],
   };
+}
+
+/** A measured colour as a brand colour when it is one of them, give or take rendering, else as it is. */
+function inkFor(brand: BrandTokens, color: string): Ink {
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const measured = rgb(color);
+  const near = Object.entries(brand.colors).find(([, hex]) => Math.hypot(...rgb(hex).map((v, c) => v - measured[c]!)) <= SAME_COLOUR);
+  return near ? { colorKey: near[0] } : { color: color.toLowerCase() };
 }
 
 function pixels(box: Box, canvas: CarouselDocument["canvas"]): { x: number; y: number; w: number; h: number; rotation: number } {

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
+import { typeStyle } from "../../../../system/ig-carousel/typography.js";
 import type { Slide } from "../../../../system/ig-carousel/carousel-document.js";
 import {
   alignColumns,
@@ -207,11 +208,24 @@ const lines = [
       row(0.138, 0.76, "Place"),
     ].map((t) => ({ line: 2, ...t })) as PlacedText[],
     { locale: "en-US", categories: ["Music", "Arts"] },
-    { stroke: (box) => (box.y < 0.5 ? 0.2 : 0.1), left: (box) => box.x + 0.01 },
+    { stroke: (box) => (box.y < 0.5 ? 0.2 : 0.1), left: (box) => box.x + 0.01, colour: () => "#123456" },
   );
   assert.deepEqual(refined.map((t) => [t.text, t.weight]), [["MUSIC", 700], ["SAT 26 SEP", 700], ["Place", 400]]);
   assert.equal(refined[0]!.from, "content", "a chip never keeps the layout's category");
   assert.equal(refined[0]!.box.x, 0.07, "a chip's box is not moved to its ink: it is centred on its pill");
   assert.ok(Math.abs(refined[2]!.box.x - 0.148) < 1e-9, "a text starts where its ink starts");
+}
+{
+  const line = [{ text: "Old", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.03 } }];
+  const [text] = measureTexts([{ line: 0, zone: "subtitle", text: "New", from: "content" }], line);
+  const colourOf = (color: string | undefined, behind = "ffffff") => {
+    const [object] = placePoster(undefined, "0123456789abcdef", [{ ...text!, color }], canvas, brand, { behind: () => behind }).objects.slice(1);
+    return object!.kind === "text" ? { colorKey: object.colorKey, color: object.color } : {};
+  };
+  const [brandKey, brandHex] = Object.entries(brand.colors).find(([, hex]) => hex.toLowerCase() !== "#ffffff")!;
+  assert.deepEqual(colourOf("#7b3a9e"), { colorKey: undefined, color: "#7b3a9e" }, "the reference's colour, as it is, when the brand has none like it");
+  assert.equal(colourOf(brandHex).colorKey, brandKey, "a brand colour when the measured one is it");
+  assert.equal(colourOf(undefined, "000000").colorKey, brand.roles[typeStyle(brand, "subtitle").color as keyof typeof brand.roles], "the role's colour when nothing was measured");
+  assert.equal(colourOf("#f0f0f0").color, undefined, "a colour that would not read on what is behind falls back to the best-contrast brand colour");
 }
 console.log("ok - recreate-reference");

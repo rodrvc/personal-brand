@@ -454,7 +454,11 @@ export function widenPill(png: Buffer, pill: { x0: number; x1: number; y0: numbe
  * Reads the ink of the text inside a box (fractions) of one decoded image: the ink is whichever side of the box's
  * mid luminance is the minority, so dark text on a light card and light text on a dark pill read the same way.
  */
-export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; left: (box: PixelBox) => number } {
+export function inkReader(png: Buffer): {
+  stroke: (box: PixelBox) => number;
+  left: (box: PixelBox) => number;
+  colour: (box: PixelBox) => string;
+} {
   const { width, height, pixels } = toRgba(png);
   const luma = (x: number, y: number) => {
     const i = (y * width + x) * 4;
@@ -489,6 +493,20 @@ export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; lef
         }
       }
       return runs > 0 && y1 > y0 ? total / runs / (y1 - y0) : 0;
+    },
+    // The ink's colour, from its core: anti-aliased edge pixels, half ink and half surface, are left out.
+    colour: (box) => {
+      const { x0, x1, y0, y1, ink } = scan(box);
+      const core: number[][] = [];
+      for (let y = y0 + 1; y < y1 - 1; y++) {
+        for (let x = x0 + 1; x < x1 - 1; x++) {
+          if (ink(x, y) && ink(x - 1, y) && ink(x + 1, y) && ink(x, y - 1) && ink(x, y + 1)) {
+            core.push([...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)]);
+          }
+        }
+      }
+      const rgb = dominantColour(core.length > 0 ? core : [[0, 0, 0]]);
+      return `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
     },
     // Where the ink starts: OCR boxes carry some padding before the first letter, a different amount per line.
     left: (box) => {
