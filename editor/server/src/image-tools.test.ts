@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 
 import { detectImage } from "../../../system/assets/index.js";
-import { cropToSize, edgeColor, encodePng, eraseBoxes, findPicture, padToSize, remap, toRgba } from "./image-tools.js";
+import { colourReader, cropToSize, edgeColor, encodePng, eraseBoxes, findPicture, findPill, padToSize, remap, toRgba, widenPill } from "./image-tools.js";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -74,4 +74,22 @@ if (existsSync("/usr/bin/sips")) {
   assert.ok(near(found.w, 170 / w) && near(found.h, 220 / h));
   assert.equal(findPicture(encodePng(w, h, new Uint8Array(w * h * 4).fill(250))), undefined, "a blank page has no picture");
   console.log("ok - image-tools picture");
+}
+{
+  // A pale page with a purple pill holding (erased) text.
+  const [w, h] = [200, 100];
+  const page = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) page.set(x >= 20 && x < 80 && y >= 40 && y < 60 ? [120, 60, 170, 255] : [246, 243, 248, 255], (y * w + x) * 4);
+  }
+  const png = encodePng(w, h, page);
+  const text = { x: 30 / w, y: 45 / h, w: 40 / w, h: 10 / h };
+  assert.deepEqual(findPill(png, text), { x0: 20, x1: 79, y0: 40, y1: 59 }, "the pill around the text");
+  assert.equal(findPill(png, { x: 120 / w, y: 45 / h, w: 20 / w, h: 10 / h }), undefined, "no pill on the bare page");
+  const wider = findPill(widenPill(png, findPill(png, text)!, 30), text);
+  assert.deepEqual(wider, { x0: 20, x1: 109, y0: 40, y1: 59 }, "30 px wider, same height");
+  const read = colourReader(png);
+  assert.equal(read(text), "783CAA", "what is behind the text: the pill");
+  assert.equal(read({ x: 0, y: 0, w: 0.05, h: 0.1 }), "F6F3F8");
+  console.log("ok - image-tools pill");
 }

@@ -129,14 +129,18 @@ const EDGE_BLUR = 8;
  * would mix two surfaces into a colour that is neither (lavender and yellow into pink).
  */
 function dominantColour(colours: number[][]): number[] {
-  const bins = new Map<number, number[][]>();
+  const bins = new Map<number, { count: number; sum: number[] }>();
   for (const colour of colours) {
     const key = (colour[0]! >> 4) * 256 + (colour[1]! >> 4) * 16 + (colour[2]! >> 4);
-    bins.set(key, [...(bins.get(key) ?? []), colour]);
+    const bin = bins.get(key) ?? { count: 0, sum: [0, 0, 0] };
+    bin.count++;
+    for (let c = 0; c < 3; c++) bin.sum[c]! += colour[c]!;
+    bins.set(key, bin);
   }
-  const top = [...bins.values()].sort((a, b) => b.length - a.length)[0];
+  let top: { count: number; sum: number[] } | undefined;
+  for (const bin of bins.values()) if (!top || bin.count > top.count) top = bin;
   if (!top) return [255, 255, 255];
-  return [0, 1, 2].map((c) => top.reduce((sum, colour) => sum + colour[c]!, 0) / top.length);
+  return top.sum.map((sum) => sum / top!.count);
 }
 
 /** Moving average over `radius` values on each side. */
@@ -351,7 +355,8 @@ export function findPicture(bytes: Buffer): PixelBox | undefined {
     }
     if (area > bestArea) {
       bestArea = area;
-      best = { x: minX / width, y: minY / height, w: (maxX + 1 - minX) / width, h: (maxY + 1 - minY) / height };
+      // One scan pixel more on every side, so the picture's own edge (a rounded corner, a dark rim) is inside.
+      best = { x: (minX - 1) / width, y: (minY - 1) / height, w: (maxX + 3 - minX) / width, h: (maxY + 3 - minY) / height };
     }
   }
   return best && bestArea >= 0.02 * width * height ? best : undefined;
@@ -380,4 +385,66 @@ function erode(mask: Uint8Array, width: number, height: number, r: number): Uint
 function dilate(mask: Uint8Array, width: number, height: number, r: number): Uint8Array {
   const sum = windowSums(mask, width, height, r);
   return Uint8Array.from(mask, (_, i) => (sum(i % width, Math.floor(i / width)) > 0 ? 1 : 0));
+}
+
+/** Any image `sips` reads, as a PNG. */
+export function toPng(bytes: Buffer): Buffer {
+  return withSips(bytes, [(input, output) => ["-s", "format", "png", input, "--out", output]]);
+}
+
+/**
+ * Reads, for any box (fractions), the most common colour inside it as a hex without `#`: what a text there is read
+ * against. The image is decoded once for all the boxes asked about.
+ */
+export function colourReader(png: Buffer): (box: PixelBox) => string {
+  const { width, height, pixels } = toRgba(png);
+  return (box) => {
+    const x0 = Math.max(0, Math.floor(box.x * width));
+    const y0 = Math.max(0, Math.floor(box.y * height));
+    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((box.x + box.w) * width)));
+    const y1 = Math.min(height, Math.max(y0 + 1, Math.ceil((box.y + box.h) * height)));
+    const colours: number[][] = [];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) colours.push([...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)]);
+    return dominantColour(colours).map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+  };
+}
+
+const PILL_TOLERANCE = 40;
+
+/**
+ * The pill (a rounded label drawn in the background) around the text box (fractions), as a pixel rectangle: from
+ * the box's centre, as far as the colour there continues along its row and column. Undefined when that colour does
+ * not reach past the box, so there is no pill.
+ */
+export function findPill(png: Buffer, box: PixelBox): { x0: number; x1: number; y0: number; y1: number } | undefined {
+  const { width, height, pixels } = toRgba(png);
+  const cx = Math.round((box.x + box.w / 2) * width);
+  const cy = Math.round((box.y + box.h / 2) * height);
+  const fill = [...pixels.subarray((cy * width + cx) * 4, (cy * width + cx) * 4 + 3)];
+  const same = (x: number, y: number) => [0, 1, 2].every((c) => Math.abs(pixels[(y * width + x) * 4 + c]! - fill[c]!) <= PILL_TOLERANCE);
+  let [x0, x1, y0, y1] = [cx, cx, cy, cy];
+  while (x0 > 0 && same(x0 - 1, cy)) x0--;
+  while (x1 < width - 1 && same(x1 + 1, cy)) x1++;
+  while (y0 > 0 && same(cx, y0 - 1)) y0--;
+  while (y1 < height - 1 && same(cx, y1 + 1)) y1++;
+  const reaches = x0 < box.x * width && x1 > (box.x + box.w) * width && y0 < box.y * height && y1 > (box.y + box.h) * height;
+  const bounded = x0 > 0 && x1 < width - 1 && y1 - y0 < height / 4;
+  return reaches && bounded ? { x0, x1, y0, y1 } : undefined;
+}
+
+/**
+ * Makes the pill `by` pixels wider: its right half, with its rounded end and a little of what follows, moves right
+ * and the gap is filled with the pill's middle column. Returns a PNG.
+ */
+export function widenPill(png: Buffer, pill: { x0: number; x1: number; y0: number; y1: number }, by: number): Buffer {
+  const { width, height, pixels } = toRgba(png);
+  const mid = Math.round((pill.x0 + pill.x1) / 2);
+  const margin = 4;
+  for (let y = Math.max(0, pill.y0 - margin); y <= Math.min(height - 1, pill.y1 + margin); y++) {
+    for (let x = Math.min(width - 1, pill.x1 + margin + by); x >= mid + by; x--) {
+      pixels.copyWithin((y * width + x) * 4, (y * width + x - by) * 4, (y * width + x - by) * 4 + 4);
+    }
+    for (let x = mid + 1; x < mid + by && x < width; x++) pixels.copyWithin((y * width + x) * 4, (y * width + mid) * 4, (y * width + mid) * 4 + 4);
+  }
+  return encodePng(width, height, pixels);
 }
