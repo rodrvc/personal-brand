@@ -7,7 +7,9 @@ import type { Slide } from "../../../../system/ig-carousel/carousel-document.js"
 import {
   anchorLines,
   IDENTITY,
-  keepPictureLines,
+  classifyLines,
+  completeTexts,
+  numberedLines,
   keepTextsPrompt,
   letterbox,
   measureTexts,
@@ -40,8 +42,6 @@ const lines = [
   assert.deepEqual(measured.map((t) => t.text), ["New Show", "Hall"], "no line and no box, logo and picture lines are all dropped");
   assert.deepEqual(anchorLines(texts, lines), [lines[0]], "a picture line is no anchor: the generator redraws the picture");
   const picture = { x: 0.7, y: 0.05, w: 0.25, h: 0.1 };
-  const classified = keepPictureLines([{ line: 1, zone: "date", text: "SUN 2 FEB", from: "content" }, { line: 0, zone: "title", text: "New", from: "content" }], lines, picture);
-  assert.deepEqual(classified.map((t) => t.zone), ["picture", "title"], "a line inside the framed picture is the picture's, whatever the model said");
   assert.deepEqual(anchorLines([], lines, picture), [lines[0]]);
   assert.deepEqual(measured[0]!.box, lines[0]!.box, "the box comes from the measured line, not the model");
   assert.equal(measured[0]!.original, "Old Show");
@@ -131,5 +131,47 @@ const lines = [
   const texts = measureTexts([{ line: 0, zone: "chip", text: "MÚSICA EN VIVO", from: "content" }], chipLine);
   const [, chip] = placePoster(undefined, "0123456789abcdef", texts, canvas, brand).objects;
   assert.ok(chip!.kind === "text" && chip.fontSize! < 24, "a longer chip text steps down the scale to stay in its pill");
+}
+{
+  // A poster: wordmark, title, a card row (caption over value), a footer, and a line inside the picture.
+  const poster = [
+    { text: "Example", box: { x: 0.05, y: 0.03, w: 0.2, h: 0.05 } },
+    { text: "Old Show", box: { x: 0.05, y: 0.14, w: 0.3, h: 0.04 } },
+    { text: "INSIDE", box: { x: 0.45, y: 0.4, w: 0.1, h: 0.02 } },
+    { text: "Place", box: { x: 0.14, y: 0.76, w: 0.07, h: 0.017 } },
+    { text: "Old Hall", box: { x: 0.14, y: 0.78, w: 0.3, h: 0.019 } },
+    { text: "• Somewhere | more at example.org", box: { x: 0.2, y: 0.96, w: 0.6, h: 0.017 } },
+  ];
+  const picture = { x: 0.3, y: 0.25, w: 0.4, h: 0.4 };
+  const kinds = classifyLines(poster, picture, "Example");
+  assert.deepEqual(kinds, ["logo", "text", "picture", "label", "text", "text"]);
+  assert.deepEqual(numberedLines(poster, kinds)!.map((l) => [l.line, l.kind]), [[0, "logo"], [1, undefined], [3, "label"], [4, undefined], [5, undefined]], "the picture's lines are not the model's to map");
+  const model: PosterText[] = [
+    { line: 1, zone: "title", text: "New Show", from: "content" },
+    { line: 3, zone: "place", text: "New Hall", from: "content" },
+    { line: 4, zone: "place", text: "Old Hall", from: "layout" },
+  ];
+  const completed = completeTexts(model, poster, kinds);
+  assert.deepEqual(
+    completed.map((t) => [t.line, t.zone, t.text, t.from]),
+    [
+      [1, "title", "New Show", "content"],
+      [3, "label", "Place", "layout"],
+      [4, "place", "New Hall", "content"],
+      [5, "footer", "Somewhere | more at example.org", "layout"],
+    ],
+    "the caption stays, its new value goes to the value's line, the omitted footer keeps its text, the logo gets none",
+  );
+}
+{
+  const texts = measureTexts([{ line: 0, zone: "chip", text: "NEW", from: "content" }], [{ text: "OLD", box: { x: 0.1, y: 0.1, w: 0.1, h: 0.015 } }]);
+  const picture = { assetId: "fedcba9876543210", box: { x: 0.3, y: 0.25, w: 0.4, h: 0.4 } };
+  const surface = brand.colors[brand.roles.surface]!.slice(1);
+  const slide = placePoster(undefined, "0123456789abcdef", texts, canvas, brand, { picture, behind: () => surface });
+  const [, framed, chip] = slide.objects;
+  assert.equal(framed!.kind === "asset" && framed.assetId, "fedcba9876543210", "the event's picture goes in the frame");
+  assert.deepEqual(framed!.geometry, { x: 324, y: 338, w: 432, h: 540, rotation: 0 });
+  assert.equal(framed!.pinned, false, "the picture can be moved");
+  assert.notEqual(chip!.kind === "text" && chip.colorKey, brand.roles.surface, "a chip's surface-coloured ink does not vanish on the surface");
 }
 console.log("ok - recreate-reference");

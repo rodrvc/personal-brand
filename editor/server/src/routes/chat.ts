@@ -6,26 +6,29 @@ import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-d
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
 import { detectImage, loadIndex } from "../../../../system/assets/index.js";
-import { generateForSlot } from "../compose/planner.js";
+import { generateForSlot, storeImage } from "../compose/planner.js";
 import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, CHAT_INSTRUCTIONS } from "../chat/chat-context.js";
 import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatProposal, type ChatRecord } from "../chat/chat-log.js";
 import {
   anchorLines,
-  keepPictureLines,
+  classifyLines,
+  completeTexts,
   keepTextsPrompt,
   letterbox,
-  linesOutside,
+  numberedLines,
   measureTexts,
   placePoster,
   register,
   settleTexts,
   toSlide,
   type Box,
+  type LineKind,
   type PlacedText,
 } from "../chat/recreate-reference.js";
-import { edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, remap } from "../image-tools.js";
+import { referenceBackground } from "../chat/reference-background.js";
+import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, remap } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
@@ -45,6 +48,7 @@ function isPlaced(doc: CarouselDocument, slideId: string, assetIds: string[]): b
 
 interface LayoutRead {
   lines?: TextLine[];
+  kinds?: LineKind[];
   aspect?: number;
   picture?: Box;
 }
@@ -60,13 +64,18 @@ function whereImageToolRuns<T>(read: () => T): T | undefined {
 }
 
 /** The layout reference's measured text lines, proportion and framed picture, read before the model is asked. */
-function readLayout(store: ProfileStore, references: ChatReference[]): LayoutRead {
+function readLayout(store: ProfileStore, references: ChatReference[], wordmark: string): LayoutRead {
   const layout = references.find((r) => r.role === "layout");
   const file = layout ? readAssetFile(store, layout.id) : undefined;
   if (!file) return {};
   const size = detectImage(file.bytes, "reference");
   const picture = whereImageToolRuns(() => findPicture(file.bytes));
-  return { lines: readTextLines(file.bytes), ...(size.w && size.h ? { aspect: size.w / size.h } : {}), ...(picture ? { picture } : {}) };
+  const lines = readTextLines(file.bytes);
+  return {
+    ...(lines ? { lines, kinds: classifyLines(lines, picture, wordmark) } : {}),
+    ...(size.w && size.h ? { aspect: size.w / size.h } : {}),
+    ...(picture ? { picture } : {}),
+  };
 }
 
 function proposeRecreation(
@@ -80,7 +89,7 @@ function proposeRecreation(
 ): ChatAction {
   const layout = references.find((r) => r.role === "layout");
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
-  const classified = keepPictureLines(action.texts, layoutRead.lines, layoutRead.picture);
+  const classified = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
   const texts = measureTexts(classified, layoutRead.lines);
   const content = references.find((r) => r.role === "content");
   const contentAsImage = content !== undefined && accepts("background", content.mime);
@@ -93,6 +102,7 @@ function proposeRecreation(
     referenceIds: [layout.id, ...(contentAsImage ? [content!.id] : [])],
     request,
     ...(layoutRead.aspect ? { layoutAspect: layoutRead.aspect } : {}),
+    ...(layoutRead.picture ? { picture: layoutRead.picture } : {}),
     ...(layoutRead.lines ? { anchors: anchorLines(classified, layoutRead.lines, layoutRead.picture) } : {}),
     provenance: [
       { source: "layout_reference", detail: layout.name },
@@ -217,6 +227,45 @@ function generationFor(store: ProfileStore, action: ChatAction, canvas: Carousel
   return undefined;
 }
 
+/** Where the poster's background comes from: the layout reference itself (default) or the image provider. */
+function posterBackground(): "reference" | "provider" {
+  return process.env.EDITOR_POSTER_BACKGROUND === "provider" ? "provider" : "reference";
+}
+
+interface Composition {
+  backgroundId: string;
+  texts: PlacedText[];
+  picture?: { assetId: string; box: Box };
+  behind: (box: Box) => string;
+}
+
+/** The poster built locally, at no cost: the layout reference with its texts erased, and the event's picture framed. */
+function composeFromLayout(
+  store: ProfileStore,
+  action: Extract<ChatAction, { type: "compose_from_reference" }>,
+  canvas: CarouselDocument["canvas"],
+  brand: ReturnType<typeof buildChatContext>["brand"],
+  carouselId: string,
+): Composition {
+  const [layoutId, contentId] = action.referenceIds ?? [];
+  const layout = layoutId ? readAssetFile(store, layoutId) : undefined;
+  if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
+  const aspect = action.layoutAspect ?? canvas.w / canvas.h;
+  const onSlide = measureTexts(action.texts, undefined).map((t) => ({ ...t, box: toSlide(t.box, aspect, canvas) }));
+  const built = referenceBackground(layout.bytes, onSlide, aspect, canvas, brand);
+  const entry = storeImage(
+    store,
+    { buffer: built.image, mime: "image/png", model: "layout-reference", costCents: 0, usedReferenceIds: [layoutId!] },
+    { prompt: "Layout reference with its texts erased", kind: "background", carouselId, slot: "reference" },
+  );
+  return {
+    backgroundId: entry.id,
+    texts: built.texts,
+    ...(action.picture && contentId ? { picture: { assetId: contentId, box: toSlide(action.picture, aspect, canvas) } } : {}),
+    behind: colourReader(built.image),
+  };
+}
+
 type EventResults = Extract<ChatRecord, { role: "event" }>["results"];
 
 async function runProposal(
@@ -240,8 +289,18 @@ async function runProposal(
   try {
     const generated = new Map<string, string>();
     const placed: PlacedTexts = new Map();
+    const composed = new Map<string, Composition>();
     const canvas = readValidatedDocument(store, carouselId).canvas;
+    const brand = buildChatContext(store, carouselId).brand;
     for (const action of proposal.actions) {
+      if (action.type === "compose_from_reference" && posterBackground() === "reference") {
+        const composition = composeFromLayout(store, action, canvas, brand, carouselId);
+        composed.set(action.id, composition);
+        generated.set(action.id, composition.backgroundId);
+        placed.set(action.id, composition.texts);
+        results.push({ actionId: action.id, slideIds: [], assetIds: [composition.backgroundId], costCents: 0 });
+        continue;
+      }
       const spec = generationFor(store, action, canvas, placed);
       if (!spec) continue;
       const entry = await generateForSlot(store, generator, { ...spec, canvas, carouselId });
@@ -267,7 +326,11 @@ async function runProposal(
         const assetId = generated.get(action.id)!;
         resolveAction({ ...ctx, doc: document }, action);
         const existing = action.slideId ? document.slides.find((s) => s.id === action.slideId) : undefined;
-        const slide = placePoster(existing, assetId, placed.get(action.id) ?? [], document.canvas, ctx.brand);
+        const composition = composed.get(action.id);
+        const slide = placePoster(existing, assetId, placed.get(action.id) ?? [], document.canvas, ctx.brand, {
+          ...(composition?.picture ? { picture: composition.picture } : {}),
+          ...(composition ? { behind: composition.behind } : {}),
+        });
         document = {
           ...document,
           slides: existing ? document.slides.map((s) => (s.id === existing.id ? slide : s)) : [...document.slides, slide],
@@ -346,10 +409,10 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
       const history = readChatLog(store, req.params.id);
       const generator = getGenerator(req.params.slug);
       const images = loadReferenceImages(store, references.map((r) => r.id));
-      const layoutRead = readLayout(store, references);
+      const layoutRead = readLayout(store, references, ctx.brand.copy.wordmark);
       const completion = await generator.completeJson({
         instructions: CHAT_INSTRUCTIONS,
-        input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" })), linesOutside(layoutRead.lines, layoutRead.picture)),
+        input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" })), numberedLines(layoutRead.lines, layoutRead.kinds)),
         images,
         tier: references.some((r) => r.role === "layout") ? "vision" : "fast",
       });

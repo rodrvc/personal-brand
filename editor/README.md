@@ -53,6 +53,7 @@ Read from a `.env` at the **repo root**, not from `editor/`:
 | `OPENAI_API_KEY` | unset | Optional. Without it, AI-generation endpoints return 503; composing from the asset library still works. |
 | `EDITOR_BIND` | `127.0.0.1` | Refuses to start if set to a non-loopback host without `EDITOR_AUTH` — auth isn't implemented yet. |
 | `EDITOR_PORT` | `4310` | |
+| `EDITOR_POSTER_BACKGROUND` | `reference` | Where a poster composed from a reference gets its background: `reference` erases the layout's own texts locally (no cost); `provider` repaints it with the image provider. |
 | `EDITOR_AUTH` | unset | Reserved, not implemented. |
 
 ## API summary
