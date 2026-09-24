@@ -6,7 +6,14 @@ import { generateForSlot } from "../compose/planner.js";
 import { applyAction, ChatActionError, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, CHAT_INSTRUCTIONS } from "../chat/chat-context.js";
 import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatRecord } from "../chat/chat-log.js";
-import { ChatReferenceError, loadReferenceImages, saveReference, type ChatReference } from "../chat/chat-references.js";
+import {
+  ChatReferenceAssetNotFoundError,
+  ChatReferenceError,
+  loadReferenceImages,
+  referenceFromAsset,
+  saveReference,
+  type ChatReference,
+} from "../chat/chat-references.js";
 import { documentExists, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
@@ -108,15 +115,27 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
 
   router.post(`${BASE}/references`, (req, res) => {
     try {
-      const { name, mime, dataBase64 } = (req.body ?? {}) as { name?: unknown; mime?: unknown; dataBase64?: unknown };
-      if (typeof name !== "string" || typeof mime !== "string" || typeof dataBase64 !== "string") {
-        return void res.status(400).json({ error: 'Body must be { "name", "mime", "dataBase64" }' });
-      }
+      const body = (req.body ?? {}) as { name?: unknown; mime?: unknown; dataBase64?: unknown; assetId?: unknown };
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
-      const id = saveReference(store, req.params.id, mime, Buffer.from(dataBase64, "base64"));
-      res.json({ reference: { id, name } });
+
+      // Two request shapes for the same resource: a dropped OS file
+      // (name+mime+dataBase64) or a Bucket asset dragged in by id — see
+      // `referenceFromAsset`. Neither ever mutates the library.
+      if (typeof body.assetId === "string") {
+        const name = typeof body.name === "string" ? body.name : undefined;
+        const reference = referenceFromAsset(store, req.params.id, body.assetId, name);
+        return void res.json({ reference });
+      }
+      if (typeof body.name !== "string" || typeof body.mime !== "string" || typeof body.dataBase64 !== "string") {
+        return void res
+          .status(400)
+          .json({ error: 'Body must be either { "name", "mime", "dataBase64" } or { "assetId", "name"? }' });
+      }
+      const id = saveReference(store, req.params.id, body.mime, Buffer.from(body.dataBase64, "base64"));
+      res.json({ reference: { id, name: body.name } });
     } catch (error) {
+      if (error instanceof ChatReferenceAssetNotFoundError) return void res.status(404).json({ error: error.message });
       if (error instanceof ChatReferenceError) return void res.status(400).json({ error: error.message });
       handleStoreError(error, res);
     }

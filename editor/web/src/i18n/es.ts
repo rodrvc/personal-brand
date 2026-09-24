@@ -337,6 +337,7 @@ export const es = {
   "chat.provenance.brand": "De la marca: {detail}",
   "chat.provenance.request": "De tu mensaje: «{detail}»",
   "chat.referenceChip": "Referencia: {name}",
+  "chat.dropHint": "Suelta para usar como referencia",
   "chat.intact.slides": "No se tocan las láminas {list}.",
   "chat.intact.none": "Ninguna lámina queda sin tocar.",
   "chat.intact.onlyAdds": "En la lámina {n} solo se agrega el objeto; lo que ya estaba queda igual.",

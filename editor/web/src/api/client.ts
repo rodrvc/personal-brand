@@ -304,6 +304,20 @@ export async function uploadChatReference(slug: string, carouselId: string, file
   return reference;
 }
 
+/** Same resource as `uploadChatReference`, fed by a Bucket asset id instead of file bytes — the server copies the asset's bytes into the carousel's references without touching the library. */
+export async function addReferenceFromAsset(
+  slug: string,
+  carouselId: string,
+  assetId: string,
+  name: string,
+): Promise<ChatReference> {
+  const { reference } = await request<{ reference: ChatReference }>(`/profiles/${slug}/carousels/${carouselId}/chat/references`, {
+    method: "POST",
+    body: JSON.stringify({ assetId, name }),
+  });
+  return reference;
+}
+
 export function resolveProposal(
   slug: string,
   carouselId: string,

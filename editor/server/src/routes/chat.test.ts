@@ -134,6 +134,57 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "a reference can be created from a library asset, without touching the asset or its index",
+    async () => {
+      reset();
+      const { loadIndex } = await import("../../../../system/assets/index.js");
+      const before = loadIndex(profileDir);
+      const { status, body } = await post("/references", { assetId: asset.id });
+      assert.equal(status, 200);
+      assert.equal(body.reference.name, "bg.png");
+      assert.match(body.reference.id, /^[0-9a-f]{16}\.png$/);
+      assert.deepEqual(
+        readFileSync(join(carouselDir, "references", body.reference.id)),
+        readFileSync(join(profileDir, asset.path)),
+      );
+      assert.deepEqual(loadIndex(profileDir), before);
+
+      // an explicit name overrides the asset's file name
+      const named = await post("/references", { assetId: asset.id, name: "sunset override.png" });
+      assert.equal(named.body.reference.name, "sunset override.png");
+
+      // it works as a reference on /messages exactly like a dropped file
+      const assistant = await propose({ text: "ok", actions: [] }, [body.reference]);
+      assert.equal(seenImages, 1);
+      void assistant;
+    },
+  ],
+  [
+    "an unknown assetId 404s and a malformed body 400s naming both shapes",
+    async () => {
+      reset();
+      const missing = await post("/references", { assetId: "0000000000000000" });
+      assert.equal(missing.status, 404);
+      assert.match(missing.body.error, /0000000000000000/);
+
+      const malformed = await post("/references", { name: "x.png" });
+      assert.equal(malformed.status, 400);
+      assert.match(malformed.body.error, /assetId/);
+      assert.match(malformed.body.error, /dataBase64/);
+    },
+  ],
+  [
+    "an asset whose mime the reference store doesn't support 400s",
+    async () => {
+      reset();
+      const { registerFile } = await import("../../../../system/assets/index.js");
+      const svgAsset = registerFile(profileDir, Buffer.from("<svg></svg>"), { destRelPath: "assets/icon.svg" });
+      const { status, body } = await post("/references", { assetId: svgAsset.id });
+      assert.equal(status, 400);
+      assert.match(body.error, /svg/);
+    },
+  ],
+  [
     "a proposal that fails midway is logged as failed and stops being pending",
     async () => {
       reset();
