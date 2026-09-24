@@ -534,6 +534,9 @@ export async function generateForSlot(
     slot: string;
     referenceAssetIds?: string[];
     mode?: GenerateImageSpec["mode"];
+    padColor?: string;
+    /** Runs on the generated image before it is stored, e.g. to erase measured text. */
+    postProcess?: (image: Buffer) => Buffer;
   },
 ): Promise<AssetEntry> {
   const generateKind =
@@ -549,7 +552,9 @@ export async function generateForSlot(
     brand,
     referenceAssetIds: spec.referenceAssetIds,
     mode: spec.mode,
+    padColor: spec.padColor,
   });
+  if (spec.postProcess) image.buffer = spec.postProcess(image.buffer);
   // registerFile identifies the file by its own content hash (design.md
   // D7's `assets/generated/<hash>.<ext>`); this file's destination path
   // must be derived from that same hash, not an unrelated random id, so a
