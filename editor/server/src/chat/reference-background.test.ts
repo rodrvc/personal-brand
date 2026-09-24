@@ -37,8 +37,6 @@ if (existsSync("/usr/bin/sips")) {
   const centre = (placedChip!.box.x + placedChip!.box.w / 2) * canvas.w;
   assert.ok(Math.abs(centre - (pill.x0 + pill.x1) / 2) < 2, "the chip's text is centred on the grown pill");
   assert.deepEqual(built.texts[1], title, "other texts keep their boxes");
-  const music = referenceBackground(encodePng(w, h, page), [{ ...chip, text: "MUSIC" }], 0.8, canvas, brand);
-  assert.equal(colourReader(music.image)({ ...music.texts[0]!.box, h: 0.002 }), "E63946", "a category's chip is painted in its fill");
   console.log("ok - reference-background");
 } else {
   console.log("skip - no sips on this system");

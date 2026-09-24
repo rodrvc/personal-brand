@@ -44,6 +44,15 @@ export const posterTextSchema = z.object({
   weight: z.number().int().min(100).max(900).optional(),
   /** The ink colour measured on the layout's line, #rrggbb. */
   color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  /** What the owner's message asks to change in this text's style; it wins over what the layout says. */
+  restyle: z
+    .object({
+      scale: z.number().positive().max(4).optional(),
+      color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      weight: z.number().int().min(100).max(900).optional(),
+    })
+    .optional()
+    .catch(undefined),
 });
 export type PosterText = z.infer<typeof posterTextSchema>;
 export type PlacedText = PosterText & { zone: Zone; box: Box };
@@ -385,13 +394,12 @@ export function withWeekday(text: string, iso: string, locale: string): string {
 }
 
 /**
- * What the model cannot be trusted with, settled from the layout and the profile: each text's weight and start
- * measured on the layout's ink, columns lined up, a date's weekday written from its day, and a chip named after
- * one of the profile's categories.
+ * What the model cannot be trusted with, settled from the layout and the profile: each text's weight, colour and
+ * start measured on the layout's ink, columns lined up, and a date's weekday written from its day.
  */
 export function refineTexts(
   texts: PlacedText[],
-  profile: { locale: string; categories: string[] },
+  profile: { locale: string },
   ink?: { stroke: (box: Box) => number; left: (box: Box) => number; colour: (box: Box) => string },
 ): PlacedText[] {
   const measured = texts.map((t): PlacedText => {
@@ -402,17 +410,7 @@ export function refineTexts(
     const x = ink.left(t.box);
     return { ...t, weight, color, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
   });
-  return alignColumns(measured).map((t) => {
-    const dated = t.date ? { ...t, text: withWeekday(t.text, t.date, profile.locale) } : t;
-    return t.zone === "chip" ? { ...dated, text: asCategory(dated.text, profile.categories, t.original), from: "content" } : dated;
-  });
-}
-
-/** The profile's category closest to the chip's text, in the case the layout's chip was written in. */
-export function asCategory(text: string, categories: string[], original?: string): string {
-  const best = categories.map((name) => ({ name, score: similarity(name, text) })).sort((a, b) => b.score - a.score)[0];
-  if (!best || best.score < 0.4) return text;
-  return original && original === original.toUpperCase() ? best.name.toUpperCase() : best.name;
+  return alignColumns(measured).map((t) => (t.date ? { ...t, text: withWeekday(t.text, t.date, profile.locale) } : t));
 }
 
 export function fontSizeFor(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): number {
@@ -435,10 +433,19 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
   const measured = fontSizeFor(t, box, canvas, brand);
   // A chip's text must stay inside its pill: past it, the size leaves the brand's scale and shrinks without a floor.
   const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1, t.weight));
-  const fontSize = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
-  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize, t.weight));
-  const w = Math.round(Math.max(measuredW, neededW));
+  const fitted = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
+  const weight = t.restyle?.weight ?? t.weight;
+  // A size the owner asked for is used as asked, off the brand's scale, but it stays inside the layout's margins.
+  // The width estimate is calibrated on the line it replaces, whose real width was measured.
+  const calibration = t.original ? Math.min(1.5, Math.max(0.5, measuredW / textWidth(t.original, measured, t.weight))) : 1;
+  const margin = Math.max(0, Math.min(box.x, 1 - box.x - box.w)) * canvas.w;
+  const roomy = Math.floor((canvas.w - 2 * margin) / (textWidth(t.text, 1, weight) * calibration));
+  const fontSize = t.restyle?.scale ? Math.max(1, Math.min(Math.round(fitted * t.restyle.scale), Math.max(roomy, fitted))) : fitted;
+  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize, weight));
   const align = role === "chip" ? "center" : box.x + box.w / 2 > RIGHT_ALIGNED ? "right" : "left";
+  // The estimate runs wide, so a left or right text keeps its anchored edge and loses width at the canvas edge instead.
+  const room = align === "left" ? canvas.w - box.x * canvas.w : align === "right" ? box.x * canvas.w + measuredW : canvas.w;
+  const w = Math.round(Math.max(measuredW, Math.min(neededW, room)));
   const left = align === "right" ? box.x * canvas.w + measuredW - w : align === "center" ? box.x * canvas.w + (measuredW - w) / 2 : box.x * canvas.w;
   const x = Math.round(Math.min(Math.max(left, 0), canvas.w - w));
   const height = Math.round(fontSize * 1.3);
@@ -449,7 +456,7 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
     geometry: { x, y: Math.round(box.y * canvas.h - (height - box.h * canvas.h) / 2), w, h: height, rotation: 0 },
     fontKey: style.font,
     fontSize,
-    ...(t.weight ? { fontWeight: t.weight } : {}),
+    ...(weight ? { fontWeight: weight } : {}),
     lineHeight: 1.15,
     align,
     ...(ink ?? { colorKey: brand.roles[style.color as keyof BrandRoles] }),
@@ -467,6 +474,8 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
 function textObjects(texts: PlacedText[], canvas: CarouselDocument["canvas"], brand: BrandTokens, behind?: (box: Box) => string): SlideObject[] {
   const ink = (t: PlacedText): Ink | undefined => {
     const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
+    // The owner's colour is used as asked, without the contrast check.
+    if (t.restyle?.color) return inkFor(brand, t.restyle.color);
     const wanted: Ink = t.color ? inkFor(brand, t.color) : { colorKey: roleKey };
     if (!behind) return t.color ? wanted : undefined;
     const under = `#${behind(t.box)}`;

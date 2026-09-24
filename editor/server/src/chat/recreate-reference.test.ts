@@ -8,7 +8,6 @@ import type { Slide } from "../../../../system/ig-carousel/carousel-document.js"
 import {
   alignColumns,
   anchorLines,
-  asCategory,
   IDENTITY,
   classifyLines,
   completeTexts,
@@ -189,9 +188,6 @@ const lines = [
   assert.equal(withWeekday("VIE 25 SEP", "2026-09-26", "es-CL"), "VIE 25 SEP");
   assert.match(withWeekday("VIE 26 SEP", "2026-09-26", "es-CL"), /^S\u00c1B 26 SEP$/, "in the profile's locale");
 
-  assert.equal(asCategory("LIVE MUSIC", ["Music", "Sports", "Arts"], "ARTS"), "MUSIC", "a category of the profile, in the layout chip's case");
-  assert.equal(asCategory("sports", ["Music", "Sports"]), "Sports");
-  assert.equal(asCategory("Zzz", ["Music"]), "Zzz", "nothing close: the text stays");
 
   assert.deepEqual([0.1, 0.15, 0.2].map(weightFor), [400, 600, 700]);
 
@@ -207,11 +203,10 @@ const lines = [
       { line: 1, zone: "date", text: "THU 26 SEP", date: "2026-09-26", from: "content", box: { x: 0.75, y: 0.1, w: 0.13, h: 0.016 } },
       row(0.138, 0.76, "Place"),
     ].map((t) => ({ line: 2, ...t })) as PlacedText[],
-    { locale: "en-US", categories: ["Music", "Arts"] },
+    { locale: "en-US" },
     { stroke: (box) => (box.y < 0.5 ? 0.2 : 0.1), left: (box) => box.x + 0.01, colour: () => "#123456" },
   );
-  assert.deepEqual(refined.map((t) => [t.text, t.weight]), [["MUSIC", 700], ["SAT 26 SEP", 700], ["Place", 400]]);
-  assert.equal(refined[0]!.from, "content", "a chip never keeps the layout's category");
+  assert.deepEqual(refined.map((t) => [t.text, t.weight]), [["LIVE MUSIC", 700], ["SAT 26 SEP", 700], ["Place", 400]], "a chip is a text like any other");
   assert.equal(refined[0]!.box.x, 0.07, "a chip's box is not moved to its ink: it is centred on its pill");
   assert.ok(Math.abs(refined[2]!.box.x - 0.148) < 1e-9, "a text starts where its ink starts");
 }
@@ -227,5 +222,45 @@ const lines = [
   assert.equal(colourOf(brandHex).colorKey, brandKey, "a brand colour when the measured one is it");
   assert.equal(colourOf(undefined, "000000").colorKey, brand.roles[typeStyle(brand, "subtitle").color as keyof typeof brand.roles], "the role's colour when nothing was measured");
   assert.equal(colourOf("#f0f0f0").color, undefined, "a colour that would not read on what is behind falls back to the best-contrast brand colour");
+}
+{
+  const line = [{ text: "Old", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.03 } }];
+  const [title] = measureTexts([{ line: 0, zone: "title", text: "New", from: "content", weight: 400, color: "#222222" }], line);
+  const plain = placePoster(undefined, "0123456789abcdef", [title!], canvas, brand, { behind: () => "ffffff" }).objects[1]!;
+  const asked = placePoster(undefined, "0123456789abcdef", [{ ...title!, restyle: { scale: 1.5, color: "#ffd400", weight: 700 } }], canvas, brand, {
+    behind: () => "ffffff",
+  }).objects[1]!;
+  assert.ok(plain.kind === "text" && asked.kind === "text");
+  if (plain.kind === "text" && asked.kind === "text") {
+    assert.equal(asked.fontSize, Math.round(plain.fontSize! * 1.5), "the size the owner asked for, off the scale");
+    assert.equal(asked.fontWeight, 700);
+    assert.equal(asked.color, "#ffd400", "the owner's colour stands, even where the contrast check would replace it");
+  }
+}
+{
+  // A bigger size never pushes a long text past the layout's margins, nor below the size it had.
+  const line = [{ text: "Old", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.03 } }];
+  const [title] = measureTexts([{ line: 0, zone: "title", text: "A tribute night", from: "content" }], line);
+  const plain = placePoster(undefined, "0123456789abcdef", [title!], canvas, brand).objects[1]!;
+  const asked = placePoster(undefined, "0123456789abcdef", [{ ...title!, restyle: { scale: 3 } }], canvas, brand).objects[1]!;
+  assert.ok(plain.kind === "text" && asked.kind === "text");
+  if (plain.kind === "text" && asked.kind === "text") {
+    assert.ok(asked.fontSize! < Math.round(plain.fontSize! * 3), "capped by the margins");
+    assert.ok(asked.fontSize! >= plain.fontSize!, "never smaller than asked-for bigger");
+    assert.ok(asked.geometry!.x >= Math.floor(0.1 * canvas.w) - 1, "keeps the left margin");
+  }
+  // A font that sets narrower than the estimate, as measured on the old line, leaves room to grow.
+  const narrow = { ...title!, original: "Old line text" };
+  const plainNarrow = placePoster(undefined, "0123456789abcdef", [narrow], canvas, brand).objects[1]!;
+  const grown = placePoster(undefined, "0123456789abcdef", [{ ...narrow, restyle: { scale: 1.3 } }], canvas, brand).objects[1]!;
+  if (plainNarrow.kind === "text" && grown.kind === "text") assert.equal(grown.fontSize, Math.round(plainNarrow.fontSize! * 1.3));
+}
+{
+  // A left text whose estimated width runs past the canvas keeps its start rather than sliding to the edge.
+  const line = [{ text: "Old", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.03 } }];
+  const [title] = measureTexts([{ line: 0, zone: "title", text: "A VERY LONG EVENT NAME WRITTEN IN CAPITALS", from: "content" }], line);
+  const placed = placePoster(undefined, "0123456789abcdef", [title!], canvas, brand).objects[1]!;
+  assert.equal(placed.geometry!.x, Math.round(0.1 * canvas.w));
+  assert.ok(placed.geometry!.x + placed.geometry!.w <= canvas.w);
 }
 console.log("ok - recreate-reference");

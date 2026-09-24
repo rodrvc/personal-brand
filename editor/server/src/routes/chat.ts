@@ -96,7 +96,7 @@ function proposeRecreation(
   const classified = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
   const texts = refineTexts(
     measureTexts(classified, layoutRead.lines),
-    { locale: ctx.brand.locale, categories: Object.keys(ctx.brand.categories?.byName ?? {}) },
+    { locale: ctx.brand.locale },
     layoutRead.ink,
   );
   const content = references.find((r) => r.role === "content");

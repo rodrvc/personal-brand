@@ -520,30 +520,3 @@ export function inkReader(png: Buffer): {
     },
   };
 }
-
-/**
- * Repaints the pill in another colour, keeping its anti-aliased edge: each pixel is placed on the line from the
- * surface around the pill to the pill's own colour, and moved to the same point on the line to the new colour.
- */
-export function recolourPill(png: Buffer, pill: { x0: number; x1: number; y0: number; y1: number }, hex: string): Buffer {
-  const { width, height, pixels } = toRgba(png);
-  const at = (x: number, y: number) => [...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)];
-  const cy = Math.round((pill.y0 + pill.y1) / 2);
-  const fill = at(Math.round((pill.x0 + pill.x1) / 2), cy);
-  const surface = at(Math.max(0, pill.x0 - 4), cy);
-  const target = [0, 2, 4].map((i) => parseInt(hex.replace("#", "").slice(i, i + 2), 16));
-  const span = fill.map((v, c) => v - surface[c]!);
-  const length = span.reduce((sum, v) => sum + v * v, 0);
-  if (length === 0) return png;
-  const margin = 3;
-  for (let y = Math.max(0, pill.y0 - margin); y <= Math.min(height - 1, pill.y1 + margin); y++) {
-    for (let x = Math.max(0, pill.x0 - margin); x <= Math.min(width - 1, pill.x1 + margin); x++) {
-      const p = at(x, y);
-      const t = Math.min(1, Math.max(0, p.reduce((sum, v, c) => sum + (v - surface[c]!) * span[c]!, 0) / length));
-      const off = Math.sqrt(p.reduce((sum, v, c) => sum + (v - surface[c]! - t * span[c]!) ** 2, 0));
-      if (off > PILL_TOLERANCE || t === 0) continue;
-      for (let c = 0; c < 3; c++) pixels[(y * width + x) * 4 + c] = Math.round(surface[c]! + t * (target[c]! - surface[c]!));
-    }
-  }
-  return encodePng(width, height, pixels);
-}
