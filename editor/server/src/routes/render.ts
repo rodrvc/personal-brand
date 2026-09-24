@@ -23,30 +23,30 @@ function parseSlideIndex(raw: string): number | undefined {
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
+const SLIDE_ORIGIN = "http://editor.local";
+
 /**
- * Routes the preview HTML's `/api/profiles/:slug/assets/files/*` `<img>`
- * requests back into this same process instead of over the network — the
- * server IS the asset host, so Chromium fetching from it directly (rather
- * than through a real HTTP round trip to itself) avoids a pointless
- * loopback dependency during PNG/contrast capture.
+ * Loads the slide from a real origin instead of `setContent` on about:blank,
+ * so its root-relative `/api/profiles/:slug/assets/files/*` URLs resolve and
+ * are fulfilled in-process.
  */
-async function routeAssetRequestsInProcess(page: Page): Promise<void> {
-  await page.route("**/api/profiles/**", async (route) => {
+async function loadSlide(page: Page, html: string): Promise<void> {
+  await page.route(`${SLIDE_ORIGIN}/**`, async (route) => {
     const url = new URL(route.request().url());
-    const match = url.pathname.match(/^\/api\/profiles\/([^/]+)\/assets\/files\/(.+)$/);
-    if (!match) {
-      await route.continue();
+    if (url.pathname === "/") {
+      await route.fulfill({ body: html, contentType: "text/html; charset=utf-8" });
       return;
     }
+    const match = url.pathname.match(/^\/api\/profiles\/([^/]+)\/assets\/files\/(.+)$/);
     try {
+      if (!match) throw new Error("not an asset");
       const [, slug, relUnderAssets] = match;
-      const fileStore = new ProfileStore(slug!);
-      const buffer = fileStore.readFile(`assets/${relUnderAssets}`);
-      await route.fulfill({ body: buffer });
+      await route.fulfill({ body: new ProfileStore(slug!).readFile(`assets/${decodeURIComponent(relUnderAssets!)}`) });
     } catch {
       await route.abort();
     }
   });
+  await page.goto(`${SLIDE_ORIGIN}/`, { waitUntil: "networkidle" });
 }
 
 export function renderRouter(): Router {
@@ -130,12 +130,7 @@ export function renderRouter(): Router {
             deviceScaleFactor: 1,
           });
           try {
-            // The HTML references `/api/profiles/:slug/assets/files/*` URLs —
-            // Chromium needs to reach this same server to fetch them, so
-            // `setContent` is paired with a `baseURL`-equivalent: routing asset
-            // requests back to this process rather than the network.
-            await routeAssetRequestsInProcess(page);
-            await page.setContent(html, { waitUntil: "networkidle" });
+            await loadSlide(page, html);
             await page.evaluate(() => document.fonts.ready);
             return await page.screenshot();
           } finally {
@@ -192,8 +187,7 @@ export function renderRouter(): Router {
         deviceScaleFactor: 1,
       });
       try {
-        await routeAssetRequestsInProcess(page);
-        await page.setContent(html, { waitUntil: "networkidle" });
+        await loadSlide(page, html);
         await page.evaluate(() => document.fonts.ready);
         const measurements = await measureContrast(page, brand, doc, doc.slides[n]!, template);
         res.json({ measurements });

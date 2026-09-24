@@ -445,6 +445,26 @@ const tests: Array<[string, () => void]> = [
       assert.doesNotMatch(shrunkHtml, /height: 120px/, "overridden footer must not still show the default height");
     },
   ],
+  [
+    "a picture covering the whole slide suppresses the template footer",
+    () => {
+      const doc = buildDoc();
+      const withFooter = renderFreeLayoutSlide(brand, template, doc, 0, ctx);
+      assert.match(withFooter, /data-zone="footer"/);
+      const poster = {
+        id: "poster",
+        kind: "asset" as const,
+        assetId: KNOWN_ASSET,
+        fit: "contain" as const,
+        geometry: { x: 0, y: 0, w: 1080, h: 1350, rotation: 0 },
+        pinned: false,
+        locked: false,
+        source: "ai" as const,
+      };
+      const covered = { ...doc, slides: [{ ...doc.slides[0]!, objects: [poster] }, ...doc.slides.slice(1)] };
+      assert.doesNotMatch(renderFreeLayoutSlide(brand, template, covered, 0, ctx), /data-zone="footer"/);
+    },
+  ],
 ];
 
 let failed = 0;

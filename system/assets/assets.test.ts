@@ -73,6 +73,7 @@ const tests: Array<[string, () => void]> = [
         assert.ok(found, "asset survives a full rebuild");
         assert.equal(found!.kind, "character");
         assert.deepEqual(found!.tags, ["ink:light"]);
+        assert.deepEqual(rebuilt.entries.filter((e) => e.path.endsWith(".json")), [], "the meta sidecar is not indexed as an asset");
       });
     },
   ],
