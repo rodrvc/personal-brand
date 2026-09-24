@@ -8,6 +8,7 @@ import { removeObject } from "../../../../system/ig-carousel/free-objects.js";
 import { messages } from "../messages.js";
 import { newChatId } from "./chat-log.js";
 import { recreateActionFields } from "./recreate-reference.js";
+import type { TextLine } from "../text-boxes.js";
 
 export const CHAT_ACTION_TYPES = [
   "set_text",
@@ -54,6 +55,7 @@ export interface Provenance {
     | "generation"
     | "reference"
     | "reference_described"
+    | "reference_kept"
     | "layout_reference"
     | "content_reference"
     | "brand"
@@ -66,6 +68,9 @@ export type ChatAction = ModelAction & {
   provenance: Provenance[];
   referenceIds?: string[];
   request?: string;
+  layoutAspect?: number;
+  /** Layout lines the generated image is registered against, as fractions of the layout reference. */
+  anchors?: TextLine[];
 };
 
 export type LibraryEntry = Pick<AssetEntry, "id" | "kind" | "tags" | "w" | "h"> & { name: string };
@@ -184,7 +189,9 @@ export function resolveAction(ctx: ActionContext, action: ModelAction): ChatActi
     }
     case "compose_from_reference": {
       if (action.slideId) slideOf(ctx.doc, action.slideId);
-      for (const r of action.replacements) provenance.push({ source: "content_reference", detail: `${r.what}: ${r.text}` });
+      for (const t of action.texts) {
+        provenance.push({ source: t.from === "layout" ? "reference_kept" : "content_reference", detail: `${t.zone}: ${t.text}` });
+      }
       break;
     }
     case "delete_slide": {

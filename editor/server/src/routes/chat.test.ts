@@ -63,16 +63,18 @@ let failGeneration = false;
 let holdGeneration: Promise<void> | undefined;
 let seenReferenceIds: string[] = [];
 let seenMode: string | undefined;
+let seenPrompt = "";
 const fakeGenerator = {
   async completeJson(request: { images?: unknown[] }) {
     seenImages = request.images?.length ?? 0;
     return { json: nextReply, model: "fake", costCents: 0 };
   },
-  async generateImage(spec: { referenceAssetIds?: string[]; mode?: string }) {
+  async generateImage(spec: { referenceAssetIds?: string[]; mode?: string; prompt?: string }) {
     if (holdGeneration) await holdGeneration;
     if (failGeneration) throw new Error("provider down");
     seenReferenceIds = spec.referenceAssetIds ?? [];
     seenMode = spec.mode;
+    seenPrompt = spec.prompt ?? "";
     const buffer = Buffer.from(TINY_PNG.toString("hex") + "00", "hex");
     return { buffer, mime: "image/png", model: "fake", costCents: 4, usedReferenceIds: seenReferenceIds };
   },
@@ -191,7 +193,16 @@ const tests: Array<[string, () => Promise<void>]> = [
       const content = (await post("/references", { name: "event.png", mime: "image/png", dataBase64: Buffer.from(TINY_PNG.toString("hex") + "01", "hex").toString("base64") })).body.reference;
       nextReply = {
         text: "",
-        actions: [{ type: "compose_from_reference", replacements: [{ what: "title", text: "New event" }, { what: "media", text: "event.png" }] }],
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "New event", from: "content", original: "Old event", box: { x: 0.1, y: 0.1, w: 0.5, h: 0.05 } },
+              { zone: "label", text: "Place", from: "layout", original: "Place", box: { x: 0.1, y: 0.8, w: 0.2, h: 0.02 } },
+              { zone: "media", text: "event.png", box: { x: 0.2, y: 0.3, w: 0.6, h: 0.4 } },
+            ],
+          },
+        ],
       };
       const { body } = await post("/messages", {
         text: "this poster with this event",
@@ -201,18 +212,20 @@ const tests: Array<[string, () => Promise<void>]> = [
       const action = body.records[1].proposal.actions[0];
       assert.equal(action.slideId, "slide-2");
       assert.deepEqual(action.referenceIds, [layout.id, content.id], "the layout goes first, as the base image");
-      assert.deepEqual(action.provenance.map((p: any) => p.source), ["layout_reference", "content_reference", "content_reference"]);
-      assert.deepEqual(action.replacements, [{ what: "title", text: "New event" }], "a file name is not a text to write on the poster");
+      assert.deepEqual(action.provenance.map((p: any) => p.source), ["layout_reference", "content_reference", "content_reference", "reference_kept"]);
+      assert.deepEqual(action.texts.map((t: any) => t.text), ["New event", "Place"], "a picture is not a text zone");
 
       const { event, onDisk } = await applyAndWait(body.records[1].proposal.id);
-      assert.equal(event.kind, "done");
+      assert.equal(event.kind, "done", event.error);
       assert.equal(event.costCents, 4);
       assert.equal(seenMode, "reproduce");
       assert.deepEqual(seenReferenceIds, [layout.id, content.id]);
-      const [poster, ...rest] = onDisk.slides[1].objects;
+      const [poster, ...texts] = onDisk.slides[1].objects;
       assert.equal(poster.assetId, event.results[0].assetIds[0]);
       assert.deepEqual(poster.geometry, { x: 0, y: 0, w: 1080, h: 1350, rotation: 0 });
-      assert.deepEqual(rest, [], "no texts or other objects");
+      assert.equal(poster.pinned, true);
+      assert.deepEqual(texts.map((t: any) => [t.kind, t.text, t.pinned]), [["text", "New event", false], ["text", "Place", false]], "editable texts on top");
+      assert.match(seenPrompt, /every text exactly as it is written/, "the provider keeps the texts; they are erased after measuring");
       assert.deepEqual(onDisk.slides[0], document.slides[0], "other slides are untouched");
     },
   ],
