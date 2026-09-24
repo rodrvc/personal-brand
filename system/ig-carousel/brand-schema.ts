@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { TYPE_ROLES, type TypeRole, type TypeStyle } from "./typography.js";
+
 /**
  * Brand data the engine consumes. This file defines the *shape*; the values
  * live in `profiles/<slug>/brand.json`. Nothing here names a specific brand —
@@ -103,6 +105,10 @@ export interface BrandTokens {
     /** Only needed by the reel engine (cover + closing cards). */
     reel?: ReelCopy;
   };
+  /** Font and color role per text role of a composed poster; see typography.ts for the defaults. */
+  typography?: Partial<Record<TypeRole, Partial<TypeStyle>>>;
+  /** Font sizes in px on the 1080-wide canvas that a measured size snaps to. */
+  typeScale?: number[];
   /** Only needed by scripts that render a date range (e.g. render-week). */
   dates?: {
     /** Exactly 12 entries, January first. */
@@ -399,6 +405,17 @@ const FEATURE_VALIDATORS: Record<
  * render would never read. The engine's data demands now follow from the
  * template being invoked, not from the union of every template that exists.
  */
+function validateTypography(brand: BrandTokens, profileDir: string): void {
+  for (const [role, style] of Object.entries(brand.typography ?? {})) {
+    if (!(TYPE_ROLES as readonly string[]).includes(role)) fail(profileDir, `typography.${role} is not a text role (${TYPE_ROLES.join(", ")})`);
+    if (style?.font !== undefined && !(style.font in brand.fonts)) fail(profileDir, `typography.${role}.font "${style.font}" is not a key of fonts`);
+    if (style?.color !== undefined && !ROLE_KEYS.includes(style.color)) fail(profileDir, `typography.${role}.color "${style.color}" is not a color role`);
+  }
+  if (brand.typeScale !== undefined && (!Array.isArray(brand.typeScale) || brand.typeScale.some((n) => typeof n !== "number" || n <= 0))) {
+    fail(profileDir, "typeScale must be a list of positive font sizes in px");
+  }
+}
+
 export function loadBrand(profileDir: string, features: BrandFeature[] = []): BrandTokens {
   const path = join(profileDir, "brand.json");
 
@@ -444,6 +461,8 @@ export function loadBrand(profileDir: string, features: BrandFeature[] = []): Br
   }
   requireString(brand.copy.wordmark, "copy.wordmark", profileDir);
   requireString(brand.copy.site, "copy.site", profileDir);
+
+  validateTypography(brand, profileDir);
 
   // Always, not feature-gated: a key left behind after the move would read as
   // an active check while nothing consumes it.
