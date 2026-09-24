@@ -72,8 +72,8 @@ export interface GenerateImageSpec {
   /** Target canvas the image will be placed into, for aspect-ratio guidance only — the provider is not asked to crop precisely. */
   canvas: { w: number; h: number };
   brand?: GenerateImageBrandContext;
-  /** Registered asset ids the picture should resemble. Ids the provider cannot take are dropped, per `acceptsReference`. */
   referenceAssetIds?: string[];
+  mode?: "brand" | "reproduce";
 }
 
 export interface GeneratedImage {
@@ -81,38 +81,35 @@ export interface GeneratedImage {
   mime: string;
   model: string;
   costCents: number;
-  /** The reference ids that actually reached the provider as images. */
   usedReferenceIds: string[];
 }
 
-/** Turns an asset id into its file; undefined when the id is not in the profile's index. */
 export type AssetFileResolver = (assetId: string) => { bytes: Buffer; mime: string } | undefined;
 
-/**
- * Two operations, matching what the piece-generation spec needs and nothing
- * more: drafting basic editable copy, and generating a text-free image.
- * Both are async and may throw — callers (the planner, the regenerate
- * route) are responsible for turning a thrown error into a user-facing
- * message; this interface itself carries no retry or fallback policy.
- */
 export interface JsonCompletionRequest {
   instructions: string;
   input: string;
   images?: Array<{ mime: string; base64: string }>;
+  tier?: "fast" | "vision";
 }
 
 export interface JsonCompletionResult {
-  /** Parsed JSON, not yet validated: the caller owns its schema. */
   json: unknown;
   model: string;
   costCents: number;
 }
 
+/**
+ * Drafting copy, generating an image, a JSON completion for the chat, and
+ * whether a reference can go to the provider as an input image. The async
+ * ones may throw — callers (the planner, the regenerate and chat routes)
+ * turn a thrown error into a user-facing message; this interface itself
+ * carries no retry or fallback policy.
+ */
 export interface PieceGenerator {
   draftCopy(plan: DraftCopyPlan): Promise<DraftCopyResult>;
   generateImage(spec: GenerateImageSpec): Promise<GeneratedImage>;
   completeJson(request: JsonCompletionRequest): Promise<JsonCompletionResult>;
-  /** Whether a reference of this mime can be passed as an image when generating this kind; otherwise it can only be described in words. */
   acceptsReference(kind: GenerateImageSpec["kind"], mime: string): boolean;
 }
 

@@ -26,7 +26,7 @@ export type ChatRecord =
       id: string;
       at: string;
       role: "event";
-      kind: "applied" | "failed";
+      kind: "started" | "applied" | "done" | "failed";
       proposalId: string;
       error?: string;
       documentVersion?: string;

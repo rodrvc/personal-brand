@@ -12,6 +12,19 @@
 export const TEXT_MODEL = "gpt-4o-mini";
 const TEXT_CENTS_PER_1K_TOKENS_BLENDED = 0.03;
 
+export const VISION_MODEL = "gpt-4.1";
+
+const CHAT_CENTS_PER_1M: Record<string, { input: number; output: number }> = {
+  [TEXT_MODEL]: { input: 15, output: 60 },
+  [VISION_MODEL]: { input: 200, output: 800 },
+};
+
+export function chatCostCents(model: string, usage: { prompt_tokens?: number; completion_tokens?: number } | undefined, prompt: string, response: string): number {
+  const rate = CHAT_CENTS_PER_1M[model];
+  if (!usage || !rate) return estimateTextCostCents(prompt, response);
+  return Math.round((((usage.prompt_tokens ?? 0) * rate.input + (usage.completion_tokens ?? 0) * rate.output) / 1_000_000) * 100) / 100;
+}
+
 /** Low-quality image model used for `generateImage`. Flat estimate per image at "low" quality, 1024x1024-class output. */
 export const IMAGE_MODEL = "gpt-image-1-mini";
 const IMAGE_CENTS_PER_CALL_LOW_QUALITY = 1;
@@ -30,7 +43,6 @@ export function estimateImageCostCents(): number {
   return IMAGE_CENTS_PER_CALL_LOW_QUALITY;
 }
 
-/** Per-token list prices of `IMAGE_MODEL`, used whenever the provider reports usage; the flat estimate is only the fallback. */
 const IMAGE_MODEL_CENTS_PER_1M = { textInput: 200, imageInput: 250, imageOutput: 800 };
 
 export function estimateImageCostFromUsage(usage?: {

@@ -9,6 +9,7 @@ import { readValidatedDocument } from "../document-store.js";
 import type { ProfileStore } from "../profile-store.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
 import { CHAT_ACTION_TYPES, type LibraryEntry } from "./chat-actions.js";
+import { TEXT_ZONES } from "./recreate-reference.js";
 import type { ChatRecord } from "./chat-log.js";
 
 export interface ChatContext {
@@ -25,7 +26,7 @@ export function buildChatContext(store: ProfileStore, carouselId: string): ChatC
   const entries = loadIndex(store.roots.profileDir).entries;
   const assetKinds = new Map(entries.map((entry) => [entry.id, entry.kind]));
   const library = entries
-    .filter((entry) => entry.status === "approved" && entry.kind !== "font")
+    .filter((entry) => entry.status === "approved" && entry.origin !== "reference" && entry.mime.startsWith("image/"))
     .map(({ id, kind, tags, w, h, path }) => ({ id, name: basename(path), kind, tags, w, h }));
   return { doc, template: resolveDocumentTemplate(store, brand, doc), brand, library, assetKinds };
 }
@@ -38,6 +39,8 @@ export const CHAT_INSTRUCTIONS = [
   'Shapes: {"type":"set_text","slideId","objectId"?,"slot"?,"text","why"} | {"type":"set_visual_from_library","slideId","slot","assetId","why"} | {"type":"generate_visual","slideId","slot"?,"prompt","kind":"background"|"character"|"photo"|"decoration","why"} | {"type":"add_slide","afterIndex","kind":"cover"|"step"|"closing","why"} (afterIndex -1 inserts first) | {"type":"delete_slide","slideId","why"} | {"type":"delete_object","slideId","objectId"?,"slot"?,"why"} (removes one object; say which in why). Visual slot "background" is the slide background.',
   "For an image: reuse a library asset only when its file name or tags clearly match what was asked. If none clearly matches, use generate_visual; never pick an unrelated asset. A generate_visual prompt describes the picture concretely (subject, composition, light, palette) and never asks for text, letters or logos.",
   "An object the owner wants on the slide (a chair, a person, a plant) is a generate_visual with no slot and kind character, photo or decoration: it is generated without background and placed loose on the slide, so its prompt describes only the subject itself: no room, scene, floor or shadow. Use slot \"background\" only when the owner asks for the slide background.",
+  `References come with a role, in the same order as the attached images. A "layout" reference IS the poster the owner wants reproduced; a "content" reference brings the new event (its picture and data). When the owner asks to make the poster with the new event, answer with exactly one compose_from_reference action and nothing else: {"type":"compose_from_reference","replacements":[{"what","text"}],"why"}. The image provider regenerates the whole poster from the two images; you only list, for each text of the layout that describes the old event, the exact new text read from the content reference (what: one of ${TEXT_ZONES.join(", ")}); the picture itself is not a text, do not list it. Never invent data that is not legible in the content reference, and omit slideId (the server targets the slide the owner is on, or a new one).`,
+  "Without a layout reference, a content reference can be placed with set_visual_from_library using its id from the library and its texts applied with set_text.",
   "Reference images attached to the message are what the owner wants the picture to look like: describe what matters in them inside the generate_visual prompt.",
   "Use only slide ids, object ids and slots present in the document or template, and only asset ids from the library. Pinned pieces must not be changed or replaced (they are kept from regeneration), but the owner may delete them with delete_object. Locked pieces cannot be deleted either.",
   "An image object whose assetKind is missing or is not a picture (e.g. font) shows as a broken image.",
@@ -46,7 +49,12 @@ export const CHAT_INSTRUCTIONS = [
   'Respond ONLY with JSON: {"text":string,"actions":[...]}.',
 ].join("\n");
 
-export function chatInput(ctx: ChatContext, history: ChatRecord[], text: string, referenceNames: string[]): string {
+export function chatInput(
+  ctx: ChatContext,
+  history: ChatRecord[],
+  text: string,
+  references: Array<{ name: string; role: string }>,
+): string {
   const slides = ctx.doc.slides.map((slide, index) => ({
     number: index + 1,
     id: slide.id,
@@ -72,5 +80,5 @@ export function chatInput(ctx: ChatContext, history: ChatRecord[], text: string,
   const recent = history.slice(-12).map((r) =>
     r.role === "event" ? { role: "event", applied: r.proposalId } : { role: r.role, text: r.text },
   );
-  return JSON.stringify({ document: { title: ctx.doc.title, slides }, template, library: ctx.library, history: recent, message: text, references: referenceNames });
+  return JSON.stringify({ document: { title: ctx.doc.title, slides }, template, library: ctx.library, history: recent, message: text, references });
 }
