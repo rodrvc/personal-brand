@@ -186,3 +186,17 @@
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-pill);
 }
+
+.chat-refs .chat-ref select {
+  margin-left: 6px;
+  font: inherit;
+}
+
+.chat-proposal--running {
+  border-color: var(--ui-accent-line);
+  background: var(--ui-accent-soft);
+}
+
+.chat-proposal--running h3 {
+  color: var(--ui-accent-ink);
+}

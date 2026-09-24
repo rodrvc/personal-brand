@@ -26,9 +26,9 @@ function usedAssetIds(doc: CarouselDocument): Set<string> {
   return ids;
 }
 
-/** A chat reference joins the library only once it is placed on a slide (and so approved). */
+/** Chat references feed the chat only; they are never library material. */
 function isLibraryEntry(entry: AssetEntry): boolean {
-  return entry.origin !== "reference" || entry.status === "approved";
+  return entry.origin !== "reference";
 }
 
 export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: BucketPaneProps) {
