@@ -555,6 +555,15 @@ export async function generateForSlot(
     padColor: spec.padColor,
   });
   if (spec.postProcess) image.buffer = spec.postProcess(image.buffer);
+  return storeImage(store, image, spec);
+}
+
+/** Registers an image made for a slot as a candidate asset, with a sidecar recording how it was made. */
+export function storeImage(
+  store: ProfileStore,
+  image: { buffer: Buffer; mime: string; model: string; costCents?: number; usedReferenceIds: string[] },
+  spec: { prompt: string; kind: AssetEntry["kind"]; carouselId: string; slot: string },
+): AssetEntry {
   // registerFile identifies the file by its own content hash (design.md
   // D7's `assets/generated/<hash>.<ext>`); this file's destination path
   // must be derived from that same hash, not an unrelated random id, so a
