@@ -101,6 +101,7 @@ function renderTextObject(brand: BrandTokens, object: ResolvedObject): string {
     geometry.rotation ? `transform: rotate(${geometry.rotation}deg)` : undefined,
     fontFamily ? `font-family: ${fontFamily}` : undefined,
     content.fontSize !== undefined ? `font-size: ${content.fontSize}px` : undefined,
+    content.fontWeight !== undefined ? `font-weight: ${content.fontWeight}` : undefined,
     content.lineHeight !== undefined ? `line-height: ${content.lineHeight}` : undefined,
     content.align ? `text-align: ${content.align}` : undefined,
     textColor ? `color: ${textColor}` : undefined,

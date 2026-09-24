@@ -207,7 +207,7 @@ export function setTextStyle(
   doc: CarouselDocument,
   slideId: string,
   objectId: string,
-  patch: Partial<Pick<TextObject, "fontSize" | "lineHeight" | "align" | "colorKey">>,
+  patch: Partial<Pick<TextObject, "fontSize" | "fontWeight" | "lineHeight" | "align" | "colorKey">>,
 ): CarouselDocument {
   return mapSlide(doc, slideId, (slide) =>
     mapObject(slide, objectId, (o) => (o.kind === "text" ? { ...o, ...patch } : o)),
