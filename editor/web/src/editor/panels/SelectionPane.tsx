@@ -250,12 +250,22 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
             {colorKeys.map((key) => (
               <button
                 key={key}
-                className={`color-swatch ${selectedObject.colorKey === key ? "on" : ""}`}
+                className={`color-swatch ${!selectedObject.color && selectedObject.colorKey === key ? "on" : ""}`}
                 style={{ background: brand.colors[key] }}
                 title={key}
-                onClick={() => onDocUpdate((prev) => setTextStyle(prev, slide.id, selectedObject.id, { colorKey: key }))}
+                onClick={() =>
+                  onDocUpdate((prev) => setTextStyle(prev, slide.id, selectedObject.id, { colorKey: key, color: undefined }))
+                }
               />
             ))}
+            {selectedObject.color && (
+              <button
+                className="color-swatch on"
+                style={{ background: selectedObject.color }}
+                title={t("selectionPane.literalColorLabel")}
+                disabled
+              />
+            )}
           </div>
           <p className="props-hint">
             {t("selectionPane.colorHintPrefix", { count: colorKeys.length })} <b>inputs</b>
@@ -289,6 +299,7 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
           )}
         </div>
       )}
+
 
       <div className="props-card">
         <div className="props-card-heading">{t("selectionPane.piecesHeading")}</div>

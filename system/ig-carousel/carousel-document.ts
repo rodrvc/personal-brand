@@ -28,6 +28,24 @@ const SLUG = /^[a-z0-9-]+$/;
 /** Matches a `#rgb`/`#rrggbb`/`#rrggbbaa` literal anywhere inside a string. */
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/;
 
+/**
+ * A `#rrggbb` literal, and nothing looser — `TextObject.color` is the one
+ * document field deliberately allowed to carry a real hex value, as
+ * opposed to every other string field, which must stay a `brand.colors`
+ * key (see `findHexLiterals` below, which knows to skip exactly that field
+ * name rather than flag it).
+ */
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const hexColorSchema = z.string().regex(HEX_COLOR, "must be a #rrggbb hex color literal");
+
+/**
+ * Field name allowed to hold a literal hex value rather than a
+ * `brand.colors` key. Kept as a single source of truth so `findHexLiterals`
+ * (the document-wide "no stray hex" walk) and the schema field that
+ * actually declares a hex literal can't drift apart.
+ */
+const LITERAL_COLOR_FIELDS = new Set(["color"]);
+
 const geometrySchema = z.object({
   x: z.number().int(),
   y: z.number().int(),
@@ -124,6 +142,15 @@ const textObjectSchema = z.object({
   lineHeight: z.number().positive().optional(),
   align: z.enum(["left", "center", "right"]).optional(),
   colorKey: z.string().min(1).optional(),
+  /**
+   * A literal `#rrggbb` color that wins over `colorKey` at render time
+   * (free-layout.ts's `renderTextObject`) — the one deliberate escape from
+   * "no hex outside brand.json" (design.md D5), for a color sampled from a
+   * reference (e.g. a poster's own palette) rather than picked from the
+   * brand. `colorKey` validation is unaffected: it still must resolve in
+   * `brand.colors` whenever present, literal color or not.
+   */
+  color: hexColorSchema.optional(),
 });
 export type TextObject = z.infer<typeof textObjectSchema>;
 
@@ -243,8 +270,17 @@ function zodPath(path: readonly PropertyKey[]): string {
  * field the schema does not specifically type as a color (e.g. `text`,
  * `title`), which is the failure mode design.md D5 calls out.
  */
-function findHexLiterals(value: unknown, path: (string | number)[], errors: DocumentFieldError[]): void {
+function findHexLiterals(
+  value: unknown,
+  path: (string | number)[],
+  errors: DocumentFieldError[],
+  fieldName?: string,
+): void {
   if (typeof value === "string") {
+    // `color` is the field the schema deliberately lets carry a real hex
+    // value (`hexColorSchema` already shapes what's allowed there); every
+    // other string field still goes through this check.
+    if (fieldName !== undefined && LITERAL_COLOR_FIELDS.has(fieldName)) return;
     if (HEX_LITERAL.test(value)) {
       errors.push({
         path: zodPath(path),
@@ -259,7 +295,7 @@ function findHexLiterals(value: unknown, path: (string | number)[], errors: Docu
   }
   if (value && typeof value === "object") {
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      findHexLiterals(item, [...path, key], errors);
+      findHexLiterals(item, [...path, key], errors, key);
     }
   }
 }

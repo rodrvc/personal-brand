@@ -65,6 +65,21 @@ function colorFromKey(brand: BrandTokens, colorKey: string | undefined): string 
 }
 
 /**
+ * Passes a literal `#rrggbb` value through (already shaped by the schema's
+ * `hexColorSchema`), with the same cheap CSS-injection guard `colorFromKey`
+ * applies to a `brand.colors` value — belt and suspenders, since a hex
+ * literal can't actually contain `; { } <`, but this is the one place a
+ * value skips the "must be a brand.colors key" rule, so it stays defensive.
+ */
+function literalColor(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (CSS_INJECTION_CHARS.test(value)) {
+    throw new Error(`Literal color contains a disallowed character (one of ; { } <): "${value}"`);
+  }
+  return value;
+}
+
+/**
  * Resolves a font key to its family. Throws rather than silently rendering
  * in the fallback face: an unknown key means the document (or a template
  * slot) names a font the brand doesn't declare, and a silent fallback is
@@ -89,8 +104,13 @@ function renderTextObject(brand: BrandTokens, object: ResolvedObject): string {
   }
   const { geometry } = object;
   const fontFamily = content.fontKey ? fontFromKey(brand, content.fontKey) : undefined;
+  // A literal `color` (sampled from a reference, not picked from the
+  // brand) wins over `colorKey`/`colorRole` — the one deliberate escape
+  // from "always a brand key" (see `TextObject.color`'s doc comment).
   const textColor =
-    colorFromKey(brand, content.colorKey) ?? (content.colorRole ? color(brand, content.colorRole as keyof BrandTokens["roles"]) : undefined);
+    literalColor(content.color) ??
+    colorFromKey(brand, content.colorKey) ??
+    (content.colorRole ? color(brand, content.colorRole as keyof BrandTokens["roles"]) : undefined);
 
   const style = [
     `position: absolute`,

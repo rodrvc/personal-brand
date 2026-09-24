@@ -203,11 +203,17 @@ export function setTextContent(doc: CarouselDocument, slideId: string, objectId:
   );
 }
 
+/**
+ * `color` is included so picking a brand swatch can clear a literal color
+ * pin in the same patch (`{ colorKey, color: undefined }`) — `color` wins
+ * over `colorKey` at render time (free-layout.ts), so leaving it in place
+ * would make the swatch click look like a no-op.
+ */
 export function setTextStyle(
   doc: CarouselDocument,
   slideId: string,
   objectId: string,
-  patch: Partial<Pick<TextObject, "fontSize" | "fontWeight" | "lineHeight" | "align" | "colorKey">>,
+  patch: Partial<Pick<TextObject, "fontSize" | "fontWeight" | "lineHeight" | "align" | "colorKey" | "color">>,
 ): CarouselDocument {
   return mapSlide(doc, slideId, (slide) =>
     mapObject(slide, objectId, (o) => (o.kind === "text" ? { ...o, ...patch } : o)),

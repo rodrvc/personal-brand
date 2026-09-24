@@ -16,6 +16,7 @@ import {
   resetObjectToSlot,
   setObjectGeometry,
   setTemplateRef,
+  setTextStyle,
 } from "./mutations.js";
 
 /**
@@ -452,3 +453,20 @@ console.log("mutations: removeSlide drops one slide, keeps the document valid, a
 }
 
 console.log("mutations: removeObject drops only the named object and no-ops by identity on an unknown id");
+
+// setTextStyle: picking a brand swatch (colorKey) must clear a previously
+// pinned literal `color` in the same patch — `color` wins over `colorKey`
+// at render time, so leaving it standing would make the swatch look inert.
+{
+  const withText = addTextObject(baseDoc(), "slide-cover", "obj-a", template, brand);
+  const withLiteral = setTextStyle(withText, "slide-cover", "obj-a", { color: "#ff00aa" });
+  const literalObject = withLiteral.slides[0]!.objects[0]!;
+  assert.equal((literalObject as any).color, "#ff00aa", "the literal color is written");
+
+  const backToKey = setTextStyle(withLiteral, "slide-cover", "obj-a", { colorKey: "ink", color: undefined });
+  const keyedObject = backToKey.slides[0]!.objects[0]!;
+  assert.equal((keyedObject as any).colorKey, "ink");
+  assert.equal((keyedObject as any).color, undefined, "picking a swatch clears the literal color pin");
+}
+
+console.log("mutations: setTextStyle lets a brand swatch clear a pinned literal color");

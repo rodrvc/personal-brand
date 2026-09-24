@@ -534,6 +534,26 @@ const tests: Array<[string, () => void]> = [
       assert.deepEqual((objB as any).geometry, templateClosingSlot.geometry, "frozen from the ORIGINAL template's closing slot, the last one it resolved against");
     },
   ],
+  [
+    "accepts a text object's literal `color`, without flagging it as a stray hex literal",
+    () => {
+      const doc = validDoc();
+      doc.slides[0]!.objects[0] = { ...(doc.slides[0]!.objects[0] as any), color: "#a1b2c3" };
+      const result = validateDocument(doc, { brand, assetExists });
+      assert.equal(result.valid, true, `expected valid, got: ${JSON.stringify("errors" in result ? result.errors : [])}`);
+    },
+  ],
+  [
+    "rejects a text object's `color` that isn't a #rrggbb literal",
+    () => {
+      const doc = validDoc();
+      doc.slides[0]!.objects[0] = { ...(doc.slides[0]!.objects[0] as any), color: "#fff" };
+      const result = validateDocument(doc, { brand, assetExists });
+      assert.equal(result.valid, false);
+      if (result.valid) return;
+      assert.ok(result.errors.some((error) => error.path === "slides[0].objects[0].color"));
+    },
+  ],
 ];
 
 let failed = 0;
