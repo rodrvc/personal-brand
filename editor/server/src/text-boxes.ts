@@ -36,7 +36,7 @@ export function readTextLines(bytes: Buffer): TextLine[] | undefined {
   try {
     const input = join(dir, "image");
     writeFileSync(input, bytes);
-    const { lines } = JSON.parse(execFileSync(ocr, [input]).toString("utf-8")) as {
+    const { lines } = JSON.parse(execFileSync(ocr, [input], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")) as {
       lines: Array<{ text: string; x: number; y: number; w: number; h: number }>;
     };
     return lines.map(({ text, x, y, w, h }) => ({ text, box: { x, y, w, h } }));
