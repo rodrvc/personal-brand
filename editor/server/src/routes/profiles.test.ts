@@ -153,6 +153,65 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal((await put(`${path}?base=${encodeURIComponent(edited.updatedAt)}`, { ...edited, title: "Next" })).status, 200);
     },
   ],
+
+  [
+    "PUT /api/profiles/:slug/carousels/:id refuses a stale base after a background bucket write, in s3 mode too",
+    async () => {
+      // The same stale-base check above, but with the storage backend
+      // actually routed through a bucket (a `FakeObjectStore`, no real S3
+      // needed) instead of the plain filesystem — the editor PUT route and
+      // `writeDocumentThroughRevision`'s bucket-backed write guarantees are
+      // exactly what a chat proposal or export job also goes through.
+      const { setStorageRuntimeForTests, resetStorageRuntimeForTests } = await import("../storage/runtime.js");
+      const { FakeObjectStore } = await import("../storage/fake-object-store.js");
+      const { writeDocumentThroughRevision } = await import("../document-store.js");
+
+      const cacheDir = mkdtempSync(join(tmpdir(), "editor-server-profiles-route-s3-test-"));
+      const bucket = "brand-profiles";
+      const s3Slug = "acme-s3";
+      cpSync(join(REPO_ROOT, "profiles", "example"), join(cacheDir, bucket, "profiles", s3Slug), { recursive: true });
+
+      setStorageRuntimeForTests({
+        config: {
+          backend: "s3",
+          cacheDir,
+          s3: {
+            bucket,
+            region: "us-east-1",
+            accessKeyId: "id",
+            secretAccessKey: "secret",
+            prefix: "profiles/",
+            forcePathStyle: true,
+          },
+        },
+        store: new FakeObjectStore(),
+      });
+      const previousProfilesDir = process.env.BRAND_PROFILES_DIR;
+      process.env.BRAND_PROFILES_DIR = join(cacheDir, bucket, "profiles");
+
+      try {
+        const store = new ProfileStore(s3Slug);
+        const doc = buildEmptyDocument("explicativo", "s3-revision-test", "S3 revision test");
+        await writeDocumentThroughRevision(store, doc, { create: true });
+
+        // A chat proposal (or export job) saves in the background, through
+        // the exact same bucket-backed write path — advancing the
+        // document's revision (and `updatedAt`) the editor's client never
+        // saw.
+        await writeDocumentThroughRevision(store, { ...doc, title: "changed by a background write", updatedAt: "2026-01-01T00:00:05.000Z" });
+
+        // The editor still holds the pre-write revision (`doc.updatedAt`).
+        const path = `/api/profiles/${s3Slug}/carousels/${doc.id}`;
+        const stale = await put(`${path}?base=${encodeURIComponent(doc.updatedAt)}`, { ...doc, title: "editor's stale PUT" });
+        assert.equal(stale.status, 409, "a stale base after a concurrent bucket write is refused in s3 mode too");
+      } finally {
+        resetStorageRuntimeForTests();
+        if (previousProfilesDir === undefined) delete process.env.BRAND_PROFILES_DIR;
+        else process.env.BRAND_PROFILES_DIR = previousProfilesDir;
+        rmSync(cacheDir, { recursive: true, force: true });
+      }
+    },
+  ],
 ];
 
 let failed = 0;

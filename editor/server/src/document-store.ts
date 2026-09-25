@@ -74,18 +74,59 @@ export function writeDocument(store: ProfileStore, doc: CarouselDocument): void 
  * `create: true` skips the read and requires the document not to exist yet
  * (`expectedRevision: null`) — for the "create a brand-new carousel" call
  * sites, which already checked `documentExists` themselves.
+ *
+ * `expectedRevision` lets a caller carry the revision it actually built
+ * `doc` from (e.g. `readValidatedDocumentRevision`'s result, read once
+ * before a chat proposal's generation loop or before an export job was
+ * queued) instead of this function re-reading "current" right before the
+ * write. Re-reading here would silently pick up whatever the bucket holds
+ * *now* — including a write that landed after `doc` was built — and
+ * overwrite it without a conflict ever being detected. Omitting it falls
+ * back to that re-read, for callers with no earlier read to carry (or that
+ * intentionally always want "whatever is current now" semantics).
  */
 export async function writeDocumentThroughRevision(
   store: ProfileStore,
   doc: CarouselDocument,
-  options: { create?: boolean } = {},
+  options: { create?: boolean; expectedRevision?: string | null } = {},
 ): Promise<string> {
   assertValidCarouselId(doc.id);
   if (options.create) {
     return store.writeJsonIfRevision(docRelPath(doc.id), doc, null);
   }
-  const current = await store.readJsonRevision(docRelPath(doc.id));
-  return store.writeJsonIfRevision(docRelPath(doc.id), doc, current?.revision ?? null);
+  const expectedRevision =
+    options.expectedRevision !== undefined
+      ? options.expectedRevision
+      : ((await store.readJsonRevision(docRelPath(doc.id)))?.revision ?? null);
+  return store.writeJsonIfRevision(docRelPath(doc.id), doc, expectedRevision);
+}
+
+/**
+ * `readValidatedDocument` paired with the revision it was read at (the
+ * bucket's real `ETag` in `s3` mode, a content hash in `fs` mode) — for a
+ * caller (a chat proposal, an export job) that needs to carry that revision
+ * across an `await` gap into a later `writeDocumentThroughRevision` call,
+ * instead of that function re-reading "current" right before it writes.
+ * Throws `DocumentStoreError` for a carousel that doesn't exist or fails
+ * validation, exactly like `readValidatedDocument`.
+ */
+export async function readValidatedDocumentRevision(
+  store: ProfileStore,
+  carouselId: string,
+): Promise<{ document: CarouselDocument; revision: string | null }> {
+  assertValidCarouselId(carouselId);
+  const current = await store.readJsonRevision(docRelPath(carouselId));
+  if (!current) {
+    throw new DocumentStoreError(`No carousel "${carouselId}"`);
+  }
+  const result = validateAgainstProfile(store, current.value);
+  if (!result.valid) {
+    const [first] = result.errors;
+    throw new DocumentStoreError(
+      `Stored document "${carouselId}" failed validation at "${first!.path}": ${first!.message}`,
+    );
+  }
+  return { document: result.document, revision: current.revision };
 }
 
 /**

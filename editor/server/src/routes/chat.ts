@@ -38,7 +38,7 @@ import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableE
 import { readTextLines, type TextLine } from "../text-boxes.js";
 import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
-import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
+import { documentExists, readDocumentRevision, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
 import { messages } from "../messages.js";
@@ -454,6 +454,13 @@ async function runProposalBody(
 
     const ctx = withReferences(buildChatContext(store, carouselId), references);
     let document = ctx.doc;
+    // Carried into the final `writeDocumentThroughRevision` call below,
+    // instead of letting it re-read "current" right before writing — the
+    // whole generation loop that follows can take a while (image
+    // generation, composition), and re-reading at write time would silently
+    // pick up a bucket write that landed during it, overwriting it with no
+    // conflict ever detected.
+    const baseRevision = (await readDocumentRevision(store, carouselId))?.revision ?? null;
     for (const action of proposal.actions) {
       if (action.type === "generate_visual") {
         const assetId = generated.get(action.id)!;
@@ -494,7 +501,7 @@ async function runProposalBody(
     const before = notPlaced(store, validation.document, results);
     if (before) throw new Error(messages.proposal.imageNotPlaced(before.slide, before.image));
     const documentVersion = snapshotDocument(store, carouselId);
-    await writeDocumentThroughRevision(store, validation.document);
+    await writeDocumentThroughRevision(store, validation.document, { expectedRevision: baseRevision });
     const after = notPlaced(store, readValidatedDocument(store, carouselId), results);
     if (after) throw new Error(messages.proposal.imageRemovedMeanwhile(after.slide, after.image));
     await appendChatRecord(store, carouselId, {

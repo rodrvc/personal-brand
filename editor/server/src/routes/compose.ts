@@ -22,6 +22,7 @@ import {
   documentExists,
   DocumentStoreError,
   readValidatedDocument,
+  readValidatedDocumentRevision,
   snapshotDocument,
   writeDocumentThroughRevision,
 } from "../document-store.js";
@@ -165,8 +166,10 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       let document = await applyCompositionPlan(store, brand, template, templateId, plan, req.params.id, generator);
       // Persisted immediately: `applyCompositionPlan` already drafted and
       // wrote copy plus every `library`-sourced visual, so a failure in the
-      // generation loop below must not lose that work on retry either.
-      await writeDocumentThroughRevision(store, document);
+      // generation loop below must not lose that work on retry either. No
+      // earlier read to carry a revision from here — this re-reads current,
+      // same as before.
+      let revision: string | null = await writeDocumentThroughRevision(store, document);
 
       // Generate every visual slot the plan marked "generate" — done here,
       // after the client confirmed the cost the POST /carousels response
@@ -181,6 +184,12 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       // orphaned — they're already attached to the persisted document, and a
       // retried `plan/apply` only needs to cover the remaining slots rather
       // than regenerating (and re-paying for) everything from slot zero.
+      //
+      // Each write below carries the *previous* write's own revision
+      // instead of re-reading "current" — `generateForSlot` calls an AI
+      // provider and can take a while, so re-reading right before the write
+      // would silently swallow a conflicting write (an editor PUT, a chat
+      // proposal) that landed on this exact carousel during that call.
       try {
         for (const visual of plan.visualSlots) {
           if (visual.source !== "generate") continue;
@@ -197,7 +206,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
             slot: visual.slot,
           });
           document = attachGeneratedAsset(brand, document, visual.slideIndex, visual.slot, entry.id);
-          await writeDocumentThroughRevision(store, document);
+          revision = await writeDocumentThroughRevision(store, document, { expectedRevision: revision });
         }
       } catch (error) {
         // Whatever slots succeeded before the failure are already on disk
@@ -230,7 +239,10 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
   router.post("/api/profiles/:slug/carousels/:id/regenerate", async (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
-      const doc = readValidatedDocument(store, req.params.id);
+      // Carries this read's revision into the final write below, instead of
+      // that write re-reading "current" — the regeneration call in between
+      // is an AI provider round-trip that can take a while.
+      const { document: doc, revision } = await readValidatedDocumentRevision(store, req.params.id);
       const body = req.body as {
         target?: { slideId: string; objectId?: string; scope?: "unpinned" };
         /** Overrides the planner's `suggestion` for this one piece — the text the user edited into the "Generar imagen…"/"Regenerar" field. Only meaningful for a single-piece image target; ignored for text objects and for `scope: "unpinned"`. */
@@ -297,7 +309,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      await writeDocumentThroughRevision(store, nextDoc);
+      await writeDocumentThroughRevision(store, nextDoc, { expectedRevision: revision });
       res.json({ document: nextDoc, costCents });
     } catch (error) {
       handlePlanError(error, res);
@@ -550,6 +562,15 @@ function previousCarouselsLibraryRatio(
 
 class RegenerateBlockedError extends Error {}
 
+/**
+ * `RevisionConflictError` (thrown when a `writeDocumentThroughRevision`
+ * call's carried revision no longer matches — routes/compose.ts) is a
+ * `ProfileStoreError`, so it falls into the first branch below and surfaces
+ * as 400: a stale base here means retry the whole operation (re-plan, or
+ * re-request the regeneration) rather than silently overwriting, since
+ * `plan/apply`'s per-slot loop and `/regenerate` don't have a client-visible
+ * "reload and diff" flow the way the editor PUT route's 409 does.
+ */
 function handlePlanError(error: unknown, res: import("express").Response): void {
   if (
     error instanceof ProfileStoreError ||
