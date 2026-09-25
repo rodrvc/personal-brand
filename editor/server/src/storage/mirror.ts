@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 
@@ -263,10 +263,27 @@ async function runSyncDown(
       continue;
     }
 
-    const { body } = await store.get(object.key);
+    const { body, etag: downloadedEtag } = await store.get(object.key);
+
+    // Re-check right before writing: a bucket-aware local writer (e.g.
+    // ProfileStore's write guarantees) can land its own write to this exact
+    // file while the `get` above is in flight — the check above only ever
+    // saw the state this pass started with. Re-running it against whatever
+    // is on disk *now*, but still against that same pre-`get` manifest
+    // snapshot, catches a write that happened during the await, which the
+    // first check couldn't have.
+    if (hasUnsyncedLocalEdit(localPath, manifestEntry)) {
+      conflicts++;
+      console.warn(`syncDown: "${relPath}" changed locally while its download was in flight for profile "${slug}" — keeping local, not overwriting from the bucket.`);
+      continue;
+    }
+
     mkdirSync(dirname(localPath), { recursive: true });
     writeFileSync(localPath, body);
-    patchManifestEntry(roots.manifestPath, object.key, { etag: object.etag, hash: sha256(body) });
+    // The etag recorded is the one this exact body came with (from `get`),
+    // not the listing's — the object can change between `list` and `get`,
+    // and the manifest must reflect what was actually downloaded.
+    patchManifestEntry(roots.manifestPath, object.key, { etag: downloadedEtag, hash: sha256(body) });
     downloaded++;
   }
 
@@ -367,17 +384,28 @@ export async function fetchObjectOnDemand(
   const { stream, etag } = await store.getStream(key);
 
   mkdirSync(dirname(localPath), { recursive: true });
+  // Streamed to a temp file in the same directory first, and renamed into
+  // place only once the whole body has landed: a stream that errors partway
+  // through (a dropped connection, a bucket-side failure) must never leave
+  // a truncated file sitting at `localPath` for a later reader to pick up.
+  const tmpPath = `${localPath}.download-${randomUUID()}.tmp`;
   const hasher = createHash("sha256");
-  await pipeline(
-    stream,
-    async function* hashThrough(source: AsyncIterable<Buffer>) {
-      for await (const chunk of source) {
-        hasher.update(chunk);
-        yield chunk;
-      }
-    },
-    createWriteStream(localPath),
-  );
+  try {
+    await pipeline(
+      stream,
+      async function* hashThrough(source: AsyncIterable<Buffer>) {
+        for await (const chunk of source) {
+          hasher.update(chunk);
+          yield chunk;
+        }
+      },
+      createWriteStream(tmpPath),
+    );
+  } catch (error) {
+    rmSync(tmpPath, { force: true });
+    throw error;
+  }
+  renameSync(tmpPath, localPath);
 
   patchManifestEntry(roots.manifestPath, key, { etag, hash: hasher.digest("hex") });
   return localPath;
