@@ -387,6 +387,24 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "syncDown excludes a profile-relative outputs/ or reels/ tree by default, whatever the extension",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      await store.put("profiles/acme/reels/2026-09-01.mp4", Buffer.from("VIDEO"));
+      await store.put("profiles/acme/outputs/render-notes.txt", Buffer.from("not even a media extension"));
+
+      const result = await syncDown(store, config(), cacheDir, "acme");
+      assert.equal(result.skippedLazy, 2);
+
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+      assert.ok(!existsSync(join(roots.profileDir, "reels/2026-09-01.mp4")));
+      assert.ok(!existsSync(join(roots.profileDir, "outputs/render-notes.txt")));
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    },
+  ],
+  [
     "fetchObjectOnDemand never leaves a truncated file when the download stream errors partway through",
     async () => {
       const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
@@ -418,6 +436,60 @@ const tests: Array<[string, () => Promise<void>]> = [
       (store as unknown as { getStream: typeof store.getStream }).getStream = originalGetStream;
       const finalPath = await fetchObjectOnDemand(store, config(), cacheDir, "acme", "outputs", "carousels/x/v1/01.png");
       assert.equal(readFileSync(finalPath, "utf-8"), "GOODDATA");
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    },
+  ],
+  [
+    "syncDown excludes a stray media file outside every prefix list, by extension",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      await store.put("profiles/acme/ideas/inspiration.png", Buffer.from("IMG"));
+
+      const result = await syncDown(store, config(), cacheDir, "acme");
+      assert.equal(result.skippedLazy, 1);
+
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+      assert.ok(!existsSync(join(roots.profileDir, "ideas/inspiration.png")));
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    },
+  ],
+  [
+    "syncDown ALWAYS hydrates assets/ and carousels/ eagerly, even with a media extension or under a lazy-shaped name",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      await store.put("profiles/acme/assets/logo.png", Buffer.from("LOGO"));
+      await store.put("profiles/acme/assets/outputs-lookalike.png", Buffer.from("NOT ACTUALLY OUTPUTS"));
+      await store.put("profiles/acme/carousels/x/carousel.json", Buffer.from("{}"));
+
+      const result = await syncDown(store, config(), cacheDir, "acme");
+      assert.equal(result.skippedLazy, 0);
+      assert.equal(result.downloaded, 3);
+
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+      assert.ok(existsSync(join(roots.profileDir, "assets/logo.png")));
+      assert.ok(existsSync(join(roots.profileDir, "assets/outputs-lookalike.png")));
+      assert.ok(existsSync(join(roots.profileDir, "carousels/x/carousel.json")));
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    },
+  ],
+  [
+    "fetchObjectOnDemand pulls a profile-area lazy file in on request",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      await store.put("profiles/acme/reels/2026-09-01.mp4", Buffer.from("VIDEO"));
+
+      await syncDown(store, config(), cacheDir, "acme");
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+      assert.ok(!existsSync(join(roots.profileDir, "reels/2026-09-01.mp4")));
+
+      const localPath = await fetchObjectOnDemand(store, config(), cacheDir, "acme", "profile", "reels/2026-09-01.mp4");
+      assert.equal(readFileSync(localPath, "utf-8"), "VIDEO");
 
       rmSync(cacheDir, { recursive: true, force: true });
     },

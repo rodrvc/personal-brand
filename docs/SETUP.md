@@ -128,6 +128,37 @@ pnpm --filter @personal-brand/editor-server test
 It SKIPs cleanly (exit 0) when `S3_ENDPOINT` is unset or unreachable, so
 `pnpm test`/`pnpm check` never depend on a bucket being up.
 
+### Eager vs. lazy hydration
+
+`syncDown` does not pull every object into the local mirror on first
+open — a profile can carry hundreds of MB of rendered media (a resolved
+export's `_outputs/` PNGs, a profile's own `outputs/`/`reels/` trees), and
+downloading all of it before the editor can show a carousel list makes
+"open a profile" unusably slow. Instead:
+
+- **Always eager** (`assets/`, `carousels/` under the profile area): the
+  editor reads these back synchronously on every request — brand assets,
+  references, generated images, fonts, and carousel documents — so they
+  must already be on disk.
+- **Always lazy, whatever the extension** (`outputs/`, `reels/` under the
+  profile area; everything under the resolved-output `_outputs/` area that
+  matches a lazy extension): large rendered media the editor writes but
+  does not read back over HTTP.
+- **Lazy by extension everywhere else** in the profile area (png/jpg/jpeg/
+  webp/gif/mp4/mov/m4v by default) — a stray image or video outside both
+  lists above (an `ideas/` reference, a `tests/` fixture).
+
+A lazy object is fetched on demand instead, streamed straight to disk
+(`fetchObjectOnDemand` — never buffered whole in memory), the first time
+something actually needs it. All three lists are generic (no brand
+literal) and overridable:
+
+```bash
+S3_MIRROR_LAZY_MEDIA_EXTENSIONS=.png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.m4v
+S3_MIRROR_LAZY_PROFILE_PREFIXES=outputs/,reels/
+S3_MIRROR_EAGER_PROFILE_PREFIXES=assets/,carousels/
+```
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs
