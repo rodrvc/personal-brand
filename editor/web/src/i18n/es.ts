@@ -347,6 +347,7 @@ export const es = {
   "chat.provenance.reference_described": "Con tu referencia solo descrita en palabras (el generador no la acepta como imagen): {detail}",
   "chat.provenance.layout_reference": "Afiche que se copia: {detail}",
   "chat.provenance.content_reference": "Evento nuevo: {detail}",
+  "chat.provenance.reference_kept": "Se conservó del afiche (la foto del evento no trae ese dato): {detail}",
   "chat.provenance.brand": "De la marca: {detail}",
   "chat.provenance.request": "De tu mensaje: «{detail}»",
   "chat.referenceChip": "Referencia: {name}",
