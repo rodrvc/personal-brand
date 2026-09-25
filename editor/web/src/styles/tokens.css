@@ -4,57 +4,76 @@
  * from the rendered HTML (brand.colors), never from this file
  * (design.md D1, specs/editor-ui "Light and dark theme").
  *
- * Single-hue blue ramp at 205.7°, cool greys, Inter. Light is the default
- * theme; dark is opted into via `data-theme="dark"` on <html>, toggled by
- * the top-bar button and persisted in localStorage.
+ * The language here is paper, not tint: the ground reads as near-white
+ * paper and structure comes
+ * from hairlines, not from a border-plus-shadow around every box. Headings
+ * are a grotesque at weight 400 with tight negative tracking — size carries
+ * the hierarchy here, not boldness — and micro-labels (counts, states,
+ * badges) are tracked uppercase monospace. Geometry is square-ish: 3px
+ * radii, an ink-filled primary control, everything else outlined.
+ *
+ * Light is the default theme; dark is opted into via `data-theme="dark"` on
+ * <html>, toggled by the top-bar button and persisted in localStorage. Dark
+ * re-anchors the same inks rather than introducing a second palette.
  */
 
 :root {
-  --ui-hue: 205.7;
+  /*
+   * The blue ramp is one named accent plus explicit tints/shades around it,
+   * not a generated hue scale: this system's ink and accent are two
+   * distinct, deliberately chosen colors (not the same hue at different
+   * lightness), so an hsl() ramp keyed to one hue can't honestly produce
+   * both. --ui-p600 is the accent; --ui-p900 is the ink.
+   */
+  --ui-p900: #153c51;
+  --ui-p800: #1a4560;
+  --ui-p700: #204f6e;
+  --ui-p600: #296f98;
+  --ui-p500: #3c85ae;
+  --ui-p400: #5a9dc2;
+  --ui-p300: #8fc0dc;
+  --ui-p200: #bcdcec;
+  --ui-p100: #d9ecf4;
+  --ui-p50: #eaf4f9;
 
-  --ui-p900: hsl(var(--ui-hue) 62% 16%);
-  --ui-p800: hsl(var(--ui-hue) 58% 21%);
-  --ui-p700: hsl(var(--ui-hue) 55% 28%);
-  --ui-p600: hsl(var(--ui-hue) 52% 38%);
-  --ui-p500: hsl(var(--ui-hue) 48% 48%);
-  --ui-p400: hsl(var(--ui-hue) 52% 60%);
-  --ui-p300: hsl(var(--ui-hue) 60% 72%);
-  --ui-p200: hsl(var(--ui-hue) 62% 84%);
-  --ui-p100: hsl(var(--ui-hue) 65% 92%);
-  --ui-p50: hsl(var(--ui-hue) 68% 96%);
-
-  --ui-g50: #f8fafc;
-  --ui-g100: #f1f5f9;
-  --ui-g200: #e2e8f0;
-  --ui-g300: #cbd5e1;
-  --ui-g400: #94a3b8;
-  --ui-g500: #64748b;
-  --ui-g600: #475569;
-  --ui-g700: #334155;
-  --ui-g900: #0f172a;
-  --ui-white: #ffffff;
+  /* Neutrals re-anchored on the paper/ink pair instead of a slate ramp. */
+  --ui-g50: #fcfdfd;
+  --ui-g100: #f4f8f9;
+  --ui-g200: #ccdee8;
+  --ui-g300: #aec6d3;
+  --ui-g400: #8aa4b3;
+  --ui-g500: #4f6878;
+  --ui-g600: #3c5567;
+  --ui-g700: #2a4353;
+  --ui-g900: #153c51;
+  --ui-white: #fcfdfd;
 
   --ui-bg: var(--ui-g50);
   --ui-surface: var(--ui-white);
   --ui-line: var(--ui-g200);
-  --ui-line-soft: var(--ui-g100);
-  --ui-ink: var(--ui-g700);
+  --ui-line-soft: #e3eef3;
+  --ui-ink: var(--ui-g900);
   --ui-ink-2: var(--ui-g500);
-  --ui-ink-3: var(--ui-g400);
-  --ui-head: var(--ui-p700);
+  --ui-ink-3: #7c93a1;
+  --ui-head: var(--ui-ink);
   --ui-accent: var(--ui-p600);
   --ui-accent-soft: var(--ui-p50);
   --ui-accent-ink: var(--ui-p600);
   --ui-accent-line: var(--ui-p200);
 
-  --ui-ok: #1c6b4c;
-  --ui-ok-soft: #e6f4ee;
-  --ui-ok-strong: #1f7057;
-  --ui-warn: #c2792a;
-  --ui-warn-soft: #fdf6ec;
-  --ui-warn-line: #f2ddbe;
-  --ui-danger: #c8463f;
-  --ui-lock: #c2792a;
+  /* The ink-filled primary control: filled with the ink itself on paper. */
+  --ui-btn-bg: var(--ui-ink);
+  --ui-btn-fg: var(--ui-g50);
+  --ui-btn-bg-hover: var(--ui-accent);
+
+  --ui-ok: #0f6249;
+  --ui-ok-soft: #e8f5f0;
+  --ui-ok-strong: #0c4f3b;
+  --ui-warn: #9c6a08;
+  --ui-warn-soft: #fbf3e2;
+  --ui-warn-line: #ecd9ab;
+  --ui-danger: #a3271b;
+  --ui-lock: #9c6a08;
 
   /*
    * Marks painted on the SelectionOverlay, on top of the canvas <iframe>
@@ -68,56 +87,94 @@
   --ui-overlay-mark-soft: rgb(255 255 255 / 0.92);
   --ui-overlay-badge-soft: rgb(255 255 255 / 0.94);
 
-  --ui-shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
-  --ui-shadow-md: 0 6px 16px -6px rgb(15 23 42 / 0.14), 0 2px 4px -2px rgb(15 23 42 / 0.08);
-  --ui-shadow-lg: 0 16px 32px -10px rgb(15 23 42 / 0.18), 0 4px 8px -4px rgb(15 23 42 / 0.1);
+  /*
+   * The reference system draws no shadows at all — structure is hairlines.
+   * This tool genuinely needs elevation in three places (modal, dropdown,
+   * drag overlay), so shadow-md/lg survive, quieter and tinted with the ink
+   * instead of a generic black. shadow-sm is retired to a no-op: anywhere it
+   * used to lift a resting card off the ground now needs a hairline border
+   * instead (see the component files it used to sit on).
+   */
+  --ui-shadow-sm: none;
+  --ui-shadow-md: 0 6px 16px -6px rgb(21 60 81 / 0.16), 0 2px 4px -2px rgb(21 60 81 / 0.08);
+  --ui-shadow-lg: 0 16px 32px -10px rgb(21 60 81 / 0.2), 0 4px 8px -4px rgb(21 60 81 / 0.1);
 
-  --ui-radius-btn: 10px;
-  --ui-radius-card: 16px;
+  --ui-radius-btn: 3px;
+  --ui-radius-card: 3px;
   --ui-radius-pill: 999px;
-  --ui-radius-sm: 8px;
+  --ui-radius-sm: 3px;
 
   --ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Headings: a grotesque at weight 400, tight negative tracking. */
+  --ui-display: Arial, Helvetica, sans-serif;
   --ui-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  --ui-transition: 150ms ease;
+  --ui-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-transition: 150ms var(--ui-ease);
 
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
-  --ui-g50: #16222c;
-  --ui-g100: #1b2933;
-  --ui-g200: #223140;
-  --ui-g300: #2c3d4d;
-  --ui-g400: #4b6478;
-  --ui-g500: #6b8598;
-  --ui-g600: #8fa7ba;
-  --ui-g700: #b8cbd8;
-  --ui-g900: #eef4f8;
-  --ui-white: #132330;
+  --ui-p900: #e7eff4;
+  --ui-p800: #d3e4ec;
+  --ui-p700: #b3d3e4;
+  --ui-p600: #64a1ce;
+  --ui-p500: #4c86b3;
+  --ui-p400: #3a6c92;
+  --ui-p300: #2c5474;
+  --ui-p200: #204158;
+  --ui-p100: #182f40;
+  --ui-p50: #16303f;
 
-  --ui-bg: #0d1720;
-  --ui-surface: #132330;
-  --ui-line: #1e3444;
-  --ui-line-soft: #182b39;
-  --ui-ink: #dce8f2;
-  --ui-ink-2: #8fa7ba;
-  --ui-ink-3: #647f94;
-  --ui-head: #a8cde8;
-  --ui-accent: var(--ui-p400);
-  --ui-accent-soft: #16303f;
-  --ui-accent-ink: var(--ui-head);
-  --ui-accent-line: #204862;
-  --ui-ok: #5cc296;
+  --ui-g50: #0e1f2b;
+  --ui-g100: #132631;
+  --ui-g200: #26414f;
+  --ui-g300: #345164;
+  --ui-g400: #5c7a8c;
+  --ui-g500: #8ca5b5;
+  --ui-g600: #a8bfcc;
+  --ui-g700: #c6d8e2;
+  --ui-g900: #e7eff4;
+  --ui-white: #132631;
+
+  --ui-bg: var(--ui-g50);
+  --ui-surface: var(--ui-white);
+  --ui-line: var(--ui-g200);
+  --ui-line-soft: #1c3646;
+  --ui-ink: var(--ui-g900);
+  --ui-ink-2: var(--ui-g500);
+  --ui-ink-3: #6f8b9c;
+  --ui-head: var(--ui-ink);
+  --ui-accent: var(--ui-p600);
+  --ui-accent-soft: var(--ui-p50);
+  --ui-accent-ink: var(--ui-p700);
+  --ui-accent-line: var(--ui-p200);
+
+  /*
+   * On dark, filling the primary with --ui-ink would fill it with the
+   * *light* tone (--ui-ink re-anchors to the light ink on this theme), which
+   * produces a near-white slab. The accent carries the filled control here
+   * instead: still this chrome's own hue, and it stops shouting over
+   * everything else. ("Brand" in this repo always means the profile's
+   * brand, which no chrome token may ever borrow from.)
+   */
+  --ui-btn-bg: var(--ui-accent);
+  --ui-btn-fg: var(--ui-g50);
+  --ui-btn-bg-hover: #8cbde0;
+
+  --ui-ok: #5fd3ab;
   --ui-ok-soft: #123024;
-  --ui-ok-strong: #6fd6ab;
-  --ui-warn: #e0a458;
+  --ui-ok-strong: #7fe0bd;
+  --ui-warn: #d8b158;
   --ui-warn-soft: #2c2113;
   --ui-warn-line: #4a3a1e;
-  --ui-danger: #e37b73;
-  --ui-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --ui-danger: #ff9d95;
+  --ui-lock: #d8b158;
+
+  --ui-shadow-sm: none;
   --ui-shadow-md: 0 6px 16px -6px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.3);
   --ui-shadow-lg: 0 16px 32px -10px rgb(0 0 0 / 0.5), 0 4px 8px -4px rgb(0 0 0 / 0.3);
+
   color-scheme: dark;
 }
 
@@ -148,10 +205,16 @@ button {
   cursor: pointer;
 }
 
+/*
+ * The ring widens to the reference's 3px in the accent, but keeps this
+ * tool's existing 2px offset rather than the reference's 4px: the topbar
+ * tools are 32x30px on an 8px gap, so a 4px offset would put the ring on
+ * top of the neighbouring control.
+ */
 :focus-visible {
-  outline: 2px solid var(--ui-accent);
+  outline: 3px solid var(--ui-accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
 
 @media (prefers-reduced-motion: reduce) {

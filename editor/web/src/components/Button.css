@@ -2,7 +2,7 @@
   padding: 7px 14px;
   border-radius: var(--ui-radius-btn);
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 500;
   border: 1px solid var(--ui-line);
   color: var(--ui-ink);
   display: inline-flex;
@@ -13,7 +13,7 @@
 }
 
 .ui-btn:hover:not(:disabled) {
-  border-color: var(--ui-p400);
+  border-color: var(--ui-accent);
   color: var(--ui-head);
 }
 
@@ -22,17 +22,17 @@
   cursor: not-allowed;
 }
 
+/* The system's single filled control: ink on paper, no shadow, no gradient. */
 .ui-btn-primary {
-  background: var(--ui-p600);
-  border-color: var(--ui-p600);
-  color: #fff;
-  box-shadow: var(--ui-shadow-sm);
+  background: var(--ui-btn-bg);
+  border-color: var(--ui-btn-bg);
+  color: var(--ui-btn-fg);
 }
 
 .ui-btn-primary:hover:not(:disabled) {
-  background: var(--ui-p700);
-  border-color: var(--ui-p700);
-  color: #fff;
+  background: var(--ui-btn-bg-hover);
+  border-color: var(--ui-btn-bg-hover);
+  color: var(--ui-btn-fg);
 }
 
 .ui-btn-ghost {

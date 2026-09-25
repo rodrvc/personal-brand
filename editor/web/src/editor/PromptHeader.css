@@ -15,7 +15,6 @@
   display: grid;
   place-items: center;
   flex: none;
-  box-shadow: var(--ui-shadow-sm);
   color: #fff;
   font-size: 13px;
 }
@@ -60,7 +59,7 @@
 }
 
 .prompt-awaiting-images {
-  color: var(--ui-warn, #b45309);
+  color: var(--ui-warn, #9c6a08);
   font-weight: 600;
 }
 
@@ -90,6 +89,6 @@
 }
 
 .prompt-redo:hover {
-  border-color: var(--ui-p400);
+  border-color: var(--ui-accent);
   color: var(--ui-accent-ink);
 }
