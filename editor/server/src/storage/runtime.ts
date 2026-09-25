@@ -63,6 +63,21 @@ export function setStorageRuntimeForTests(override: StorageRuntime): void {
   runtime = override;
 }
 
+/**
+ * Uploads whatever changed in `slug`'s local mirror right now — a no-op in
+ * `fs` mode. Used by the per-request middleware below, and by every async
+ * background job that keeps writing to the mirror after its HTTP response
+ * already finished (the export job's PNGs/manifest, a chat proposal's
+ * generated assets) — the request-scoped middleware's `res.on("finish")`
+ * fires long before those writes happen, so without this explicit call at
+ * job completion they would never reach the bucket.
+ */
+export async function syncUpNow(slug: string): Promise<void> {
+  const { config, store } = getStorageRuntime();
+  if (config.backend !== "s3" || !store || !config.s3) return;
+  await syncUp(store, config.s3, config.cacheDir, slug);
+}
+
 const SLUG_FROM_PATH = /^\/api\/profiles\/([a-z0-9-]+)(?:\/|$)/;
 
 /** Extracts the profile slug from an `/api/profiles/:slug/...` request path, before Express has matched a route (used by the hydrate/sync-up middleware, which is mounted ahead of every router). */

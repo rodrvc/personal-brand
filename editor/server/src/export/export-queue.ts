@@ -11,7 +11,7 @@ import { hashContent, loadIndex, updateEntry } from "../../../../system/assets/i
 
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { buildExportRenderContext } from "../render-context.js";
-import { readValidatedDocument, writeDocument } from "../document-store.js";
+import { readValidatedDocumentRevision, writeDocumentThroughRevision } from "../document-store.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
 import { ProfileStore } from "../profile-store.js";
 
@@ -61,29 +61,29 @@ function outputSub(store: ProfileStore): string {
   return resolveOutputSubfolder(store.roots.profileDir, "editor");
 }
 
-function reserveVersionDir(store: ProfileStore, carouselId: string): { version: number; relDir: string } {
+/**
+ * Atomically claims the next free version number via
+ * `ProfileStore.reserveOnce` (issue #99) — a `.reserved` marker file put
+ * with `ifNoneMatch: "*"` in `s3` mode (a real conditional `PutObject`
+ * against the bucket, safe across server instances), or opened with the
+ * exclusive `"wx"` flag in `fs` mode (throws `EEXIST` if taken — the same
+ * race-free "claim or fail" primitive carousel-export's spec calls for, now
+ * expressed as a marker file instead of the version directory itself). On a
+ * lost race, try the next number — never overwrite, never delete
+ * (design.md D11).
+ */
+async function reserveVersionDir(store: ProfileStore, carouselId: string): Promise<{ version: number; relDir: string }> {
   const sub = outputSub(store);
   let version = 1;
-  // Atomic reservation: `mkdirSync` with no `recursive` throws EEXIST if the
-  // directory is already there, which is exactly the race-free "claim this
-  // slot" primitive carousel-export's spec calls for. On EEXIST, try the
-  // next number — never overwrite, never delete (design.md D11).
   for (;;) {
-    try {
-      // Ensure the parent (`outputs/<sub>/<carouselId>/`) exists first —
-      // that part IS safe to create recursively, since collisions can only
-      // happen on the version leaf itself.
-      store.mkdir(`outputs/${sub}/${carouselId}`);
-      const abs = store.resolveInOutputs(`${sub}/${carouselId}/v${version}`);
-      mkdirSync(abs); // no {recursive:true}: throws EEXIST if taken
-      return { version, relDir: `${sub}/${carouselId}/v${version}` };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
-        version += 1;
-        continue;
-      }
-      throw error;
+    const relDir = `${sub}/${carouselId}/v${version}`;
+    const claimed = await store.reserveOnce(`${relDir}/.reserved`, "outputs");
+    if (claimed) {
+      const abs = store.resolveInOutputs(relDir);
+      mkdirSync(abs, { recursive: true });
+      return { version, relDir };
     }
+    version += 1;
   }
 }
 
@@ -154,13 +154,19 @@ export class ExportHasPendingPiecesError extends Error {}
  * PNGs. Passing `allowPending: true` skips this check for a caller (the
  * web's "Exportar igual" button) that explicitly wants to export anyway.
  */
-export function enqueueExport(
+export async function enqueueExport(
   store: ProfileStore,
   carouselId: string,
   render: RenderFn,
   options?: { allowPending?: boolean },
-): string {
-  const doc = readValidatedDocument(store, carouselId);
+): Promise<string> {
+  // `revision` is carried all the way to the "status -> exported" write at
+  // the end of `runExportBody`, instead of that write re-reading "current":
+  // the render itself runs later, behind this same-process serial queue,
+  // and can be a long wait — re-reading right before the write would
+  // silently swallow an editor PUT or chat proposal that changed this exact
+  // carousel while this job was queued or rendering.
+  const { document: doc, revision } = await readValidatedDocumentRevision(store, carouselId);
   if (!options?.allowPending && hasUnfinishedPieces(doc)) {
     throw new ExportHasPendingPiecesError(
       `Carousel "${carouselId}" still has pending or awaiting-image pieces — export refused unless "allowPending" is set.`,
@@ -178,7 +184,7 @@ export function enqueueExport(
   jobs.set(jobId, job);
 
   queueTail = queueTail
-    .then(() => runExport(store, doc, job, render))
+    .then(() => runExport(store, doc, revision, job, render))
     .catch((error) => {
       job.status = "error";
       job.error = (error as Error).message;
@@ -187,15 +193,31 @@ export function enqueueExport(
   return jobId;
 }
 
-async function runExport(store: ProfileStore, doc: CarouselDocument, job: ExportJob, render: RenderFn): Promise<void> {
+async function runExport(store: ProfileStore, doc: CarouselDocument, revision: string | null, job: ExportJob, render: RenderFn): Promise<void> {
   job.status = "running";
+  try {
+    await runExportBody(store, doc, revision, job, render);
+  } finally {
+    // Uploads whatever this job wrote to the mirror (PNGs, manifest.json,
+    // the asset index, the exported-status document) — a no-op in `fs`
+    // mode. This is the ONE place export's writes reach the bucket: they
+    // happen after this HTTP request's own `res.on("finish")` middleware
+    // already ran, since the render itself is queued and runs later.
+    const { syncUpNow } = await import("../storage/runtime.js");
+    await syncUpNow(store.slug).catch((error) => {
+      console.error(`Export ${job.id}: could not sync its output to the bucket:`, error);
+    });
+  }
+}
+
+async function runExportBody(store: ProfileStore, doc: CarouselDocument, revision: string | null, job: ExportJob, render: RenderFn): Promise<void> {
   try {
     const brand = loadBrand(store.roots.profileDir);
     const template = resolveDocumentTemplate(store, brand, doc);
     const index = loadIndex(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 
-    const { version, relDir } = reserveVersionDir(store, doc.id);
+    const { version, relDir } = await reserveVersionDir(store, doc.id);
     const outputDir = store.resolveInOutputs(relDir);
 
     const ctx = buildExportRenderContext(store, brand, doc.slides[0]?.background ?? { mode: "color", colorKey: brand.roles.surface });
@@ -252,7 +274,13 @@ async function runExport(store: ProfileStore, doc: CarouselDocument, job: Export
       }
     }
     if (doc.status === "draft") {
-      writeDocument(store, { ...doc, status: "exported", updatedAt: new Date().toISOString() });
+      // A `RevisionConflictError` here (the carousel changed since this job
+      // was queued) falls into the same catch as every other export
+      // failure below — the render already succeeded and its PNGs/manifest
+      // are on disk, but the "status -> exported" flip is refused rather
+      // than silently overwriting whatever changed it meanwhile; the job
+      // surfaces as errored and a fresh export can be requested.
+      await writeDocumentThroughRevision(store, { ...doc, status: "exported", updatedAt: new Date().toISOString() }, { expectedRevision: revision });
     }
 
     job.status = "done";

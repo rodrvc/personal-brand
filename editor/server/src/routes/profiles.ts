@@ -14,12 +14,13 @@ import {
   listCarousels,
   listVersions,
   readDocumentRaw,
+  readDocumentRevision,
   snapshotDocument,
   validateAgainstProfile,
-  writeDocument,
+  writeDocumentIfRevision,
 } from "../document-store.js";
 import { messages } from "../messages.js";
-import { listProfilesAsync, ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
 
 /**
  * Turns a rejected path or id into a 400, everything else into a 404/500 as
@@ -187,7 +188,7 @@ export function profilesRouter(): Router {
    * untouched slide's locked zones and slot defaults (design.md D4), which
    * is exactly the kind of blanket change a version snapshot exists for.
    */
-  router.put("/api/profiles/:slug/carousels/:id", (req, res) => {
+  router.put("/api/profiles/:slug/carousels/:id", async (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
       if (req.params.id !== (req.body as { id?: string })?.id) {
@@ -204,8 +205,17 @@ export function profilesRouter(): Router {
       const explicitSnapshot = req.query.snapshot === "true" || (req.body as { snapshot?: boolean })?.snapshot === true;
       let structuralChange = false;
       let previousDocForPinDiff: RawDocumentShape | undefined;
-      if (documentExists(store, req.params.id)) {
-        const previousRaw = readDocumentRaw(store, req.params.id) as RawDocumentShape;
+      // The authoritative read for both the app-level stale-copy check
+      // below and the low-level conditional write at the end: in `s3` mode
+      // this reads straight from the bucket (not the local mirror), and
+      // `revision` (the bucket's ETag, or a content hash in `fs` mode) is
+      // what the final write is conditioned on — catching a real
+      // concurrent-writer race, not just a stale client copy, once this
+      // request actually gets to write.
+      const existing = await readDocumentRevision(store, req.params.id);
+      const revision = existing?.revision ?? null;
+      if (existing) {
+        const previousRaw = existing.value as RawDocumentShape;
         const base = req.query.base;
         if (typeof base === "string" && base !== previousRaw.updatedAt) {
           res.status(409).json({ error: "The carousel changed on disk since this copy was loaded." });
@@ -246,7 +256,15 @@ export function profilesRouter(): Router {
         previousDocForPinDiff?.status !== undefined
           ? { ...result.document, status: previousDocForPinDiff.status }
           : result.document;
-      writeDocument(store, document);
+      try {
+        await writeDocumentIfRevision(store, document, revision);
+      } catch (error) {
+        if (error instanceof RevisionConflictError) {
+          res.status(409).json({ error: "The carousel changed on disk since this copy was loaded." });
+          return;
+        }
+        throw error;
+      }
       res.json(document);
     } catch (error) {
       handleStoreError(error, res);

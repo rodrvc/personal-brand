@@ -101,12 +101,12 @@ const tests: Array<[string, () => Promise<void>]> = [
     async () => {
       const store = new ProfileStore(SLUG);
 
-      const jobId1 = enqueueExport(store, CAROUSEL_ID, fakeRender);
+      const jobId1 = await enqueueExport(store, CAROUSEL_ID, fakeRender);
       const job1 = await waitForJob(jobId1);
       assert.equal(job1?.status, "done");
       assert.equal(job1?.version, 1);
 
-      const jobId2 = enqueueExport(store, CAROUSEL_ID, fakeRender);
+      const jobId2 = await enqueueExport(store, CAROUSEL_ID, fakeRender);
       const job2 = await waitForJob(jobId2);
       assert.equal(job2?.status, "done");
       assert.equal(job2?.version, 2);
@@ -140,11 +140,14 @@ const tests: Array<[string, () => Promise<void>]> = [
         JSON.stringify({ ...document, id: secondCarouselId }, null, 2) + "\n",
       );
 
-      // Pre-create v1 by hand, simulating a race where something already
-      // claimed that directory name before reservation ran.
+      // Pre-create v1's reservation marker by hand, simulating a race where
+      // something already claimed that version slot before this reservation
+      // ran (reserveVersionDir claims `v<N>/.reserved`, not the bare
+      // directory, precisely so this kind of pre-existing claim is detected).
       mkdirSync(join(profileDir, "outputs", SUB, secondCarouselId, "v1"), { recursive: true });
+      writeFileSync(join(profileDir, "outputs", SUB, secondCarouselId, "v1", ".reserved"), "");
 
-      const jobId = enqueueExport(store, secondCarouselId, fakeRender);
+      const jobId = await enqueueExport(store, secondCarouselId, fakeRender);
       const job = await waitForJob(jobId);
       assert.equal(job?.status, "done");
       assert.equal(job?.version, 2);
@@ -175,7 +178,7 @@ const tests: Array<[string, () => Promise<void>]> = [
         JSON.stringify(freeDocument, null, 2) + "\n",
       );
 
-      const jobId = enqueueExport(store, freeCarouselId, fakeRender);
+      const jobId = await enqueueExport(store, freeCarouselId, fakeRender);
       const job = await waitForJob(jobId);
       assert.equal(job?.status, "done", job?.error);
 

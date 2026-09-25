@@ -212,6 +212,34 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "writeDocumentThroughRevision (a chat proposal / export job save) is visible to a later readDocumentRevision, so an editor PUT with the pre-save revision gets a 409, same as fs mode",
+    async () => {
+      freshRuntime();
+      const store = new ProfileStore(SLUG);
+      const { writeDocumentThroughRevision, readDocumentRevision } = await import("./document-store.js");
+
+      const doc = { id: "x", title: "t", canvas: { w: 1, h: 1 }, slides: [], status: "draft", updatedAt: "now" };
+      await writeDocumentThroughRevision(store, doc as unknown as Parameters<typeof writeDocumentThroughRevision>[1], { create: true });
+
+      // The editor opened the carousel before the background write landed —
+      // it holds the pre-save revision.
+      const staleRead = await readDocumentRevision(store, "x");
+
+      // A chat proposal (or an export job) saves in the background, through
+      // writeDocumentThroughRevision — a real bucket-conditional write, not
+      // the old local-only writeDocument.
+      const updated = { ...doc, title: "updated by background write" };
+      await writeDocumentThroughRevision(store, updated as unknown as Parameters<typeof writeDocumentThroughRevision>[1]);
+
+      // The editor's PUT compares against the bucket with its stale
+      // revision and must be refused, exactly like fs mode's stale-copy 409.
+      await assert.rejects(
+        () => store.writeJsonIfRevision("carousels/x/carousel.json", { ...doc, title: "editor's stale PUT" }, staleRead!.revision),
+        RevisionConflictError,
+      );
+    },
+  ],
+  [
     "reserveOnce claims a marker exactly once; a second attempt on the same path reports false",
     async () => {
       freshRuntime();

@@ -40,11 +40,11 @@ function toExportJobResponse(job: ExportJob) {
 export function exportRouter(): Router {
   const router = Router();
 
-  router.post("/api/profiles/:slug/carousels/:id/export", (req, res) => {
+  router.post("/api/profiles/:slug/carousels/:id/export", async (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
       const allowPending = (req.body as { allowPending?: boolean } | undefined)?.allowPending === true;
-      const jobId = enqueueExport(store, req.params.id, productionRender, { allowPending });
+      const jobId = await enqueueExport(store, req.params.id, productionRender, { allowPending });
       res.status(202).json(toExportJobResponse(getExportJob(jobId)!));
     } catch (error) {
       if (error instanceof ExportHasPendingPiecesError) {

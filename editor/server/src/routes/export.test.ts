@@ -83,7 +83,7 @@ const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 try {
   const store = new ProfileStore(SLUG);
-  const jobId = enqueueExport(store, CAROUSEL_ID, fakeRender);
+  const jobId = await enqueueExport(store, CAROUSEL_ID, fakeRender);
   await waitForDone(jobId);
 
   const res = await fetch(`${base}/api/profiles/${SLUG}/carousels/${CAROUSEL_ID}/export/${jobId}`);
