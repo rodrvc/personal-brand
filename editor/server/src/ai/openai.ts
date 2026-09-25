@@ -1,4 +1,5 @@
-import { estimateImageCostFromUsage, estimateTextCostCents, IMAGE_MODEL, TEXT_MODEL } from "./pricing.js";
+import { padToSize } from "../image-tools.js";
+import { chatCostCents, estimateImageCostFromUsage, estimateTextCostCents, IMAGE_MODEL, TEXT_MODEL, VISION_MODEL } from "./pricing.js";
 import type {
   DraftCopyPlan,
   DraftCopyResult,
@@ -151,6 +152,7 @@ export class OpenAiPieceGenerator implements PieceGenerator {
 
   async completeJson(request: JsonCompletionRequest): Promise<JsonCompletionResult> {
     logPrompt("completeJson", `${request.instructions}\n\n${request.input}`);
+    const model = request.tier === "vision" ? VISION_MODEL : TEXT_MODEL;
     const response = await fetch(CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: {
@@ -158,7 +160,7 @@ export class OpenAiPieceGenerator implements PieceGenerator {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: TEXT_MODEL,
+        model,
         messages: [
           { role: "system", content: request.instructions },
           {
@@ -167,13 +169,13 @@ export class OpenAiPieceGenerator implements PieceGenerator {
               { type: "text", text: request.input },
               ...(request.images ?? []).map((image) => ({
                 type: "image_url",
-                image_url: { url: `data:${image.mime};base64,${image.base64}` },
+                image_url: { url: `data:${image.mime};base64,${image.base64}`, detail: request.tier === "vision" ? "high" : "auto" },
               })),
             ],
           },
         ],
         response_format: { type: "json_object" },
-        temperature: 0.2,
+        temperature: request.tier === "vision" ? 0 : 0.2,
       }),
     });
     const json = await readJsonOrThrow(response, "chat completion");
@@ -186,19 +188,22 @@ export class OpenAiPieceGenerator implements PieceGenerator {
     }
     return {
       json: parsed,
-      model: TEXT_MODEL,
-      costCents: estimateTextCostCents(request.instructions + request.input, content),
+      model,
+      costCents: chatCostCents(model, json.usage, request.instructions + request.input, content),
     };
   }
 
   async generateImage(spec: GenerateImageSpec): Promise<GeneratedImage> {
-    const cutout = spec.kind !== "background";
-    const prompt = `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}${cutout ? `\n\n${CUTOUT_INSTRUCTION}` : ""}`;
+    const reproduce = spec.mode === "reproduce";
+    const cutout = !reproduce && spec.kind !== "background";
+    const prompt = reproduce
+      ? spec.prompt
+      : `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}${cutout ? `\n\n${CUTOUT_INSTRUCTION}` : ""}`;
     logPrompt("generateImage", prompt);
     const fields: Record<string, string> = {
       model: IMAGE_MODEL,
       prompt,
-      quality: "low",
+      quality: reproduce ? "high" : "low",
       size: cutout ? "1024x1024" : pickSize(spec.canvas),
       n: "1",
       ...(cutout ? { background: "transparent", output_format: "png" } : {}),
@@ -212,9 +217,13 @@ export class OpenAiPieceGenerator implements PieceGenerator {
     if (references.length > 0) {
       const form = new FormData();
       for (const [key, value] of Object.entries(fields)) form.append(key, value);
-      for (const { id, file } of references) {
-        form.append("image[]", new Blob([new Uint8Array(file!.bytes)], { type: file!.mime }), `${id}.${file!.mime.split("/")[1]}`);
-      }
+      references.forEach(({ id, file }, i) => {
+        // The output size is fixed by the provider, so the base image is letterboxed to it rather than stretched.
+        const [w, h] = fields.size!.split("x").map(Number) as [number, number];
+        const bytes = reproduce && i === 0 ? padToSize(file!.bytes, w, h) : file!.bytes;
+        const mime = reproduce && i === 0 ? "image/png" : file!.mime;
+        form.append("image[]", new Blob([new Uint8Array(bytes)], { type: mime }), `${id}.${mime.split("/")[1]}`);
+      });
       response = await fetch(IMAGES_EDITS_URL, { method: "POST", headers: { Authorization: `Bearer ${this.apiKey}` }, body: form });
     } else {
       response = await fetch(IMAGES_GENERATIONS_URL, {

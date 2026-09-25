@@ -41,6 +41,10 @@ export function describeAction(doc: CarouselDocument, action: ChatAction): strin
       return t("chat.action.deleteSlide", { n: slideNumber(doc, action.slideId) });
     case "delete_object":
       return t("chat.action.deleteObject", { n: slideNumber(doc, action.slideId), piece: objectName(doc, action) });
+    case "compose_from_reference":
+      return action.slideId
+        ? t("chat.action.composeOn", { n: slideNumber(doc, action.slideId) })
+        : t("chat.action.composeNew");
   }
 }
 

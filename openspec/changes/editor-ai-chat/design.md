@@ -72,9 +72,22 @@ server-side and stored identically, with the source URL in the sidecar `assets/r
 requires adding `"reference"` to `ASSET_ORIGINS` in `system/assets/index.ts:40` (today `["manual","ai"]`) — a
 generic engine change, no brand literal.
 
-A reference is a **generation input only**: excluded from library candidate resolution, excluded from the
-Bucket panel, never placed on canvas by itself. Promoting one to usable art is a deliberate manual
-reclassification, not something the chat can do.
+A reference has one of two roles, chosen when it is attached (default: `layout` for a PNG in slide
+proportions, `content` otherwise):
+
+- **`layout`** — the reference *is* the poster. `compose_from_reference` sends it, with the `content` reference,
+  to the provider's image edit: the layout is the base image (letterboxed to the provider's output size) and
+  the content one supplies the new event's picture. The text model only reads the new event's texts off the
+  content reference and lists them as exact replacements for the edit instruction. One full-slide image comes
+  back, joins the library as an AI asset and is placed over the active slide (or a new one), with no text
+  objects; the template's own zones stay as they are.
+- **`content`** — it brings the new event. When the provider does not accept it as an image, it is described
+  in words through those replacements, and the proposal says so.
+
+Pinned and locked pieces on the target slide are kept. A reference, placed or not, stays out of the library, the Bucket and the
+catalog the model sees; for image
+generation it is passed to the provider as an input image when the provider accepts it, and described in
+words otherwise, which the proposal states.
 
 ### D4. Chat action → plan mutation (closed set, v1)
 

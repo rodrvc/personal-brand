@@ -16,6 +16,7 @@ import type {
   DraftCopyPlanSlide,
   DraftCopyBrandContext,
   GenerateImageBrandContext,
+  GenerateImageSpec,
 } from "../ai/piece-generator.js";
 import type { ProfileStore } from "../profile-store.js";
 
@@ -532,6 +533,7 @@ export async function generateForSlot(
     carouselId: string;
     slot: string;
     referenceAssetIds?: string[];
+    mode?: GenerateImageSpec["mode"];
   },
 ): Promise<AssetEntry> {
   const generateKind =
@@ -539,13 +541,14 @@ export async function generateForSlot(
   // Brand style is loaded fresh per call (cheap: a handful of small file
   // reads, no caching needed) rather than threaded through every route call
   // site — this is the one place every image generation funnels through.
-  const brand = generateImageBrandContext(loadBrandStyle(store.roots.profileDir));
+  const brand = spec.mode === "reproduce" ? undefined : generateImageBrandContext(loadBrandStyle(store.roots.profileDir));
   const image = await generator.generateImage({
     prompt: spec.prompt,
     kind: generateKind,
     canvas: spec.canvas,
     brand,
     referenceAssetIds: spec.referenceAssetIds,
+    mode: spec.mode,
   });
   // registerFile identifies the file by its own content hash (design.md
   // D7's `assets/generated/<hash>.<ext>`); this file's destination path

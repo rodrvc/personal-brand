@@ -100,7 +100,7 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
       const images = loadReferenceImages(store, references.map((r) => r.id));
       const completion = await generator.completeJson({
         instructions: CHAT_INSTRUCTIONS,
-        input: chatInput(ctx, history, text, references.map((r) => r.name)),
+        input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" }))),
         images,
       });
       const user = appendChatRecord(store, req.params.id, {

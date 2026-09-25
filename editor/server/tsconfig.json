@@ -11,5 +11,5 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "../../system/ig-carousel/**/*.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "../../system/ig-carousel/**/*.ts"]
 }
