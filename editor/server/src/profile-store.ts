@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -49,6 +50,21 @@ import {
 const SLUG = /^[a-z0-9-]+$/;
 
 export class ProfileStoreError extends Error {}
+
+/**
+ * Thrown by the bucket-backed write guarantees below (`writeJsonIfRevision`,
+ * `appendLine`, `reserveOnce`) when the expected revision no longer matches
+ * — a stale client copy in `fs` mode (practically unreachable mid-request,
+ * since nothing else can write between the read and the write inside one
+ * synchronous Node request handler) or a real concurrent writer race in
+ * `s3` mode, where `ObjectStore.put`'s `ifMatch`/`ifNoneMatch` actually is
+ * enforced by the bucket across independent server instances.
+ */
+export class RevisionConflictError extends ProfileStoreError {}
+
+function sha256Hex(content: Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 function assertValidSlug(slug: string): void {
   if (!SLUG.test(slug)) {
@@ -124,6 +140,9 @@ function resolveConfined(root: string, relPath: string, allowedRealRoots: string
   }
   return realTarget;
 }
+
+/** Which of `ProfileStore`'s two allowed roots a bucket-backed method's key/path is under — matches `mirror.ts`'s own "profile" vs "outputs" object-key areas. */
+export type StorageArea = "profile" | "outputs";
 
 export interface ProfileRoots {
   profileDir: string;
@@ -221,6 +240,232 @@ export class ProfileStore {
       return existsSync(abs);
     } catch {
       return false;
+    }
+  }
+
+  private absForArea(relPath: string, area: StorageArea): string {
+    return area === "outputs" ? this.resolveInOutputs(relPath) : this.resolveInProfile(relPath);
+  }
+
+  /**
+   * Resolves the bucket side of a call, when the process is running in `s3`
+   * mode — `undefined` in `fs` mode, which is what every method below uses
+   * to fall back to the plain filesystem path with no other behaviour
+   * change. This is the only place in `ProfileStore` that reaches into
+   * `storage/runtime.ts`; every other method stays exactly as filesystem-only
+   * as it always was.
+   */
+  private async bucketContext(
+    relPath: string,
+    area: StorageArea,
+  ): Promise<
+    | { key: string; store: import("./storage/object-store.js").ObjectStore; s3: import("./storage/config.js").S3StorageConfig; cacheDir: string }
+    | undefined
+  > {
+    const { getStorageRuntime } = await import("./storage/runtime.js");
+    const { config, store } = getStorageRuntime();
+    if (config.backend !== "s3" || !store || !config.s3) return undefined;
+    const { objectKeyFor } = await import("./storage/mirror.js");
+    return { key: objectKeyFor(config.s3, this.slug, area, relPath), store, s3: config.s3, cacheDir: config.cacheDir };
+  }
+
+  private async recordSyncedWrite(
+    bucket: { s3: import("./storage/config.js").S3StorageConfig; cacheDir: string; key: string },
+    etag: string,
+    hash: string,
+  ): Promise<void> {
+    const { updateManifestEntry } = await import("./storage/mirror.js");
+    updateManifestEntry(bucket.s3, bucket.cacheDir, this.slug, bucket.key, { etag, hash });
+  }
+
+  /**
+   * Reads a JSON file together with an opaque revision token — the
+   * bucket's real `ETag` in `s3` mode (read straight from the bucket, not
+   * the local mirror, so a request always sees the authoritative current
+   * state before deciding whether it may overwrite it), or a content hash
+   * in `fs` mode. `undefined` when the file doesn't exist yet.
+   */
+  async readJsonRevision<T = unknown>(
+    relPath: string,
+    area: StorageArea = "profile",
+  ): Promise<{ value: T; revision: string } | undefined> {
+    const bucket = await this.bucketContext(relPath, area);
+    if (bucket) {
+      const { ObjectNotFoundError } = await import("./storage/object-store.js");
+      try {
+        const { body, etag } = await bucket.store.get(bucket.key);
+        return { value: JSON.parse(body.toString("utf-8")) as T, revision: etag };
+      } catch (error) {
+        if (error instanceof ObjectNotFoundError) return undefined;
+        throw error;
+      }
+    }
+
+    const abs = this.absForArea(relPath, area);
+    if (!existsSync(abs)) return undefined;
+    const raw = readFileSync(abs);
+    return { value: JSON.parse(raw.toString("utf-8")) as T, revision: sha256Hex(raw) };
+  }
+
+  /**
+   * Writes a JSON file only if its current revision still matches
+   * `expectedRevision` (from an earlier `readJsonRevision`), or — when
+   * `expectedRevision` is `null` — only if the file does not exist yet.
+   * Throws `RevisionConflictError` otherwise, translated by the carousel
+   * PUT route into the same 409 it has always returned for a stale copy.
+   *
+   * In `s3` mode this is a real conditional `PutObject` against the
+   * bucket (`ifMatch`/`ifNoneMatch`), so it also catches two server
+   * instances racing on the same document — not just a stale client copy —
+   * which is exactly the guarantee `fs` mode never needed to provide
+   * because nothing else can write between the read and the write inside
+   * one synchronous request handler. The local mirror is updated
+   * write-through, and the sync manifest records the etag/hash this write
+   * produced so a later `syncUp` sees the mirror already in sync and never
+   * re-uploads (or clobbers) this object.
+   */
+  async writeJsonIfRevision<T>(
+    relPath: string,
+    value: T,
+    expectedRevision: string | null,
+    area: StorageArea = "profile",
+  ): Promise<string> {
+    const content = Buffer.from(JSON.stringify(value, null, 2) + "\n", "utf-8");
+    const bucket = await this.bucketContext(relPath, area);
+
+    if (bucket) {
+      const { PreconditionFailedError } = await import("./storage/object-store.js");
+      const hash = sha256Hex(content);
+      let etag: string;
+      try {
+        const result =
+          expectedRevision === null
+            ? await bucket.store.put(bucket.key, content, { ifNoneMatch: "*", metadata: { sha256: hash } })
+            : await bucket.store.put(bucket.key, content, { ifMatch: expectedRevision, metadata: { sha256: hash } });
+        etag = result.etag;
+      } catch (error) {
+        if (error instanceof PreconditionFailedError) {
+          throw new RevisionConflictError(`"${relPath}" changed since it was last read.`);
+        }
+        throw error;
+      }
+      const abs = this.absForArea(relPath, area);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, content);
+      await this.recordSyncedWrite(bucket, etag, hash);
+      return etag;
+    }
+
+    const abs = this.absForArea(relPath, area);
+    const exists = existsSync(abs);
+    if (expectedRevision === null && exists) {
+      throw new RevisionConflictError(`"${relPath}" already exists.`);
+    }
+    if (expectedRevision !== null) {
+      if (!exists) throw new RevisionConflictError(`"${relPath}" no longer exists.`);
+      if (sha256Hex(readFileSync(abs)) !== expectedRevision) {
+        throw new RevisionConflictError(`"${relPath}" changed since it was last read.`);
+      }
+    }
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, content);
+    return sha256Hex(content);
+  }
+
+  /**
+   * Appends one line to a text log (the chat log's `.jsonl`), safely
+   * against concurrent appenders in `s3` mode: reads the current content
+   * and etag straight from the bucket, appends, and writes back with
+   * `ifMatch` (or `ifNoneMatch: "*"` for a brand-new log) — retrying, with
+   * a small jittered backoff, when another writer's append lands first
+   * (`PreconditionFailedError`), up to `maxAttempts` times before giving
+   * up. `fs` mode appends directly (there is no cross-process writer to
+   * race inside one request handler) and never retries.
+   */
+  async appendLine(relPath: string, line: string, area: StorageArea = "profile", maxAttempts = 5): Promise<string> {
+    const bucket = await this.bucketContext(relPath, area);
+    if (!bucket) {
+      const abs = this.absForArea(relPath, area);
+      const current = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+      mkdirSync(join(abs, ".."), { recursive: true });
+      const next = current + line + "\n";
+      writeFileSync(abs, next, "utf-8");
+      return sha256Hex(Buffer.from(next, "utf-8"));
+    }
+
+    const { ObjectNotFoundError, PreconditionFailedError } = await import("./storage/object-store.js");
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let current = "";
+      let expectedRevision: string | null = null;
+      try {
+        const { body, etag } = await bucket.store.get(bucket.key);
+        current = body.toString("utf-8");
+        expectedRevision = etag;
+      } catch (error) {
+        if (!(error instanceof ObjectNotFoundError)) throw error;
+      }
+
+      const nextContent = Buffer.from(current + line + "\n", "utf-8");
+      try {
+        const result =
+          expectedRevision === null
+            ? await bucket.store.put(bucket.key, nextContent, { ifNoneMatch: "*" })
+            : await bucket.store.put(bucket.key, nextContent, { ifMatch: expectedRevision });
+        const abs = this.absForArea(relPath, area);
+        mkdirSync(join(abs, ".."), { recursive: true });
+        writeFileSync(abs, nextContent);
+        await this.recordSyncedWrite(bucket, result.etag, sha256Hex(nextContent));
+        return result.etag;
+      } catch (error) {
+        if (!(error instanceof PreconditionFailedError) || attempt === maxAttempts) {
+          if (error instanceof PreconditionFailedError) {
+            throw new RevisionConflictError(`"${relPath}" could not be appended to after ${maxAttempts} attempts (lost every race).`);
+          }
+          throw error;
+        }
+        const backoffMs = 5 * attempt + Math.floor(Math.random() * 10);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+    // Unreachable — the loop above always returns or throws.
+    throw new RevisionConflictError(`"${relPath}" could not be appended to.`);
+  }
+
+  /**
+   * Atomically claims a name that must be created at most once — the
+   * export version-reservation marker (`v<N>/.reserved`). Returns `true`
+   * when this call created it, `false` when it already existed (the caller
+   * tries the next candidate name). `s3` mode uses a conditional
+   * `PutObject` (`ifNoneMatch: "*"`); `fs` mode opens the file with the
+   * exclusive `"wx"` flag, which throws `EEXIST` exactly when another
+   * writer already has it — the same atomic "claim or fail" primitive,
+   * expressed against whichever backend is active.
+   */
+  async reserveOnce(relPath: string, area: StorageArea = "outputs"): Promise<boolean> {
+    const bucket = await this.bucketContext(relPath, area);
+    if (bucket) {
+      const { PreconditionFailedError } = await import("./storage/object-store.js");
+      try {
+        const result = await bucket.store.put(bucket.key, Buffer.alloc(0), { ifNoneMatch: "*" });
+        const abs = this.absForArea(relPath, area);
+        mkdirSync(join(abs, ".."), { recursive: true });
+        writeFileSync(abs, Buffer.alloc(0));
+        await this.recordSyncedWrite(bucket, result.etag, sha256Hex(Buffer.alloc(0)));
+        return true;
+      } catch (error) {
+        if (error instanceof PreconditionFailedError) return false;
+        throw error;
+      }
+    }
+
+    const abs = this.absForArea(relPath, area);
+    mkdirSync(join(abs, ".."), { recursive: true });
+    try {
+      writeFileSync(abs, "", { flag: "wx" });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") return false;
+      throw error;
     }
   }
 
