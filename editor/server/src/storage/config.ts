@@ -14,6 +14,8 @@ export interface S3StorageConfig {
   secretAccessKey: string;
   prefix: string;
   forcePathStyle: boolean;
+  /** Lower-cased filename extensions (with the leading dot) `syncDown` excludes from eager hydration under the `_outputs/` area — a resolved export's rendered media, fetched on demand instead. Falls back to `mirror.ts`'s `DEFAULT_LAZY_MEDIA_EXTENSIONS` when unset. */
+  lazyMediaExtensions?: string[];
 }
 
 export interface StorageConfig {
@@ -25,6 +27,12 @@ export interface StorageConfig {
 function parseBool(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   return value.toLowerCase() !== "false" && value !== "0";
+}
+
+function parseList(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const list = value.split(",").map((item) => item.trim()).filter(Boolean);
+  return list.length > 0 ? list : undefined;
 }
 
 /**
@@ -64,6 +72,7 @@ export function loadStorageConfig(env: NodeJS.ProcessEnv = process.env): Storage
       secretAccessKey,
       prefix: env.S3_PREFIX ?? "profiles/",
       forcePathStyle: parseBool(env.S3_FORCE_PATH_STYLE, true),
+      lazyMediaExtensions: parseList(env.S3_MIRROR_LAZY_MEDIA_EXTENSIONS)?.map((ext) => ext.toLowerCase()),
     },
   };
 }
