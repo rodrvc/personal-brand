@@ -82,6 +82,52 @@ editor never depends on a live Google Fonts request:
 tsx system/assets/fetch-fonts.ts --profile <slug>
 ```
 
+## Running the editor against an S3-compatible bucket
+
+By default the editor reads and writes profiles on the local filesystem
+(`STORAGE_BACKEND=fs`, the implicit default — nothing to configure). To run
+it against an S3-compatible bucket instead (issue #99: preparing the editor
+to run online), set `STORAGE_BACKEND=s3` in the repo-root `.env` alongside:
+
+```bash
+STORAGE_BACKEND=s3
+S3_ENDPOINT=http://localhost:9000     # omit for AWS S3 itself
+S3_BUCKET=brand-profiles
+S3_REGION=us-east-1                   # default
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_PREFIX=profiles/                   # default; every key is <prefix><slug>/...
+S3_FORCE_PATH_STYLE=true              # default; most self-hosted S3 servers need this
+PROFILE_CACHE_DIR=/tmp/personal-brand-profile-cache   # default; local mirror root
+```
+
+For local development, bring up a bucket with:
+
+```bash
+docker compose -f docker-compose.storage.yml up -d
+```
+
+See that file's header for why it runs RustFS (`rustfs/rustfs`, Apache-2.0)
+rather than MinIO's own image (MinIO's Docker Hub/quay.io images require an
+account as of this writing, and its direct binary download returns 410
+Gone) — verified directly against this repo's `ObjectStore` before being
+adopted: pulls anonymously, persists data on its named volume across
+`docker compose down && up`, and enforces `If-Match`/`If-None-Match` on
+`PutObject`. The same `S3_*` variables point at a real MinIO deployment,
+Railway bucket, Cloudflare R2 or AWS S3 without any code change.
+
+To verify the bucket enforces conditional writes, run the storage
+integration test with the bucket's endpoint set:
+
+```bash
+S3_ENDPOINT=http://localhost:9000 S3_BUCKET=brand-profiles \
+S3_ACCESS_KEY_ID=rustfsadmin S3_SECRET_ACCESS_KEY=rustfsadmin123 \
+pnpm --filter @personal-brand/editor-server test
+```
+
+It SKIPs cleanly (exit 0) when `S3_ENDPOINT` is unset or unreachable, so
+`pnpm test`/`pnpm check` never depend on a bucket being up.
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs
