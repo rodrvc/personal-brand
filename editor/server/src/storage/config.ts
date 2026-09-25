@@ -14,8 +14,12 @@ export interface S3StorageConfig {
   secretAccessKey: string;
   prefix: string;
   forcePathStyle: boolean;
-  /** Lower-cased filename extensions (with the leading dot) `syncDown` excludes from eager hydration under the `_outputs/` area — a resolved export's rendered media, fetched on demand instead. Falls back to `mirror.ts`'s `DEFAULT_LAZY_MEDIA_EXTENSIONS` when unset. */
+  /** Lower-cased filename extensions (with the leading dot) `syncDown` excludes from eager hydration everywhere else large media can appear — a resolved export's rendered media under `_outputs/`, or a stray image/video outside both profile-area prefix lists below. Falls back to `mirror.ts`'s `DEFAULT_LAZY_MEDIA_EXTENSIONS` when unset. */
   lazyMediaExtensions?: string[];
+  /** Profile-relative path prefixes always excluded from eager hydration, whatever the extension — a profile's own `outputs/`/`reels/` tree. Falls back to `mirror.ts`'s `DEFAULT_LAZY_PROFILE_PREFIXES` when unset. */
+  lazyProfilePrefixes?: string[];
+  /** Profile-relative path prefixes always hydrated eagerly, whatever the extension — content `ProfileStore` reads back synchronously on every request. Falls back to `mirror.ts`'s `DEFAULT_EAGER_PROFILE_PREFIXES` when unset. */
+  eagerProfilePrefixes?: string[];
 }
 
 export interface StorageConfig {
@@ -73,6 +77,8 @@ export function loadStorageConfig(env: NodeJS.ProcessEnv = process.env): Storage
       prefix: env.S3_PREFIX ?? "profiles/",
       forcePathStyle: parseBool(env.S3_FORCE_PATH_STYLE, true),
       lazyMediaExtensions: parseList(env.S3_MIRROR_LAZY_MEDIA_EXTENSIONS)?.map((ext) => ext.toLowerCase()),
+      lazyProfilePrefixes: parseList(env.S3_MIRROR_LAZY_PROFILE_PREFIXES),
+      eagerProfilePrefixes: parseList(env.S3_MIRROR_EAGER_PROFILE_PREFIXES),
     },
   };
 }

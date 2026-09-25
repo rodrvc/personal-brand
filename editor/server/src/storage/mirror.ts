@@ -151,19 +151,55 @@ function hasUnsyncedLocalEdit(localPath: string, manifestEntry: ManifestEntry | 
 }
 
 /**
- * Large, rarely-needed-on-open media under a resolved output's `_outputs/`
- * area (a rendered image/video) is excluded from eager `syncDown` by
+ * Large, rarely-needed-on-open media is excluded from eager `syncDown` by
  * default, fetched on demand instead via `fetchObjectOnDemand` — so opening
- * a profile for the first time doesn't pull its whole export history
- * before the editor can even show a carousel list. Generic (no brand
- * literal) and overridable via `S3_MIRROR_LAZY_MEDIA_EXTENSIONS`.
+ * a profile for the first time doesn't pull its whole export/reel history
+ * (a real profile can carry hundreds of MB of rendered media in its own
+ * `outputs/`/`reels/` trees, on top of the resolved-output `_outputs/`
+ * area) before the editor can even show a carousel list.
+ *
+ * Under `_outputs/` (a resolved export's rendered media), any object
+ * matching `lazyMediaExtensions` is lazy — there is no eager allow-list
+ * there, since nothing reads a specific old export's PNG back over HTTP
+ * today (see `fetchObjectOnDemand`'s doc comment).
+ *
+ * Under the `profile` area the rule is layered, most specific first:
+ *   1. `eagerProfilePrefixes` — always eager, whatever the extension. The
+ *      editor reads these back synchronously through `ProfileStore` on
+ *      every request (brand assets, references, generated images, fonts
+ *      under `assets/`; carousel documents under `carousels/`), so they
+ *      must already be on disk, not fetched on first touch.
+ *   2. `lazyProfilePrefixes` — always lazy, whatever the extension (a
+ *      profile's own `outputs/` or `reels/` tree — exactly the kind of
+ *      "hundreds of MB the editor doesn't read back" content above).
+ *   3. `lazyMediaExtensions` — lazy by extension everywhere else (a stray
+ *      image/video sitting outside both prefix lists, e.g. under `ideas/`
+ *      or a `tests/` fixture tree).
+ *
+ * Every list is generic (no brand literal) and overridable via
+ * `S3_MIRROR_LAZY_MEDIA_EXTENSIONS`/`S3_MIRROR_LAZY_PROFILE_PREFIXES`/
+ * `S3_MIRROR_EAGER_PROFILE_PREFIXES`.
  */
 export const DEFAULT_LAZY_MEDIA_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".m4v"];
+export const DEFAULT_LAZY_PROFILE_PREFIXES = ["outputs/", "reels/"];
+export const DEFAULT_EAGER_PROFILE_PREFIXES = ["assets/", "carousels/"];
 
-function isLazyOutput(relPath: string, config: S3StorageConfig): boolean {
+function hasLazyExtension(relPath: string, config: S3StorageConfig): boolean {
   const extensions = config.lazyMediaExtensions ?? DEFAULT_LAZY_MEDIA_EXTENSIONS;
   const lower = relPath.toLowerCase();
   return extensions.some((ext) => lower.endsWith(ext));
+}
+
+function isLazyByDefault(isOutput: boolean, relPath: string, config: S3StorageConfig): boolean {
+  if (isOutput) return hasLazyExtension(relPath, config);
+
+  const eagerPrefixes = config.eagerProfilePrefixes ?? DEFAULT_EAGER_PROFILE_PREFIXES;
+  if (eagerPrefixes.some((prefix) => relPath.startsWith(prefix))) return false;
+
+  const lazyPrefixes = config.lazyProfilePrefixes ?? DEFAULT_LAZY_PROFILE_PREFIXES;
+  if (lazyPrefixes.some((prefix) => relPath.startsWith(prefix))) return true;
+
+  return hasLazyExtension(relPath, config);
 }
 
 export interface SyncDownResult {
@@ -242,7 +278,7 @@ async function runSyncDown(
       continue;
     }
 
-    if (isOutput && isLazyOutput(relPath, config)) {
+    if (isLazyByDefault(isOutput, relPath, config)) {
       skippedLazy++;
       continue;
     }
