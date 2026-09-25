@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join, relative, sep } from "node:path";
 
 import type { ObjectStore } from "./object-store.js";
-import { ObjectNotFoundError } from "./object-store.js";
+import { ObjectNotFoundError, PreconditionFailedError } from "./object-store.js";
 import type { S3StorageConfig } from "./config.js";
 
 /**
@@ -28,6 +28,13 @@ import type { S3StorageConfig } from "./config.js";
  * by `syncUp`) records, per object key, the remote etag last seen and the
  * local content hash last synced — the two independent facts that decide
  * whether a `syncDown`/`syncUp` pass has anything to do.
+ *
+ * Every manifest write below is a synchronous read-patch-save
+ * (`patchManifestEntry`) rather than a load-once/save-once-at-the-end: the
+ * latter let a `syncDown`/`syncUp` in progress silently revert a concurrent
+ * writer's manifest entry when it finally saved its own stale in-memory
+ * copy, and let `syncUp` re-upload a local file unconditionally even when
+ * the bucket had a newer write this manifest never saw.
  */
 
 export interface ManifestEntry {
@@ -82,6 +89,13 @@ function saveManifest(manifestPath: string, manifest: Manifest): void {
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
 }
 
+/** Loads the manifest fresh, sets one entry, and saves it back — synchronous start to finish, so it can never race a concurrent caller of this same function. */
+function patchManifestEntry(manifestPath: string, key: string, entry: ManifestEntry): void {
+  const manifest = loadManifest(manifestPath);
+  manifest[key] = entry;
+  saveManifest(manifestPath, manifest);
+}
+
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -117,12 +131,16 @@ export async function syncDown(
   slug: string,
 ): Promise<void> {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
-  const manifest = loadManifest(roots.manifestPath);
   const remotePrefix = `${config.prefix}${slug}/`;
   const objects = await store.list(remotePrefix);
+  // A snapshot for the cheap "did this change remotely" check only — the
+  // actual write below re-reads and patches the manifest fresh, so a stale
+  // snapshot here can cause a redundant re-download at worst, never a lost
+  // update.
+  const manifestSnapshot = loadManifest(roots.manifestPath);
 
   for (const object of objects) {
-    if (manifest[object.key]?.etag === object.etag) continue;
+    if (manifestSnapshot[object.key]?.etag === object.etag) continue;
 
     const isOutput = object.key.startsWith(`${remotePrefix}${OUTPUTS_MARKER}`);
     const relPath = isOutput
@@ -134,10 +152,8 @@ export async function syncDown(
     const { body } = await store.get(object.key);
     mkdirSync(dirname(localPath), { recursive: true });
     writeFileSync(localPath, body);
-    manifest[object.key] = { etag: object.etag, hash: sha256(body) };
+    patchManifestEntry(roots.manifestPath, object.key, { etag: object.etag, hash: sha256(body) });
   }
-
-  saveManifest(roots.manifestPath, manifest);
 }
 
 /**
@@ -146,6 +162,13 @@ export async function syncDown(
  * mirror directly instead of going through a bucket-aware write path (the
  * asset index, Playwright's export PNGs). Never deletes a remote object:
  * a file that disappeared locally is left alone in the bucket.
+ *
+ * Every upload is a real conditional `PutObject`: `ifMatch` against the
+ * manifest's last-seen etag when one is on record, `ifNoneMatch: "*"` when
+ * it isn't (including a missing/corrupt manifest — "no entry" is never
+ * treated as "safe to overwrite unconditionally"). A precondition failure
+ * means the bucket has a newer write this manifest never saw; that local
+ * file is left alone rather than clobbering it.
  */
 export async function syncUp(
   store: ObjectStore,
@@ -154,7 +177,7 @@ export async function syncUp(
   slug: string,
 ): Promise<void> {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
-  const manifest = loadManifest(roots.manifestPath);
+  const manifestSnapshot = loadManifest(roots.manifestPath);
 
   const areas: Array<["profile" | "outputs", string]> = [
     ["profile", roots.profileDir],
@@ -167,14 +190,25 @@ export async function syncUp(
       const key = objectKeyFor(config, slug, area, relPath);
       const content = readFileSync(absPath);
       const hash = sha256(content);
-      if (manifest[key]?.hash === hash) continue;
+      const entry = manifestSnapshot[key];
+      if (entry?.hash === hash) continue;
 
-      const result = await store.put(key, content);
-      manifest[key] = { etag: result.etag, hash };
+      try {
+        const result = entry
+          ? await store.put(key, content, { ifMatch: entry.etag })
+          : await store.put(key, content, { ifNoneMatch: "*" });
+        const nextEntry = { etag: result.etag, hash };
+        patchManifestEntry(roots.manifestPath, key, nextEntry);
+        manifestSnapshot[key] = nextEntry;
+      } catch (error) {
+        if (error instanceof PreconditionFailedError) {
+          console.warn(`syncUp: "${key}" changed remotely since the last sync for profile "${slug}" — not overwriting; the next syncDown will pick up the remote copy.`);
+          continue;
+        }
+        throw error;
+      }
     }
   }
-
-  saveManifest(roots.manifestPath, manifest);
 }
 
 const lastSyncedAt = new Map<string, number>();

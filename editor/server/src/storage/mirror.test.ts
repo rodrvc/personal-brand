@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { FakeObjectStore } from "./fake-object-store.js";
 import {
@@ -165,6 +165,72 @@ const tests: Array<[string, () => Promise<void>]> = [
 
       assert.equal(await bucketHasBrand(store, config(), "acme"), true);
       assert.equal(await bucketHasBrand(store, config(), "no-brand-yet"), false);
+    },
+  ],
+  [
+    "syncUp does not overwrite a concurrent newer remote write with a stale local edit",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+
+      await store.put("profiles/acme/brand.json", Buffer.from("v1"));
+      await syncDown(store, config(), cacheDir, "acme"); // baseline: manifest now knows etag(v1)/hash(v1)
+
+      // A bypass writer edits the local mirror directly, without going
+      // through a bucket-aware write path.
+      writeFileSync(join(roots.profileDir, "brand.json"), "v2-local");
+
+      // Meanwhile a different writer updates the same object in the bucket —
+      // the manifest's recorded etag is now stale on both sides.
+      await store.put("profiles/acme/brand.json", Buffer.from("v2-remote"));
+
+      await syncUp(store, config(), cacheDir, "acme");
+
+      const remote = await store.get("profiles/acme/brand.json");
+      assert.equal(remote.body.toString(), "v2-remote", "the newer remote write must survive");
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    },
+  ],
+  [
+    "syncDown never performs a stale wholesale manifest save: a concurrent manifest write for another key survives a syncDown in flight",
+    async () => {
+      const cacheDir = mkdtempSync(join(tmpdir(), "mirror-test-"));
+      const store = new FakeObjectStore();
+      await store.put("profiles/acme/brand.json", Buffer.from("v1"));
+      const roots = resolveMirrorRoots(config(), cacheDir, "acme");
+
+      const originalList = store.list.bind(store);
+      let releaseList: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseList = resolve;
+      });
+      (store as unknown as { list: typeof store.list }).list = async (prefix: string) => {
+        const result = await originalList(prefix);
+        await gate;
+        return result;
+      };
+
+      const syncDownPromise = syncDown(store, config(), cacheDir, "acme");
+
+      // Simulate a concurrent writer patching an unrelated manifest key
+      // directly on disk while syncDown is in flight.
+      mkdirSync(dirname(roots.manifestPath), { recursive: true });
+      writeFileSync(
+        roots.manifestPath,
+        JSON.stringify({ "profiles/acme/other-key.json": { etag: "e", hash: "h" } }, null, 2) + "\n",
+        "utf-8",
+      );
+
+      releaseList();
+      await syncDownPromise;
+
+      const manifest = JSON.parse(readFileSync(roots.manifestPath, "utf-8"));
+      assert.ok(manifest["profiles/acme/other-key.json"], "the concurrent manifest write must survive");
+      assert.ok(manifest["profiles/acme/brand.json"], "syncDown's own entry must also be present");
+
+      rmSync(cacheDir, { recursive: true, force: true });
     },
   ],
 ];
