@@ -16,6 +16,7 @@ import {
   resolveProfileDir,
   resolveProfilesRoot,
 } from "../../../system/ig-carousel/profile.js";
+import { updateManifestEntry } from "./storage/mirror.js";
 
 /**
  * The ONLY module in `editor/server` that touches the filesystem for
@@ -305,12 +306,21 @@ export class ProfileStore {
     return { key: objectKeyFor(config.s3, this.slug, area, relPath), store, s3: config.s3, cacheDir: config.cacheDir };
   }
 
-  private async recordSyncedWrite(
+  /**
+   * Synchronous on purpose: every caller does its local `writeFileSync`
+   * (the bucket's mirror write-through) and then, in the same tick, calls
+   * this to patch the manifest — with no `await` between the two. An
+   * `await` there (this used to dynamic-`import("./storage/mirror.js")`
+   * first) left a window where a concurrent `syncDown` could read the local
+   * file's new content but the manifest's still-old entry, decide it was an
+   * "unsynced local edit" was actually clean, and clobber it with a stale
+   * download.
+   */
+  private recordSyncedWrite(
     bucket: { s3: import("./storage/config.js").S3StorageConfig; cacheDir: string; key: string },
     etag: string,
     hash: string,
-  ): Promise<void> {
-    const { updateManifestEntry } = await import("./storage/mirror.js");
+  ): void {
     updateManifestEntry(bucket.s3, bucket.cacheDir, this.slug, bucket.key, { etag, hash });
   }
 
@@ -390,7 +400,7 @@ export class ProfileStore {
       }
       mkdirSync(join(abs, ".."), { recursive: true });
       writeFileSync(abs, content);
-      await this.recordSyncedWrite(bucket, etag, hash);
+      this.recordSyncedWrite(bucket, etag, hash);
       return etag;
     }
 
@@ -452,7 +462,7 @@ export class ProfileStore {
             : await bucket.store.put(bucket.key, nextContent, { ifMatch: expectedRevision });
         mkdirSync(join(abs, ".."), { recursive: true });
         writeFileSync(abs, nextContent);
-        await this.recordSyncedWrite(bucket, result.etag, sha256Hex(nextContent));
+        this.recordSyncedWrite(bucket, result.etag, sha256Hex(nextContent));
         return result.etag;
       } catch (error) {
         if (!(error instanceof PreconditionFailedError) || attempt === maxAttempts) {
@@ -490,7 +500,7 @@ export class ProfileStore {
         const result = await bucket.store.put(bucket.key, Buffer.alloc(0), { ifNoneMatch: "*" });
         mkdirSync(join(abs, ".."), { recursive: true });
         writeFileSync(abs, Buffer.alloc(0));
-        await this.recordSyncedWrite(bucket, result.etag, sha256Hex(Buffer.alloc(0)));
+        this.recordSyncedWrite(bucket, result.etag, sha256Hex(Buffer.alloc(0)));
         return true;
       } catch (error) {
         if (error instanceof PreconditionFailedError) return false;

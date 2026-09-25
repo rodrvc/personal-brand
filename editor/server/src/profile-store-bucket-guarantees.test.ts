@@ -181,6 +181,63 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "append B racing a syncDown download of the SAME key does not lose B",
+    async () => {
+      const fake = freshRuntime();
+      const store = new ProfileStore(SLUG);
+      const { getStorageRuntime } = await import("./storage/runtime.js");
+      const { syncDown, syncUp } = await import("./storage/mirror.js");
+      const { readFileSync } = await import("node:fs");
+      const { config } = getStorageRuntime();
+      const key = "profiles/acme/carousels/x/chat.jsonl";
+
+      await store.appendLine("carousels/x/chat.jsonl", "line-a");
+
+      // Another instance appends directly to the bucket, on the exact same
+      // key syncDown is about to re-download.
+      const before = await fake.get(key);
+      await fake.put(key, Buffer.from(`${before.body.toString("utf-8")}line-x\n`), { ifMatch: before.etag });
+
+      // Gate only the FIRST `get` of this key — the one syncDown issues to
+      // download it. appendLine's own internal read of the same key (used
+      // to build "line-b" below) must go through unblocked, or this would
+      // deadlock waiting on itself.
+      const originalGet = fake.get.bind(fake);
+      let gatedOnce = false;
+      let releaseGet: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseGet = resolve;
+      });
+      (fake as unknown as { get: typeof fake.get }).get = async (k: string) => {
+        const result = await originalGet(k);
+        if (k === key && !gatedOnce) {
+          gatedOnce = true;
+          await gate;
+        }
+        return result;
+      };
+
+      const syncDownPromise = syncDown(fake, config.s3!, config.cacheDir, SLUG);
+      // The concurrent local writer: reads the bucket's current content,
+      // appends "line-b", and lands its own local write + manifest patch —
+      // all before syncDown's earlier `get` (issued against the older,
+      // pre-"line-b" content) resolves.
+      await store.appendLine("carousels/x/chat.jsonl", "line-b");
+      releaseGet();
+      await syncDownPromise;
+
+      const localPath = store.absPath("carousels/x/chat.jsonl");
+      assert.ok(
+        readFileSync(localPath, "utf-8").includes("line-b"),
+        "line-b must survive locally, not be overwritten by syncDown's stale, in-flight download",
+      );
+
+      await syncUp(fake, config.s3!, config.cacheDir, SLUG);
+      const final = await fake.get(key);
+      assert.ok(final.body.toString("utf-8").includes("line-b"), "line-b must survive in the bucket after syncUp too");
+    },
+  ],
+  [
     "readFileAsync fetches a lazily-excluded profile-area file on demand when it's absent locally",
     async () => {
       const fake = freshRuntime();
