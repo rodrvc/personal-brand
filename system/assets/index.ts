@@ -276,15 +276,9 @@ function kindForPath(path: string): AssetKind {
 
 function isSidecarOrIndex(relPath: string): boolean {
   const base = relPath.split(sep).pop() ?? relPath;
-  return (
-    base === INDEX_FILENAME ||
-    base.endsWith(".meta.json") ||
-    // A sidecar for a generated piece: `<hash>.json` living beside
-    // `<hash>.<ext>` in generated/. Any bare .json under generated/ is a
-    // sidecar, never an asset in its own right.
-    (relPath.split(sep).includes(GENERATED_DIRNAME) && base.endsWith(".json")) ||
-    relPath.split(sep)[0] === META_DIRNAME
-  );
+  // Every JSON under assets/ is bookkeeping (the index, meta/<id>.json,
+  // generated/<hash>.json, <font>.meta.json), never an asset in its own right.
+  return base === INDEX_FILENAME || base.endsWith(".json");
 }
 
 /**

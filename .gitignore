@@ -98,3 +98,6 @@ profiles/example*/assets/index.json
 profiles/example*/assets/meta/
 profiles/example*/carousels/*/versions/
 profiles/example*/carousels/*/chat.jsonl
+profiles/example*/carousels/*/
+profiles/example*/assets/references/
+profiles/example*/assets/generated/

@@ -195,6 +195,18 @@ function renderBackgroundZone(
   )}"><img src="${escapeHtml(ctx.assetUrl(background.assetId))}" style="width: 100%; height: 100%; object-fit: cover; display: block;" /></div>`;
 }
 
+/** A picture spanning the whole canvas is the slide itself; the footer would sit on top of it. */
+function coversCanvas(slide: ResolvedSlide, canvas: { w: number; h: number }): boolean {
+  return slide.objects.some(
+    (o) =>
+      o.content.kind === "asset" &&
+      o.geometry.x <= 0 &&
+      o.geometry.y <= 0 &&
+      o.geometry.x + o.geometry.w >= canvas.w &&
+      o.geometry.y + (o.geometry.h ?? 0) >= canvas.h,
+  );
+}
+
 /**
  * Renders the locked footer zone: logo (or wordmark fallback) plus,
  * governed by the template's `zones.footer.pagination`, pagination text —
@@ -210,7 +222,7 @@ function renderFooterZone(
   ctx: FreeLayoutRenderContext,
 ): string {
   const footer = template.zones.footer;
-  if (footer.height <= 0) {
+  if (footer.height <= 0 || coversCanvas(slide, template.canvas)) {
     return "";
   }
 

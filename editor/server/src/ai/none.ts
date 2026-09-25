@@ -1,3 +1,4 @@
+import { messages } from "../messages.js";
 import {
   GenerationUnavailableError,
   type DraftCopyPlan,
@@ -20,13 +21,13 @@ import {
 export class NonePieceGenerator implements PieceGenerator {
   async draftCopy(_plan: DraftCopyPlan): Promise<DraftCopyResult> {
     throw new GenerationUnavailableError(
-      "La redacción con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
+      messages.aiUnavailable.copy,
     );
   }
 
   async generateImage(_spec: GenerateImageSpec): Promise<GeneratedImage> {
     throw new GenerationUnavailableError(
-      "La generación de imágenes con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
+      messages.aiUnavailable.image,
     );
   }
 
@@ -36,7 +37,7 @@ export class NonePieceGenerator implements PieceGenerator {
 
   async completeJson(_request: JsonCompletionRequest): Promise<JsonCompletionResult> {
     throw new GenerationUnavailableError(
-      "El chat con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
+      messages.aiUnavailable.chat,
     );
   }
 }
