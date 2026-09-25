@@ -331,6 +331,9 @@ export class ProfileStore {
     area: StorageArea = "profile",
   ): Promise<string> {
     const content = Buffer.from(JSON.stringify(value, null, 2) + "\n", "utf-8");
+    // Confinement (`absForArea`) MUST run before any bucket call, so an
+    // unsafe path never reaches the bucket at all.
+    const abs = this.absForArea(relPath, area);
     const bucket = await this.bucketContext(relPath, area);
 
     if (bucket) {
@@ -349,14 +352,12 @@ export class ProfileStore {
         }
         throw error;
       }
-      const abs = this.absForArea(relPath, area);
       mkdirSync(join(abs, ".."), { recursive: true });
       writeFileSync(abs, content);
       await this.recordSyncedWrite(bucket, etag, hash);
       return etag;
     }
 
-    const abs = this.absForArea(relPath, area);
     const exists = existsSync(abs);
     if (expectedRevision === null && exists) {
       throw new RevisionConflictError(`"${relPath}" already exists.`);
@@ -383,9 +384,11 @@ export class ProfileStore {
    * race inside one request handler) and never retries.
    */
   async appendLine(relPath: string, line: string, area: StorageArea = "profile", maxAttempts = 5): Promise<string> {
+    // Confinement before any bucket call — see the comment in
+    // `writeJsonIfRevision`. Computed once and reused for every retry below.
+    const abs = this.absForArea(relPath, area);
     const bucket = await this.bucketContext(relPath, area);
     if (!bucket) {
-      const abs = this.absForArea(relPath, area);
       const current = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
       mkdirSync(join(abs, ".."), { recursive: true });
       const next = current + line + "\n";
@@ -411,7 +414,6 @@ export class ProfileStore {
           expectedRevision === null
             ? await bucket.store.put(bucket.key, nextContent, { ifNoneMatch: "*" })
             : await bucket.store.put(bucket.key, nextContent, { ifMatch: expectedRevision });
-        const abs = this.absForArea(relPath, area);
         mkdirSync(join(abs, ".."), { recursive: true });
         writeFileSync(abs, nextContent);
         await this.recordSyncedWrite(bucket, result.etag, sha256Hex(nextContent));
@@ -442,12 +444,14 @@ export class ProfileStore {
    * expressed against whichever backend is active.
    */
   async reserveOnce(relPath: string, area: StorageArea = "outputs"): Promise<boolean> {
+    // Confinement before any bucket call — see the comment in
+    // `writeJsonIfRevision`.
+    const abs = this.absForArea(relPath, area);
     const bucket = await this.bucketContext(relPath, area);
     if (bucket) {
       const { PreconditionFailedError } = await import("./storage/object-store.js");
       try {
         const result = await bucket.store.put(bucket.key, Buffer.alloc(0), { ifNoneMatch: "*" });
-        const abs = this.absForArea(relPath, area);
         mkdirSync(join(abs, ".."), { recursive: true });
         writeFileSync(abs, Buffer.alloc(0));
         await this.recordSyncedWrite(bucket, result.etag, sha256Hex(Buffer.alloc(0)));
@@ -458,7 +462,6 @@ export class ProfileStore {
       }
     }
 
-    const abs = this.absForArea(relPath, area);
     mkdirSync(join(abs, ".."), { recursive: true });
     try {
       writeFileSync(abs, "", { flag: "wx" });

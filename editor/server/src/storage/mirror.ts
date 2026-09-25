@@ -464,9 +464,7 @@ export function updateManifestEntry(
   entry: ManifestEntry,
 ): void {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
-  const manifest = loadManifest(roots.manifestPath);
-  manifest[key] = entry;
-  saveManifest(roots.manifestPath, manifest);
+  patchManifestEntry(roots.manifestPath, key, entry);
 }
 
 const lastSyncedAt = new Map<string, number>();

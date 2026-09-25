@@ -134,6 +134,46 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "append A, a concurrent syncDown, then append B: the final syncUp does not lose B",
+    async () => {
+      const fake = freshRuntime();
+      const store = new ProfileStore(SLUG);
+      const { getStorageRuntime } = await import("./storage/runtime.js");
+      const { syncDown, syncUp } = await import("./storage/mirror.js");
+      const { config } = getStorageRuntime();
+
+      await store.appendLine("carousels/x/chat.jsonl", "line-a");
+      // An unrelated remote object syncDown will actually need to fetch —
+      // gating that fetch is what interleaves append B with syncDown's own
+      // in-flight run, the exact window the old implementation's stale,
+      // load-once/save-once-at-the-end manifest handling was vulnerable
+      // during.
+      await fake.put("profiles/acme/brand.json", Buffer.from('{"v":1}\n'));
+
+      const originalGet = fake.get.bind(fake);
+      let releaseGet: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseGet = resolve;
+      });
+      (fake as unknown as { get: typeof fake.get }).get = async (key: string) => {
+        if (key === "profiles/acme/brand.json") await gate;
+        return originalGet(key);
+      };
+
+      const syncDownPromise = syncDown(fake, config.s3!, config.cacheDir, SLUG);
+      await store.appendLine("carousels/x/chat.jsonl", "line-b");
+      releaseGet();
+      await syncDownPromise;
+
+      await syncUp(fake, config.s3!, config.cacheDir, SLUG);
+
+      const final = await fake.get("profiles/acme/carousels/x/chat.jsonl");
+      const lines = final.body.toString("utf-8").split("\n").filter(Boolean);
+      assert.ok(lines.includes("line-a"), "line-a missing");
+      assert.ok(lines.includes("line-b"), "line-b missing");
+    },
+  ],
+  [
     "reserveOnce claims a marker exactly once; a second attempt on the same path reports false",
     async () => {
       freshRuntime();
