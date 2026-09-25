@@ -124,12 +124,136 @@ function isData(t: PosterText): boolean {
  * datum the model took from the layout reference or left empty. Nothing of the event is inherited from the layout.
  */
 export function missingData(texts: PosterText[]): Array<{ zone: Zone; replaces?: string }> {
+  // The chip names the kind of event, which is always known: it is inferred, never asked for.
   const missing = texts.filter(
-    (t) => isPlaceable(t) && (t.from === "missing" || (isData(t) && (t.from === "layout" || (t.from !== "absent" && t.text.trim() === "")))),
+    (t) => isPlaceable(t) && t.zone !== "chip" && (t.from === "missing" || (isData(t) && (t.from === "layout" || (t.from !== "absent" && t.text.trim() === "")))),
   );
   // A line of no known kind is named by what the layout says there; a known datum by its kind alone.
   const named = missing.map((t) => (t.zone === "body" && t.original ? { zone: t.zone as Zone, replaces: t.original } : { zone: t.zone as Zone }));
   return named.filter((m, i) => named.findIndex((n) => n.zone === m.zone && n.replaces === m.replaces) === i);
+}
+
+const TIME = /\b\d{1,2}\s*[:.h]\s*\d{2}\b|\b\d{1,2}\s*(?:hrs?|horas?|h)\b|\b\d{1,2}\s*(?:am|pm)\b/i;
+const PRICE = /[$€£]\s*\d[\d.,]*|\b\d[\d.,]*\s*(?:clp|usd|eur|ars|mxn|pesos?|dollars?|euros?)\b/i;
+const DATE =
+  /\b\d{1,2}\s*[/.-]\s*(?:0?[1-9]|1[0-2])(?:\s*[/.-]\s*\d{2,4})?\b(?!\s*(?:hrs?|horas?|h)\b)|\b\d{1,2}\s+(?:de\s+)?(?:ene|feb|mar|abr|apr|may|jun|jul|ago|aug|sep|set|oct|nov|dic|dec|jan)[a-z]*\b/i;
+
+/** The kinds of event data a text holds, by its look: a time, a price, a date. */
+export function dataKinds(text: string): Array<"time" | "price" | "date"> {
+  const plain = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  // A price's thousands ("5.000") and a date ("26.09") look like a time: each is read once, in this order, and a
+  // number followed by "hrs" is a time, never a date.
+  const kinds: Array<"time" | "price" | "date"> = [];
+  let rest = plain;
+  for (const [kind, pattern] of [["price", PRICE], ["date", DATE], ["time", TIME]] as const) {
+    if (new RegExp(pattern.source, "i").test(rest)) {
+      kinds.push(kind);
+      rest = rest.replace(new RegExp(pattern.source, "gi"), " ");
+    }
+  }
+  return kinds;
+}
+
+const STOP_WORDS = new Set(["desde", "hasta", "para", "with", "from", "this", "that", "como", "sobre", "entre", "the", "and", "las", "los", "del", "una", "uno"]);
+
+/** Digit groups (thousands joined, all-zero groups such as minutes ":00" dropped) and significant words of a text. */
+function tokens(text: string): { digits: string[]; words: string[] } {
+  const joined = text.replace(/(\d)[.,](\d{3})(?!\d)/g, "$1$2");
+  const digits = (joined.match(/\d+/g) ?? []).filter((d) => !/^0+$/.test(d)).map((d) => d.replace(/^0+(?=\d)/, ""));
+  const words = normalized(text)
+    .split(" ")
+    .filter((w) => w.length >= 4 && !/\d/.test(w) && !STOP_WORDS.has(w));
+  return { digits, words };
+}
+
+/**
+ * Whether the owner's messages actually state `value`. A time, price or date needs only its digit groups there: its
+ * wording follows the layout's line ("Doors from 21:00 hrs" for an owner's "at 21:00"). A name or place needs every
+ * significant word too.
+ */
+export function statedByOwner(value: string, ownerMessages: string[]): boolean {
+  const said = tokens(ownerMessages.join("\n"));
+  const wanted = tokens(value);
+  if (dataKinds(value).length > 0 && wanted.digits.length > 0) return wanted.digits.every((d) => said.digits.includes(d));
+  if (wanted.digits.length === 0 && wanted.words.length === 0) return value.trim() !== "" && normalized(ownerMessages.join(" ")).includes(normalized(value));
+  return wanted.digits.every((d) => said.digits.includes(d)) && wanted.words.every((w) => said.words.includes(w));
+}
+
+/**
+ * Field labels a poster writes over a datum, and street words of an address line, in the languages profiles use
+ * today. Generic vocabulary, no brand data: they only say which kind of datum a layout line is.
+ */
+const LABEL_ZONES: Array<[Zone, RegExp]> = [
+  ["place", /^(ubicacion|lugar|direccion|donde|recinto|location|place|venue|where|address)$/],
+  ["time", /^(horario|hora|horas|apertura|time|hours|doors|schedule)$/],
+  ["entry", /^(entrada|entradas|entrada general|tickets?|entry|admission|cover)$/],
+  ["price", /^(precio|valor|price|cost)$/],
+  ["date", /^(fecha|dia|cuando|date|day|when)$/],
+];
+const ADDRESS = /\b(?:av|avda|avenida|calle|pasaje|psje|camino|street|st|road|rd|avenue|ave)\.?\s+\p{L}.*\d/iu;
+const ZONE_WORDS: Partial<Record<Zone, RegExp>> = {
+  title: /\b(nombre|titulo|name|title)\b/,
+  date: /\b(fecha|dia|date|day)\b/,
+  time: /\b(hora|horario|time|hours?)\b/,
+  place: /\b(lugar|ubicacion|direccion|place|venue|location|address)\b/,
+  entry: /\b(entrada|entradas|precio|valor|entry|tickets?|price|cover)\b/,
+  price: /\b(precio|valor|entrada|price|cost|entry|tickets?)\b/,
+};
+const NEGATION = /\b(no|sin|without|none|not|ningun|ninguna|ninguno)\b/;
+
+/** The kind of datum a layout line holds: by its label, its look (a time, a price, a date) or as an address. */
+export function dataZoneOf(original: string | undefined): Zone | undefined {
+  if (!original?.trim()) return undefined;
+  const label = normalized(withoutIcon(original));
+  const byLabel = LABEL_ZONES.find(([, pattern]) => pattern.test(label))?.[0];
+  if (byLabel) return byLabel;
+  const kinds = dataKinds(original);
+  if (kinds.length === 1) return kinds[0];
+  return ADDRESS.test(original.normalize("NFD").replace(/[\u0300-\u036f]/g, "")) ? "place" : undefined;
+}
+
+/** Whether one of the owner's messages says the event has no such datum ("no time", "sin precio"). */
+function saidAbsent(zone: Zone, ownerMessages: string[]): boolean {
+  const words = ZONE_WORDS[zone];
+  return !!words && ownerMessages.some((m) => NEGATION.test(normalized(m)) && words.test(normalized(m)));
+}
+
+/**
+ * What the model says about where each text comes from, checked against what was actually said, before anything is
+ * proposed. A text that merges several data (a time and a price in one block) is never passed through: each datum
+ * it holds is asked for. A text claimed from the owner that the owner's messages do not state is missing. A text of
+ * any zone that looks like event data (a time, a price, a date), or that replaces a layout line that does (by its
+ * look, its label or as an address), is event data: it comes from the content reference or the owner, or it is
+ * missing. A datum is absent only when the owner said so: in answer to the question that asked for it (`answering`
+ * holds what that question asked for) or in so many words. Only event data are asked for (the name, date, time,
+ * place, entry, price): any other text (a subtitle, a line of copy) that nobody gave, or that the owner is said to
+ * have written but did not, is dropped, never asked for and never invented. A chip copied from the layout is left
+ * for the provider to infer from the kind of event.
+ */
+export function checkSources(texts: PosterText[], ownerMessages: string[], answering: string[] = []): PosterText[] {
+  return texts.flatMap((given): PosterText[] => {
+    if (!isPlaceable(given)) return [given];
+    if (given.zone === "chip") return [given.from === "layout" ? { ...given, text: "", from: "content" } : given];
+    const originalKinds = given.original ? dataKinds(given.original) : [];
+    const originalZone = given.zone === "label" || given.zone === "footer" ? undefined : dataZoneOf(given.original);
+    const t: PosterText & { zone: Zone } = !isData(given) && originalZone ? { ...given, zone: originalZone } : given;
+    const asked = isData(t) || dataKinds(t.text).length > 0 || originalKinds.length > 1;
+    const missing = (zone: Zone): PosterText => ({ ...t, zone, text: "", from: "missing", ...(zone === t.zone ? {} : { original: undefined, line: undefined, date: undefined }) });
+    const perKind = (kinds: Zone[]) => kinds.map((kind) => ({ ...missing(kind), original: undefined, date: undefined }));
+    const dropped: PosterText = { ...t, text: "", from: "absent" };
+    if (t.from === "absent") {
+      const confirmed = answering.includes(t.zone) || (t.original !== undefined && answering.includes(t.original)) || saidAbsent(t.zone, ownerMessages);
+      if (!asked || confirmed) return [t];
+      return originalKinds.length > 1 ? perKind(originalKinds) : [missing(t.zone)];
+    }
+    if (!asked && (t.from === "missing" || (t.text.trim() === "" && t.from !== "layout"))) return [dropped];
+    if (t.from === "missing" || t.text.trim() === "") return originalKinds.length > 1 ? perKind(originalKinds) : [{ ...t, from: "missing", text: "" }];
+    const kinds = dataKinds(t.text);
+    if (kinds.length > 1) return perKind(kinds);
+    if (t.from === "owner" && !statedByOwner(t.text, ownerMessages)) return [asked ? missing(t.zone) : dropped];
+    if ((kinds.length === 1 || originalZone) && t.from === "layout" && t.zone !== "label" && t.zone !== "footer") return [missing(t.zone)];
+    return [t];
+  });
 }
 
 /** The label of a value the event does not have goes with it: a caption over nothing. */

@@ -28,6 +28,10 @@ import {
   withWeekday,
   type PlacedText,
   type PosterText,
+  checkSources,
+  dataKinds,
+  statedByOwner,
+  dataZoneOf,
 } from "./recreate-reference.js";
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "profiles", "example");
@@ -298,5 +302,120 @@ const lines = [
   const measured = measureTexts(labelled, lines);
   assert.equal(measured.length, 2, "absent texts are kept to be erased, though empty");
   assert.equal(placePoster(undefined, "0123456789abcdef", measured, canvas, brand).objects.length, 1, "but never placed as texts");
+}
+{
+  assert.deepEqual(dataKinds("Apertura desde las 21:00 hrs"), ["time"]);
+  assert.deepEqual(dataKinds("21 hrs"), ["time"]);
+  assert.deepEqual(dataKinds("20.10 hrs"), ["time"], "a time with a dot is not a date");
+  assert.deepEqual(dataKinds("$5.000 CLP"), ["price"], "thousands are not a time");
+  assert.deepEqual(dataKinds("5.000 CLP"), ["price"]);
+  assert.deepEqual(dataKinds("26.09"), ["date"]);
+  assert.deepEqual(dataKinds("SÁB 26 SEP"), ["date"]);
+  assert.deepEqual(dataKinds("26.09.2026 A LAS 21:30HRS"), ["date", "time"]);
+  assert.deepEqual(dataKinds("Echo! A Tribute Night"), []);
+
+  assert.ok(statedByOwner("The hall", ["this poster, at the hall please"]), "case-insensitive");
+  assert.ok(statedByOwner("Sala Ñandú", ["en la sala nandu"]), "accent-insensitive");
+  assert.ok(statedByOwner("21:00 hrs", ["empieza a las 21"]), "minutes of zero need not be written");
+  assert.ok(statedByOwner("$5.000", ["cuesta 5000"]), "thousands with or without separator");
+  assert.ok(!statedByOwner("$5.000", ["cuesta 4000"]));
+  assert.ok(!statedByOwner("North presenta el mejor tributo a The Sample Band", ["genera este afiche pero con este evento"]), "invented copy");
+
+  // The case seen in acceptance: one body holding place, time and price, claimed from an owner who said none of it.
+  const merged = checkSources(
+    [
+      { zone: "title", text: "Echo! A Tribute Night", from: "content", original: "Old title" },
+      { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner", original: "Old subtitle" },
+      {
+        zone: "body",
+        text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 hrs\n\nEntrada General\n$5.000 CLP",
+        from: "owner",
+        original: "Ubicación\nOld bar\n\nHorario\nApertura desde las 20:00 hrs\n\nEntrada General\n$4.000 CLP",
+      },
+      { zone: "chip", text: "BAR", from: "content" },
+    ],
+    ["genera este afiche pero con este evento"],
+  );
+  assert.deepEqual(
+    merged.map((t) => [t.zone, t.text, t.from]),
+    [
+      ["title", "Echo! A Tribute Night", "content"],
+      ["subtitle", "", "absent"],
+      ["price", "", "missing"],
+      ["time", "", "missing"],
+      ["chip", "BAR", "content"],
+    ],
+    "merged data are split into one question each; copy the owner never wrote is dropped, not asked for",
+  );
+  assert.deepEqual(missingData(merged).map((m) => m.zone), ["price", "time"], "so the owner is asked for data only, nothing is generated");
+
+  // The owner's answer in that conversation: the time keeps the layout's wording around the owner's digits.
+  const owner = ["genera este afiche pero con este evento", "abre a las 21:00 y la entrada general cuesta $5.000"];
+  assert.ok(statedByOwner("Apertura desde las 21:00 hrs", owner), "a time needs only its digits from the owner");
+  assert.ok(statedByOwner("$5.000 CLP", owner), "a price too");
+  assert.ok(!statedByOwner("Apertura desde las 22:00 hrs", owner), "but the right digits");
+  assert.ok(!statedByOwner("North Bar", owner), "a place needs its words");
+  const answered = checkSources(
+    [
+      { zone: "title", text: "Echo! A Tribute Night", from: "content" },
+      { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
+      { zone: "time", text: "Apertura desde las 21:00 hrs", from: "owner" },
+      { zone: "price", text: "$5.000 CLP", from: "owner" },
+      { zone: "body", text: "", from: "missing", original: "Old line of copy" },
+      { zone: "subtitle", text: "A Tribute Night", from: "content" },
+    ],
+    owner,
+  );
+  assert.deepEqual(
+    answered.map((t) => [t.zone, t.from]),
+    [["title", "content"], ["subtitle", "absent"], ["time", "owner"], ["price", "owner"], ["body", "absent"], ["subtitle", "content"]],
+  );
+  assert.deepEqual(missingData(answered), [], "the answer completes the poster: a subtitle or a line of copy is never asked for");
+
+  const checked = checkSources(
+    [
+      { zone: "body", text: "21:30 hrs", from: "layout" },
+      { zone: "body", text: "Doors open early", from: "content" },
+      { zone: "time", text: "21:30 hrs", from: "owner" },
+      { zone: "place", text: "The hall", from: "owner" },
+      { zone: "label", text: "Horario", from: "layout" },
+    ],
+    ["at the hall", "starts 21:30"],
+  );
+  assert.deepEqual(
+    checked.map((t) => t.from),
+    ["missing", "content", "owner", "owner", "layout"],
+    "a text that looks like data is event data in any zone; what the owner stated stays theirs; labels stay",
+  );
+}
+{
+  // Replay of a live model output: the values under three field labels claimed absent, though nobody said so.
+  const replay = [
+    { zone: "date" as const, text: "SÁB 26 SEP", from: "content" as const, original: "JUEVES 24 SEP", date: "2026-09-26" },
+    { zone: "title" as const, text: "Echo! A Tribute Night", from: "content" as const, original: "Thursday Club Night" },
+    { zone: "subtitle" as const, text: "North presenta Echo! A Tribute Night", from: "content" as const, original: "A tribute and a stand-up set" },
+    { zone: "body" as const, text: "", from: "absent" as const, original: "Ubicación" },
+    { zone: "body" as const, text: "", from: "absent" as const, original: "Horario" },
+    { zone: "body" as const, text: "", from: "absent" as const, original: "Entrada General" },
+  ];
+  const first = checkSources(replay, ["genera este afiche pero con este evento"]);
+  assert.deepEqual(
+    first.slice(3).map((t) => [t.zone, t.from]),
+    [["place", "missing"], ["time", "missing"], ["entry", "missing"]],
+    "a body under a place, time or entry label is that datum; absent is not taken from the model's word",
+  );
+  assert.deepEqual(missingData(first).map((m) => m.zone), ["place", "time", "entry"], "so the owner is asked before anything is generated");
+
+  const answered = checkSources(replay, ["genera este afiche pero con este evento", "no tiene lugar ni hora, entrada liberada"], ["place", "time", "entry"]);
+  assert.deepEqual(answered.slice(3).map((t) => t.from), ["absent", "absent", "absent"], "absent stands in answer to the question that asked for it");
+  assert.deepEqual(checkSources([{ zone: "time", text: "", from: "absent" }], ["this one has no time"]).map((t) => t.from), ["absent"], "or when the owner says so");
+
+  assert.equal(dataZoneOf("Old Hall Theatre Bar · Av. Ejemplo 123"), "place", "an address line is a place");
+  assert.equal(dataZoneOf("Apertura desde las 20:00 hrs"), "time");
+  assert.equal(dataZoneOf("$4.000 CLP"), "price");
+  assert.equal(dataZoneOf("Tributo Oficial a The Other Band"), undefined);
+  const moved = checkSources([{ zone: "body", text: "", from: "absent", original: "$4.000 CLP" }], ["hi"]);
+  assert.deepEqual(moved.map((t) => [t.zone, t.from]), [["price", "missing"]], "a line whose original is a price is the price, whatever zone the model gave it");
+  assert.deepEqual(checkSources([{ zone: "chip", text: "SERIES 01 · CLUB", from: "layout" }], []).map((t) => t.text), [""], "a chip copied from the layout is inferred instead");
 }
 console.log("ok - recreate-reference");

@@ -20,6 +20,7 @@ import {
   numberedLines,
   measureTexts,
   missingData,
+  checkSources,
   placePoster,
   refineTexts,
   register,
@@ -132,6 +133,8 @@ function toProposal(
   activeSlideId: string | undefined,
   request: string,
   layoutRead: LayoutRead,
+  ownerMessages: string[],
+  answering: string[],
 ): { text: string; rejected: string } | { text: string; actions: ChatAction[] } | { text: string; asksFor: string[] } {
   const body = (raw ?? {}) as { text?: unknown; actions?: unknown };
   const text = typeof body.text === "string" ? body.text : "";
@@ -152,7 +155,9 @@ function toProposal(
       }
       const action = resolveAction(ctx, parsed);
       if (action.type === "compose_from_reference") {
-        return proposeRecreation(ctx, action, references, accepts, activeSlideId, request, layoutRead);
+        // Where each text comes from is checked against what was said, not taken from the model's word.
+        const checked = { ...action, texts: checkSources(action.texts, ownerMessages, answering) };
+        return proposeRecreation(ctx, checked, references, accepts, activeSlideId, request, layoutRead);
       }
       if (action.type !== "generate_visual") return action;
       const asImage = references.filter((r) => accepts(action.kind, r.mime));
@@ -392,15 +397,15 @@ async function runProposal(
 }
 
 /**
- * The references a message without its own answers with: those of the message whose answer asked the owner for
- * missing data, so the reply to that question composes the same poster.
+ * The message a message without references answers: the one whose answer asked the owner for missing data, so the
+ * reply to that question composes the same poster, from its references and with its request.
  */
-function awaitedReferences(history: ChatRecord[]): ChatReference[] {
+function awaitedMessage(history: ChatRecord[]): { text: string; references: ChatReference[]; asksFor: string[] } | undefined {
   const asked = history.map((r) => r.role).lastIndexOf("assistant");
   const answer = history[asked];
-  if (answer?.role !== "assistant" || !answer.asksFor) return [];
+  if (answer?.role !== "assistant" || !answer.asksFor) return undefined;
   const message = history.slice(0, asked).reverse().find((r) => r.role === "user" && r.text !== "");
-  return message?.role === "user" ? (message.references ?? []) : [];
+  return message?.role === "user" && message.references?.length ? { text: message.text, references: message.references, asksFor: answer.asksFor } : undefined;
 }
 
 export function chatRouter(
@@ -445,7 +450,10 @@ export function chatRouter(
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
 
       const history = readChatLog(store, req.params.id);
-      const references = attached.length > 0 ? attached : awaitedReferences(history);
+      const awaited = attached.length > 0 ? undefined : awaitedMessage(history);
+      const references = attached.length > 0 ? attached : (awaited?.references ?? []);
+      // The answer to a question completes the message that asked for the poster: the provider hears both.
+      const request = awaited ? `${awaited.text}\n${text}` : text;
       const ctx = withReferences(buildChatContext(store, req.params.id), references);
       const generator = getGenerator(req.params.slug);
       const images = loadReferenceImages(store, references.map((r) => r.id));
@@ -467,8 +475,10 @@ export function chatRouter(
         references.map((r, i) => ({ ...r, mime: images[i]!.mime })),
         (kind, mime) => generator.acceptsReference(kind, mime),
         typeof activeSlideId === "string" ? activeSlideId : undefined,
-        text,
+        request,
         layoutRead,
+        [...history.flatMap((r) => (r.role === "user" && r.text !== "" ? [r.text] : [])), text],
+        awaited?.asksFor ?? [],
       );
       const assistant = appendChatRecord(store, req.params.id, {
         role: "assistant",
