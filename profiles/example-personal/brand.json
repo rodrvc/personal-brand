@@ -26,6 +26,16 @@
     "handwritten": "Georgia, serif"
   },
 
+  "typography": {
+    "chip": { "font": "body", "color": "surface" },
+    "title": { "font": "handwritten", "color": "onSurface" },
+    "subtitle": { "font": "body", "color": "accent" },
+    "data": { "font": "body", "color": "onSurface" },
+    "label": { "font": "body", "color": "onSurfaceMuted" },
+    "footer": { "font": "body", "color": "onSurfaceMuted" }
+  },
+  "typeScale": [20, 24, 28, 32, 40, 48, 56, 64, 72, 88, 104, 120, 144],
+
   "radius": { "card": "10px" },
 
   "copy": {

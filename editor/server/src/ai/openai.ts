@@ -204,7 +204,7 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       model: IMAGE_MODEL,
       prompt,
       quality: reproduce ? "high" : "low",
-      size: cutout ? "1024x1024" : pickSize(spec.canvas),
+      size: cutout ? "1024x1024" : reproduce ? sizeHolding(spec.canvas) : pickSize(spec.canvas),
       n: "1",
       ...(cutout ? { background: "transparent", output_format: "png" } : {}),
     };
@@ -218,9 +218,11 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       const form = new FormData();
       for (const [key, value] of Object.entries(fields)) form.append(key, value);
       references.forEach(({ id, file }, i) => {
-        // The output size is fixed by the provider, so the base image is letterboxed to it rather than stretched.
+        // The provider's sizes do not include the slide's proportion: the base image is letterboxed to the slide, then
+        // to the provider's size. The provider does not keep that letterbox exactly, so the caller registers the result.
         const [w, h] = fields.size!.split("x").map(Number) as [number, number];
-        const bytes = reproduce && i === 0 ? padToSize(file!.bytes, w, h) : file!.bytes;
+        const pad = spec.padColor ?? "FFFFFF";
+        const bytes = reproduce && i === 0 ? padToSize(padToSize(file!.bytes, spec.canvas.w, spec.canvas.h, pad), w, h, pad) : file!.bytes;
         const mime = reproduce && i === 0 ? "image/png" : file!.mime;
         form.append("image[]", new Blob([new Uint8Array(bytes)], { type: mime }), `${id}.${mime.split("/")[1]}`);
       });
@@ -239,8 +241,9 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       throw new Error("OpenAI image generation response had no b64_json payload.");
     }
 
+    const generated = Buffer.from(b64, "base64");
     return {
-      buffer: Buffer.from(b64, "base64"),
+      buffer: generated,
       mime: "image/png",
       model: IMAGE_MODEL,
       costCents: estimateImageCostFromUsage(json.usage),
@@ -250,6 +253,16 @@ export class OpenAiPieceGenerator implements PieceGenerator {
 }
 
 /** OpenAI's image endpoint only accepts a fixed set of sizes; pick the closest aspect to the carousel canvas (portrait 4:5). */
+const SIZES: Array<[number, number]> = [[1024, 1024], [1024, 1536], [1536, 1024]];
+
+/** The provider size that holds the largest region of the slide's proportion. */
+function sizeHolding(canvas: { w: number; h: number }): string {
+  const aspect = canvas.w / canvas.h;
+  const area = ([w, h]: [number, number]) => Math.min(w, h * aspect) * Math.min(h, w / aspect);
+  const [w, h] = SIZES.reduce((best, size) => (area(size) > area(best) ? size : best));
+  return `${w}x${h}`;
+}
+
 function pickSize(canvas: { w: number; h: number }): string {
   return canvas.h > canvas.w ? "1024x1536" : "1536x1024";
 }

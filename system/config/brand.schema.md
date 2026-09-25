@@ -161,6 +161,8 @@ completo y ficticio de las cuatro secciones.
                "onSurface": "...", "onSurfaceMuted": "...",
                "flourish": "...", "highlight": "..." },
   "fonts":   { "logo": "...", "body": "...", "handwritten": "..." },
+  "typography": { "<rol de texto>": { "font": "<clave de fonts>", "color": "<rol de color>" } },
+  "typeScale": [20, 24, 32, 48, 64, 88, 120],
   "googleFontsHref": "https://fonts.googleapis.com/css2?...",
   "radius":  { "card": "12px" },
 
@@ -175,6 +177,19 @@ completo y ficticio de las cuatro secciones.
              "weekRangeCrossMonth": "..." }
 }
 ```
+
+### `typography` y `typeScale` (opcionales)
+
+Los usa el chat del editor al recrear un afiche desde una referencia: cada
+texto se coloca como objeto editable con la fuente y el color de su rol.
+
+- `typography.<rol>`: `font` es una clave de `fonts` (`logo`, `body`,
+  `handwritten`) y `color`, un rol de `roles`. Roles de texto: `chip`,
+  `title`, `subtitle`, `data` (fecha, hora, lugar, entrada), `label` (la
+  etiqueta sobre un dato) y `footer`. Un rol sin declarar usa `body` y un
+  color por defecto (ver `system/ig-carousel/typography.ts`).
+- `typeScale`: tamaños en px sobre el lienzo de 1080 de ancho. El tamaño
+  medido en la referencia se ajusta al paso más cercano.
 
 ## Núcleo obligatorio vs bloques por template
 

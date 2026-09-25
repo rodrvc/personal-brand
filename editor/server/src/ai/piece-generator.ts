@@ -74,6 +74,7 @@ export interface GenerateImageSpec {
   brand?: GenerateImageBrandContext;
   referenceAssetIds?: string[];
   mode?: "brand" | "reproduce";
+  padColor?: string;
 }
 
 export interface GeneratedImage {
