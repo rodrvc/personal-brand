@@ -11,6 +11,7 @@ import {
   ObjectNotFoundError,
   PreconditionFailedError,
   type GetResult,
+  type GetStreamResult,
   type HeadResult,
   type ListedObject,
   type ObjectStore,
@@ -48,11 +49,12 @@ function isNotFound(error: unknown): boolean {
   return name === "NoSuchKey" || name === "NotFound" || shaped?.$metadata?.httpStatusCode === 404;
 }
 
+/** Matches only a real conditional-write rejection — PreconditionFailed/ConditionalRequestConflict or a bare HTTP 412. A plain 409 is used by some S3-compatible backends for unrelated conflicts and must not be swallowed as a lost ifMatch/ifNoneMatch race. */
 function isPreconditionFailed(error: unknown): boolean {
   const shaped = error as AwsErrorShape;
   const name = shaped?.Code ?? shaped?.name;
-  const status = shaped?.$metadata?.httpStatusCode;
-  return name === "PreconditionFailed" || status === 412 || status === 409;
+  if (name === "PreconditionFailed" || name === "ConditionalRequestConflict") return true;
+  return shaped?.$metadata?.httpStatusCode === 412;
 }
 
 function normalizeEtag(etag: string | undefined): string {
@@ -83,6 +85,17 @@ export class S3ObjectStore implements ObjectStore {
       const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
       const body = await bodyToBuffer(result.Body);
       return { body, etag: normalizeEtag(result.ETag) };
+    } catch (error) {
+      if (isNotFound(error)) throw new ObjectNotFoundError(key);
+      throw error;
+    }
+  }
+
+  /** Streams the body instead of buffering it whole — the lazy-media on-demand fetch path. */
+  async getStream(key: string): Promise<GetStreamResult> {
+    try {
+      const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      return { stream: result.Body as AsyncIterable<Buffer>, etag: normalizeEtag(result.ETag) };
     } catch (error) {
       if (isNotFound(error)) throw new ObjectNotFoundError(key);
       throw error;
