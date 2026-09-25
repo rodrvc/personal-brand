@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 
 import type { ObjectStore } from "./object-store.js";
 import { ObjectNotFoundError, PreconditionFailedError } from "./object-store.js";
@@ -118,18 +119,98 @@ function listLocalFiles(root: string): string[] {
   return results;
 }
 
+/** Rejects a relative path that could escape its mirror root — `..` segments, an absolute path, or a null byte — before it is ever joined onto a local directory. `syncDown` derives `relPath` straight from a remote object key, so a bucket returning a hostile key must not be trusted to stay inside the mirror. */
+function assertSafeRelPath(relPath: string): void {
+  if (isAbsolute(relPath)) {
+    throw new Error(`Refusing an absolute path from a remote key: "${relPath}"`);
+  }
+  const segments = relPath.split(/[/\\]/);
+  if (segments.some((segment) => segment === "..")) {
+    throw new Error(`Refusing a path that escapes its root with "..": "${relPath}"`);
+  }
+  if (relPath.includes("\0")) {
+    throw new Error(`Refusing a path with a null byte: "${relPath}"`);
+  }
+}
+
+/** Defence in depth behind `assertSafeRelPath`: the resolved local path must still land inside `root` once symlink-free path math is done. */
+function assertWithinRoot(candidate: string, root: string): void {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
+  if (resolvedCandidate !== resolvedRoot && !resolvedCandidate.startsWith(rootWithSep)) {
+    throw new Error(`Refusing a path that resolves outside the mirror root: "${candidate}"`);
+  }
+}
+
+/** True when `localPath` already has content that hasn't been synced up yet — a local edit `syncDown` must not clobber. A missing manifest entry for an existing local file is treated the same as a known mismatch (unknown provenance, never assumed safe to overwrite). */
+function hasUnsyncedLocalEdit(localPath: string, manifestEntry: ManifestEntry | undefined): boolean {
+  if (!existsSync(localPath)) return false;
+  if (!manifestEntry) return true;
+  return sha256(readFileSync(localPath)) !== manifestEntry.hash;
+}
+
 /**
- * Downloads every object under `<prefix><slug>/` whose remote etag differs
- * from the manifest into the local mirror, and records the new etag/hash.
- * Never deletes a local file that disappeared remotely — this is hydration,
- * not a mirror reset, so it can't destroy a bypass writer's in-flight work.
+ * Large, rarely-needed-on-open media under a resolved output's `_outputs/`
+ * area (a rendered image/video) is excluded from eager `syncDown` by
+ * default, fetched on demand instead via `fetchObjectOnDemand` — so opening
+ * a profile for the first time doesn't pull its whole export history
+ * before the editor can even show a carousel list. Generic (no brand
+ * literal) and overridable via `S3_MIRROR_LAZY_MEDIA_EXTENSIONS`.
+ */
+export const DEFAULT_LAZY_MEDIA_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".m4v"];
+
+function isLazyOutput(relPath: string, config: S3StorageConfig): boolean {
+  const extensions = config.lazyMediaExtensions ?? DEFAULT_LAZY_MEDIA_EXTENSIONS;
+  const lower = relPath.toLowerCase();
+  return extensions.some((ext) => lower.endsWith(ext));
+}
+
+export interface SyncDownResult {
+  downloaded: number;
+  /** A remote object whose local counterpart had an unsynced edit, or whose key failed the path-safety check — skipped rather than overwritten or fetched. */
+  conflicts: number;
+  /** A remote object matched the lazy-media rule and was left for `fetchObjectOnDemand` to pull later. */
+  skippedLazy: number;
+}
+
+const inFlightSyncDown = new Map<string, Promise<SyncDownResult>>();
+
+/**
+ * Downloads every non-lazy object under `<prefix><slug>/` whose remote etag
+ * differs from the manifest into the local mirror, and records the new
+ * etag/hash. Never deletes a local file that disappeared remotely — this is
+ * hydration, not a mirror reset, so it can't destroy a bypass writer's
+ * in-flight work.
+ *
+ * At most one `syncDown` per (cache dir, bucket, slug) runs at a time — a
+ * second caller while one is already in flight (e.g. two requests for the
+ * same profile landing back to back through `hydrateIfStale`) is handed the
+ * same in-flight promise instead of starting a redundant full listing.
  */
 export async function syncDown(
   store: ObjectStore,
   config: S3StorageConfig,
   cacheDir: string,
   slug: string,
-): Promise<void> {
+): Promise<SyncDownResult> {
+  const dedupeKey = `${cacheDir}\u0000${config.bucket}\u0000${slug}`;
+  const existing = inFlightSyncDown.get(dedupeKey);
+  if (existing) return existing;
+
+  const promise = runSyncDown(store, config, cacheDir, slug).finally(() => {
+    inFlightSyncDown.delete(dedupeKey);
+  });
+  inFlightSyncDown.set(dedupeKey, promise);
+  return promise;
+}
+
+async function runSyncDown(
+  store: ObjectStore,
+  config: S3StorageConfig,
+  cacheDir: string,
+  slug: string,
+): Promise<SyncDownResult> {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
   const remotePrefix = `${config.prefix}${slug}/`;
   const objects = await store.list(remotePrefix);
@@ -139,8 +220,13 @@ export async function syncDown(
   // update.
   const manifestSnapshot = loadManifest(roots.manifestPath);
 
+  let downloaded = 0;
+  let conflicts = 0;
+  let skippedLazy = 0;
+
   for (const object of objects) {
-    if (manifestSnapshot[object.key]?.etag === object.etag) continue;
+    const manifestEntry = manifestSnapshot[object.key];
+    if (manifestEntry?.etag === object.etag) continue;
 
     const isOutput = object.key.startsWith(`${remotePrefix}${OUTPUTS_MARKER}`);
     const relPath = isOutput
@@ -148,12 +234,43 @@ export async function syncDown(
       : object.key.slice(remotePrefix.length);
     if (!relPath) continue;
 
+    try {
+      assertSafeRelPath(relPath);
+    } catch (error) {
+      conflicts++;
+      console.error(`syncDown: refusing key "${object.key}" for profile "${slug}": ${(error as Error).message}`);
+      continue;
+    }
+
+    if (isOutput && isLazyOutput(relPath, config)) {
+      skippedLazy++;
+      continue;
+    }
+
+    const mirrorRoot = isOutput ? roots.outputsMirrorRoot : roots.profileMirrorRoot;
     const localPath = join(isOutput ? roots.outputsDir : roots.profileDir, relPath);
+    try {
+      assertWithinRoot(localPath, mirrorRoot);
+    } catch (error) {
+      conflicts++;
+      console.error(`syncDown: refusing key "${object.key}" for profile "${slug}": ${(error as Error).message}`);
+      continue;
+    }
+
+    if (hasUnsyncedLocalEdit(localPath, manifestEntry)) {
+      conflicts++;
+      console.warn(`syncDown: "${relPath}" has an unsynced local edit for profile "${slug}" — keeping local, not overwriting from the bucket.`);
+      continue;
+    }
+
     const { body } = await store.get(object.key);
     mkdirSync(dirname(localPath), { recursive: true });
     writeFileSync(localPath, body);
     patchManifestEntry(roots.manifestPath, object.key, { etag: object.etag, hash: sha256(body) });
+    downloaded++;
   }
+
+  return { downloaded, conflicts, skippedLazy };
 }
 
 /**
@@ -168,16 +285,25 @@ export async function syncDown(
  * it isn't (including a missing/corrupt manifest — "no entry" is never
  * treated as "safe to overwrite unconditionally"). A precondition failure
  * means the bucket has a newer write this manifest never saw; that local
- * file is left alone rather than clobbering it.
+ * file is left alone rather than clobbering it, and counted as a conflict.
  */
+export interface SyncUpResult {
+  uploaded: number;
+  /** A local file whose upload lost a race against a newer remote write — left alone; the next `syncDown` picks up the remote copy. */
+  conflicts: number;
+}
+
 export async function syncUp(
   store: ObjectStore,
   config: S3StorageConfig,
   cacheDir: string,
   slug: string,
-): Promise<void> {
+): Promise<SyncUpResult> {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
   const manifestSnapshot = loadManifest(roots.manifestPath);
+
+  let uploaded = 0;
+  let conflicts = 0;
 
   const areas: Array<["profile" | "outputs", string]> = [
     ["profile", roots.profileDir],
@@ -200,8 +326,10 @@ export async function syncUp(
         const nextEntry = { etag: result.etag, hash };
         patchManifestEntry(roots.manifestPath, key, nextEntry);
         manifestSnapshot[key] = nextEntry;
+        uploaded++;
       } catch (error) {
         if (error instanceof PreconditionFailedError) {
+          conflicts++;
           console.warn(`syncUp: "${key}" changed remotely since the last sync for profile "${slug}" — not overwriting; the next syncDown will pick up the remote copy.`);
           continue;
         }
@@ -209,6 +337,50 @@ export async function syncUp(
       }
     }
   }
+
+  return { uploaded, conflicts };
+}
+
+/**
+ * Fetches one object on demand into the local mirror, streaming straight to
+ * disk (the response body is never buffered whole in memory) rather than
+ * through `syncDown`'s eager, list-everything pass — the other half of the
+ * lazy-media exclusion above: a caller that actually needs one specific
+ * excluded file (an old export's PNG) calls this instead of waiting for a
+ * full resync. Runs the same path-safety checks `syncDown` does.
+ */
+export async function fetchObjectOnDemand(
+  store: ObjectStore,
+  config: S3StorageConfig,
+  cacheDir: string,
+  slug: string,
+  area: "profile" | "outputs",
+  relPath: string,
+): Promise<string> {
+  assertSafeRelPath(relPath);
+  const roots = resolveMirrorRoots(config, cacheDir, slug);
+  const mirrorRoot = area === "outputs" ? roots.outputsMirrorRoot : roots.profileMirrorRoot;
+  const localPath = join(area === "outputs" ? roots.outputsDir : roots.profileDir, relPath);
+  assertWithinRoot(localPath, mirrorRoot);
+
+  const key = objectKeyFor(config, slug, area, relPath);
+  const { stream, etag } = await store.getStream(key);
+
+  mkdirSync(dirname(localPath), { recursive: true });
+  const hasher = createHash("sha256");
+  await pipeline(
+    stream,
+    async function* hashThrough(source: AsyncIterable<Buffer>) {
+      for await (const chunk of source) {
+        hasher.update(chunk);
+        yield chunk;
+      }
+    },
+    createWriteStream(localPath),
+  );
+
+  patchManifestEntry(roots.manifestPath, key, { etag, hash: hasher.digest("hex") });
+  return localPath;
 }
 
 const lastSyncedAt = new Map<string, number>();

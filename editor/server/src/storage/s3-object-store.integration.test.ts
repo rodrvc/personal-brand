@@ -55,6 +55,20 @@ const tests: Array<[string, () => Promise<void>]> = [
     },
   ],
   [
+    "getStream round-trips the same content and etag as get, without buffering it upfront",
+    async () => {
+      const key = `${prefix}stream-me.json`;
+      const put = await store.put(key, Buffer.from("streamed content"));
+      const { stream, etag } = await store.getStream(key);
+      assert.equal(etag, put.etag);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      assert.equal(Buffer.concat(chunks).toString(), "streamed content");
+    },
+  ],
+  [
     "head reports the same etag as get, and errors for a missing key",
     async () => {
       const key = `${prefix}head-me.json`;
