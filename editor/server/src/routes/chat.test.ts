@@ -300,7 +300,9 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
       assert.deepEqual(user.references.map((r: any) => r.id), [layout.id, content.id], "the answer carries them, for apply");
       const action = assistant.proposal.actions[0];
       assert.deepEqual(action.referenceIds, [layout.id, content.id]);
-      const { event, onDisk } = await applyAndWait(assistant.proposal.id);
+      // The provider repaints the background, so the question flow is checked without macOS image tools.
+      process.env.EDITOR_POSTER_BACKGROUND = "provider";
+      const { event, onDisk } = await applyAndWait(assistant.proposal.id).finally(() => delete process.env.EDITOR_POSTER_BACKGROUND);
       assert.equal(event.kind, "done", event.error);
       const texts = onDisk.slides[0].objects.filter((o: any) => o.kind === "text").map((o: any) => o.text);
       assert.deepEqual(texts, ["New event", "Place", "The hall", "Free"], "the time the event does not have is removed, not placed");
