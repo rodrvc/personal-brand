@@ -38,7 +38,7 @@ import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableE
 import { readTextLines, type TextLine } from "../text-boxes.js";
 import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
-import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
+import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
 import { messages } from "../messages.js";
@@ -494,7 +494,7 @@ async function runProposalBody(
     const before = notPlaced(store, validation.document, results);
     if (before) throw new Error(messages.proposal.imageNotPlaced(before.slide, before.image));
     const documentVersion = snapshotDocument(store, carouselId);
-    writeDocument(store, validation.document);
+    await writeDocumentThroughRevision(store, validation.document);
     const after = notPlaced(store, readValidatedDocument(store, carouselId), results);
     if (after) throw new Error(messages.proposal.imageRemovedMeanwhile(after.slide, after.image));
     await appendChatRecord(store, carouselId, {

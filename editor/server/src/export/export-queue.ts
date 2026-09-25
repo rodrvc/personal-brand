@@ -11,7 +11,7 @@ import { hashContent, loadIndex, updateEntry } from "../../../../system/assets/i
 
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { buildExportRenderContext } from "../render-context.js";
-import { readValidatedDocument, writeDocument } from "../document-store.js";
+import { readValidatedDocument, writeDocumentThroughRevision } from "../document-store.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
 import { ProfileStore } from "../profile-store.js";
 
@@ -268,7 +268,7 @@ async function runExportBody(store: ProfileStore, doc: CarouselDocument, job: Ex
       }
     }
     if (doc.status === "draft") {
-      writeDocument(store, { ...doc, status: "exported", updatedAt: new Date().toISOString() });
+      await writeDocumentThroughRevision(store, { ...doc, status: "exported", updatedAt: new Date().toISOString() });
     }
 
     job.status = "done";

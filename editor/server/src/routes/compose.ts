@@ -23,7 +23,7 @@ import {
   DocumentStoreError,
   readValidatedDocument,
   snapshotDocument,
-  writeDocument,
+  writeDocumentThroughRevision,
 } from "../document-store.js";
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { estimateImageCostCents, IMAGE_MODEL } from "../ai/pricing.js";
@@ -66,7 +66,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
    * second step. Nothing in editor/web calls either path; the web UI only
    * ever sends `{ title, templateId }`.
    */
-  router.post("/api/profiles/:slug/carousels", (req, res) => {
+  router.post("/api/profiles/:slug/carousels", async (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
       const body = req.body as {
@@ -133,7 +133,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const brand = loadBrand(store.roots.profileDir);
       if (templateId !== null) void loadLayoutTemplate(store.roots.profileDir, templateId, brand);
       const document = buildEmptyDocument(templateId ?? undefined, carouselId, body.title);
-      writeDocument(store, document);
+      await writeDocumentThroughRevision(store, document, { create: true });
 
       res.status(201).json({ document });
     } catch (error) {
@@ -166,7 +166,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       // Persisted immediately: `applyCompositionPlan` already drafted and
       // wrote copy plus every `library`-sourced visual, so a failure in the
       // generation loop below must not lose that work on retry either.
-      writeDocument(store, document);
+      await writeDocumentThroughRevision(store, document);
 
       // Generate every visual slot the plan marked "generate" — done here,
       // after the client confirmed the cost the POST /carousels response
@@ -186,7 +186,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
           if (visual.source !== "generate") continue;
           // A retried `plan/apply` call replays the same `plan.visualSlots`
           // list; slots a previous, partially-failed run already generated
-          // and persisted (see the `writeDocument` inside this loop) must be
+          // and persisted (see the `writeDocumentThroughRevision` call inside this loop) must be
           // skipped rather than generated — and paid for — a second time.
           if (isSlotGenerated(document, visual.slideIndex, visual.slot)) continue;
           const entry: AssetEntry = await generateForSlot(store, generator, {
@@ -197,7 +197,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
             slot: visual.slot,
           });
           document = attachGeneratedAsset(brand, document, visual.slideIndex, visual.slot, entry.id);
-          writeDocument(store, document);
+          await writeDocumentThroughRevision(store, document);
         }
       } catch (error) {
         // Whatever slots succeeded before the failure are already on disk
@@ -297,7 +297,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
 
-      writeDocument(store, nextDoc);
+      await writeDocumentThroughRevision(store, nextDoc);
       res.json({ document: nextDoc, costCents });
     } catch (error) {
       handlePlanError(error, res);

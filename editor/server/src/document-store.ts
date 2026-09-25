@@ -61,6 +61,34 @@ export function writeDocument(store: ProfileStore, doc: CarouselDocument): void 
 }
 
 /**
+ * Writes a document through `writeJsonIfRevision` instead of the plain,
+ * local-only `writeDocument` above. Every write path that can run
+ * concurrently with an editor PUT (a chat proposal, an export job, the
+ * compose/plan endpoints) must go through here in `s3` mode: `writeDocument`
+ * only touches the local mirror, so the bucket's real revision never
+ * advances, and a PUT that reads the (now stale) bucket revision can
+ * silently clobber this write. `fs` mode behaves exactly as `writeDocument`
+ * always has, since nothing else can write between this read and this write
+ * inside one synchronous request handler.
+ *
+ * `create: true` skips the read and requires the document not to exist yet
+ * (`expectedRevision: null`) — for the "create a brand-new carousel" call
+ * sites, which already checked `documentExists` themselves.
+ */
+export async function writeDocumentThroughRevision(
+  store: ProfileStore,
+  doc: CarouselDocument,
+  options: { create?: boolean } = {},
+): Promise<string> {
+  assertValidCarouselId(doc.id);
+  if (options.create) {
+    return store.writeJsonIfRevision(docRelPath(doc.id), doc, null);
+  }
+  const current = await store.readJsonRevision(docRelPath(doc.id));
+  return store.writeJsonIfRevision(docRelPath(doc.id), doc, current?.revision ?? null);
+}
+
+/**
  * Reads the current document together with an opaque revision token (the
  * bucket's `ETag` in `s3` mode, read straight from the bucket rather than
  * the local mirror; a content hash in `fs` mode) — the pairing
