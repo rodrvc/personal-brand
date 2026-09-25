@@ -1,11 +1,15 @@
 import { Router } from "express";
 
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
-import { applyActions, ChatActionError, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
+import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
+import { generateForSlot } from "../compose/planner.js";
+import { applyAction, ChatActionError, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, CHAT_INSTRUCTIONS } from "../chat/chat-context.js";
-import { appendChatRecord, newChatId, pendingProposal, readChatLog } from "../chat/chat-log.js";
+import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatRecord } from "../chat/chat-log.js";
+import { ChatReferenceError, loadReferenceImages, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
+import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
 import { handleStoreError } from "./profiles.js";
 
 const BASE = "/api/profiles/:slug/carousels/:id/chat";
@@ -14,6 +18,7 @@ const BASE = "/api/profiles/:slug/carousels/:id/chat";
 function toProposal(
   ctx: ReturnType<typeof buildChatContext>,
   raw: unknown,
+  references: ChatReference[],
 ): { text: string; rejected: string } | { text: string; actions: ChatAction[] } {
   const body = (raw ?? {}) as { text?: unknown; actions?: unknown };
   const text = typeof body.text === "string" ? body.text : "";
@@ -25,7 +30,12 @@ function toProposal(
     return { text, rejected: `La propuesta pedía «${String(unknownType)}», que este chat todavía no puede hacer. No se propone nada.` };
   }
   try {
-    const actions = rawActions.map((a) => resolveAction(ctx, modelActionSchema.parse(a)));
+    const actions = rawActions.map((a) => {
+      const action = resolveAction(ctx, modelActionSchema.parse(a));
+      if (action.type !== "generate_visual") return action;
+      const fromReferences = references.map((r) => ({ source: "reference" as const, detail: r.name }));
+      return { ...action, provenance: [...action.provenance, ...fromReferences] };
+    });
     return { text, actions };
   } catch (error) {
     const reason = error instanceof ChatActionError ? error.message : "La propuesta vino mal formada.";
@@ -46,7 +56,11 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
       const log = readChatLog(store, req.params.id);
-      res.json({ records: log, pendingProposalId: pendingProposal(log)?.id ?? null });
+      res.json({
+        records: log,
+        pendingProposalId: pendingProposal(log)?.id ?? null,
+        currency: readProfileCurrency(store.roots.profileDir) ?? { code: "USD", rate: 1 },
+      });
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -54,9 +68,11 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
 
   router.post(`${BASE}/messages`, async (req, res) => {
     try {
-      const text = (req.body as { text?: unknown })?.text;
-      if (typeof text !== "string" || text.trim() === "") {
-        return void res.status(400).json({ error: 'Body must be { "text": string }' });
+      const { text, references = [] } = (req.body ?? {}) as { text?: unknown; references?: ChatReference[] };
+      const wellFormed = (r: unknown) =>
+        typeof (r as ChatReference)?.id === "string" && typeof (r as ChatReference)?.name === "string";
+      if (typeof text !== "string" || text.trim() === "" || !Array.isArray(references) || !references.every(wellFormed)) {
+        return void res.status(400).json({ error: 'Body must be { "text": string, "references"?: [{ id, name }] }' });
       }
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
@@ -65,10 +81,15 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
       const history = readChatLog(store, req.params.id);
       const completion = await getGenerator(req.params.slug).completeJson({
         instructions: CHAT_INSTRUCTIONS,
-        input: chatInput(ctx, history, text),
+        input: chatInput(ctx, history, text, references.map((r) => r.name)),
+        images: loadReferenceImages(store, req.params.id, references.map((r) => r.id)),
       });
-      const user = appendChatRecord(store, req.params.id, { role: "user", text });
-      const outcome = toProposal(ctx, completion.json);
+      const user = appendChatRecord(store, req.params.id, {
+        role: "user",
+        text,
+        ...(references.length > 0 ? { references } : {}),
+      });
+      const outcome = toProposal(ctx, completion.json, references);
       const assistant = appendChatRecord(store, req.params.id, {
         role: "assistant",
         text: "rejected" in outcome ? [outcome.text, outcome.rejected].filter(Boolean).join("\n\n") : outcome.text,
@@ -80,11 +101,28 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
       res.json({ records: [user, assistant] });
     } catch (error) {
       if (error instanceof GenerationUnavailableError) return void res.status(503).json({ error: error.message });
+      if (error instanceof ChatReferenceError) return void res.status(400).json({ error: error.message });
       handleStoreError(error, res);
     }
   });
 
-  router.post(`${BASE}/proposals/:proposalId/apply`, (req, res) => {
+  router.post(`${BASE}/references`, (req, res) => {
+    try {
+      const { name, mime, dataBase64 } = (req.body ?? {}) as { name?: unknown; mime?: unknown; dataBase64?: unknown };
+      if (typeof name !== "string" || typeof mime !== "string" || typeof dataBase64 !== "string") {
+        return void res.status(400).json({ error: 'Body must be { "name", "mime", "dataBase64" }' });
+      }
+      const store = open(req.params.slug, req.params.id);
+      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
+      const id = saveReference(store, req.params.id, mime, Buffer.from(dataBase64, "base64"));
+      res.json({ reference: { id, name } });
+    } catch (error) {
+      if (error instanceof ChatReferenceError) return void res.status(400).json({ error: error.message });
+      handleStoreError(error, res);
+    }
+  });
+
+  router.post(`${BASE}/proposals/:proposalId/apply`, async (req, res) => {
     try {
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
@@ -93,23 +131,64 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
         return void res.status(409).json({ error: "Esa propuesta ya no está pendiente." });
       }
 
-      const { document, results } = applyActions(buildChatContext(store, req.params.id), proposal.actions);
-      const validation = validateAgainstProfile(store, document);
-      if (!validation.valid) {
-        return void res.status(422).json({ error: "The result failed validation", details: validation.errors });
+      const ctx = buildChatContext(store, req.params.id);
+      proposal.actions.forEach((action) => resolveAction(ctx, action));
+      let document = ctx.doc;
+      const results: Extract<ChatRecord, { role: "event" }>["results"] = [];
+      const spent = () => results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
+      try {
+        for (const action of proposal.actions) {
+          if (action.type === "generate_visual") {
+            resolveAction({ ...ctx, doc: document }, action);
+            const entry = await generateForSlot(store, getGenerator(req.params.slug), {
+              prompt: action.prompt,
+              kind: action.kind,
+              canvas: document.canvas,
+              carouselId: req.params.id,
+              slot: action.slot,
+            });
+            const slideIndex = document.slides.findIndex((s) => s.id === action.slideId);
+            document = attachGeneratedAsset(ctx.brand, document, slideIndex, action.slot, entry.id);
+            const costCents = readGeneratedAssetCostCents(store, entry.id);
+            results.push({ actionId: action.id, slideIds: [action.slideId], assetIds: [entry.id], costCents });
+          } else {
+            const applied = applyAction({ ...ctx, doc: document }, action);
+            document = applied.document;
+            results.push({ actionId: action.id, slideIds: applied.slideIds });
+          }
+        }
+        const validation = validateAgainstProfile(store, document);
+        if (validation.valid) {
+          document = validation.document;
+        } else {
+          const [first] = validation.errors;
+          throw new ChatActionError(`El resultado no es válido en "${first!.path}": ${first!.message}`);
+        }
+      } catch (error) {
+        appendChatRecord(store, req.params.id, {
+          role: "event",
+          kind: "failed",
+          proposalId: proposal.id,
+          error: (error as Error)?.message ?? String(error),
+          costCents: spent(),
+          results,
+        });
+        throw error;
       }
       const documentVersion = snapshotDocument(store, req.params.id);
-      writeDocument(store, validation.document);
+      writeDocument(store, document);
       const event = appendChatRecord(store, req.params.id, {
         role: "event",
         kind: "applied",
         proposalId: proposal.id,
         documentVersion,
+        costCents: spent(),
         results,
       });
-      res.json({ document: validation.document, records: [event] });
+      res.json({ document, records: [event] });
     } catch (error) {
       if (error instanceof ChatActionError) return void res.status(409).json({ error: error.message });
+      if (error instanceof GenerationUnavailableError) return void res.status(503).json({ error: error.message });
       handleStoreError(error, res);
     }
   });
