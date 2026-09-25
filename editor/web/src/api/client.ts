@@ -286,21 +286,29 @@ export function sendChatMessage(
   carouselId: string,
   text: string,
   references: ChatReference[],
+  activeSlideId?: string,
 ): Promise<{ records: ChatRecord[] }> {
   return request(`/profiles/${slug}/carousels/${carouselId}/chat/messages`, {
     method: "POST",
-    body: JSON.stringify({ text, references }),
+    body: JSON.stringify({ text, references, ...(activeSlideId ? { activeSlideId } : {}) }),
   });
 }
 
-export async function uploadChatReference(slug: string, carouselId: string, file: File): Promise<ChatReference> {
+const EXTENSION_MIMES: Record<string, string> = { heic: "image/heic", heif: "image/heif" };
+
+export async function uploadChatReference(
+  slug: string,
+  carouselId: string,
+  file: File,
+): Promise<ChatReference & { mime: string; w?: number; h?: number }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  const { reference } = await request<{ reference: ChatReference }>(`/profiles/${slug}/carousels/${carouselId}/chat/references`, {
-    method: "POST",
-    body: JSON.stringify({ name: file.name, mime: file.type, dataBase64: btoa(binary) }),
-  });
+  const mime = file.type || EXTENSION_MIMES[file.name.split(".").pop()?.toLowerCase() ?? ""] || "";
+  const { reference } = await request<{ reference: ChatReference & { mime: string; w?: number; h?: number } }>(
+    `/profiles/${slug}/carousels/${carouselId}/chat/references`,
+    { method: "POST", body: JSON.stringify({ name: file.name, mime, dataBase64: btoa(binary) }) },
+  );
   return reference;
 }
 

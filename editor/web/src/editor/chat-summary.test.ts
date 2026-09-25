@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-import type { CarouselDocument, ChatAction } from "../api/types";
-import { chatSpend, describeIntact } from "./chat-summary";
+import type { CarouselDocument, ChatAction, ChatRecord } from "../api/types";
+import { chatSpend, defaultReferenceRole, describeIntact, runningProposalId } from "./chat-summary";
 
 const doc = {
   slides: ["slide-1", "slide-2", "slide-3", "slide-4"].map((id) => ({ id })),
@@ -38,6 +38,20 @@ const spend = chatSpend([
   { id: "e2", at, role: "event", kind: "applied", proposalId: "p2", costCents: 0, results: [{ actionId: "b", slideIds: [] }] },
   { id: "m", at, role: "assistant", text: "", costCents: 1 },
 ]);
-assert.deepEqual(spend, { totalCents: 4, items: [{ at, costCents: 4 }] });
+assert.deepEqual(spend, {
+  totalCents: 5,
+  items: [
+    { at, costCents: 4, kind: "image" },
+    { at, costCents: 1, kind: "reply" },
+  ],
+});
+
+assert.equal(defaultReferenceRole({ mime: "image/png", w: 1600, h: 2000 }), "layout");
+assert.equal(defaultReferenceRole({ mime: "image/jpeg", w: 1600, h: 2000 }), "content");
+assert.equal(defaultReferenceRole({ mime: "image/png", w: 1125, h: 2000 }), "content");
+
+const started: ChatRecord = { id: "s", at, role: "event", kind: "started", proposalId: "p9", costCents: 0, results: [] };
+assert.equal(runningProposalId([started]), "p9");
+assert.equal(runningProposalId([started, { ...started, id: "d", kind: "done" } as ChatRecord]), undefined);
 
 console.log("ok - chat-summary");

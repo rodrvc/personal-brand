@@ -138,7 +138,10 @@ export function Editor({
   const handleChatLog = useCallback((records: ChatRecord[], currency: Currency) => {
     const { totalCents, items } = chatSpend(records);
     const lines = items.map((item) =>
-      t("statusBar.spendItem", { when: new Date(item.at).toLocaleString(), amount: formatCost(item.costCents, currency) }),
+      t(item.kind === "image" ? "statusBar.spendItem" : "statusBar.spendReply", {
+        when: new Date(item.at).toLocaleString(),
+        amount: formatCost(item.costCents, currency),
+      }),
     );
     setSpend({ total: formatCost(totalCents, currency), breakdown: lines.length > 0 ? lines.join("\n") : t("statusBar.spendNone") });
   }, []);
@@ -196,7 +199,14 @@ export function Editor({
         onExport={() => setShowExportDialog(true)}
       />
       <div className="editor-body">
-        <ChatPanel slug={slug} doc={doc} dirty={dirty} onApplied={handleChatApplied} onLogChange={handleChatLog} />
+        <ChatPanel
+          slug={slug}
+          doc={doc}
+          activeSlideId={activeSlide?.id}
+          dirty={dirty}
+          onApplied={handleChatApplied}
+          onLogChange={handleChatLog}
+        />
         <div className="editor-center">
           <PromptHeader
             doc={doc}

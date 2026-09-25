@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CarouselDocument, ChatProposal, ChatRecord, ChatReference, Currency } from "../api/types";
-import { getChat, resolveProposal, sendChatMessage, uploadChatReference } from "../api/client";
+import { getCarousel, getChat, resolveProposal, sendChatMessage, uploadChatReference } from "../api/client";
 import { t } from "../i18n";
-import { describeAction, describeIntact, describeProvenance } from "./chat-summary";
+import {
+  defaultReferenceRole,
+  describeAction,
+  describeIntact,
+  describeProvenance,
+  formatCost,
+  runningProposalId,
+} from "./chat-summary";
 import "./ChatPanel.css";
 
 const COLLAPSED_STORAGE_PREFIX = "editor-chat-collapsed:";
 const NARROW_QUERY = "(max-width: 1200px)";
+const POLL_MS = 2500;
 
 interface ChatPanelProps {
   slug: string;
   doc: CarouselDocument;
+  activeSlideId?: string;
   /** Unsaved local edits would be overwritten by the server's copy, so applying waits for the save. */
   dirty: boolean;
   onApplied: (next: CarouselDocument) => void;
@@ -24,7 +33,7 @@ function initialCollapsed(doc: CarouselDocument): boolean {
   return stored === null ? doc.slides.length > 0 : stored === "1";
 }
 
-export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPanelProps) {
+export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogChange }: ChatPanelProps) {
   const [collapsed, setCollapsed] = useState(() => initialCollapsed(doc));
   const [records, setRecords] = useState<ChatRecord[]>([]);
   const [pending, setPending] = useState<ChatProposal | null>(null);
@@ -34,19 +43,30 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  // Finished applies (done or failed) already reflected in the editor's document; `null` until the first load.
+  const seenFinished = useRef<Set<string> | null>(null);
 
   const load = useCallback(() => {
     getChat(slug, doc.id)
       .then(({ records: loaded, pendingProposalId, currency: profileCurrency }) => {
-        setRecords(loaded);
+        setRecords((prev) => (prev.length === loaded.length ? prev : loaded));
         setCurrency(profileCurrency);
         const owner = loaded.find((r) => r.role === "assistant" && r.proposal?.id === pendingProposalId);
         setPending(owner?.role === "assistant" && owner.proposal ? owner.proposal : null);
+        const finished = loaded.filter((r) => r.role === "event" && r.kind !== "started").map((r) => r.id);
+        const firstLoad = seenFinished.current === null;
+        const fresh = finished.some((id) => !seenFinished.current?.has(id));
+        seenFinished.current = new Set(finished);
+        if (!firstLoad && fresh) void getCarousel(slug, doc.id).then(onApplied);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [slug, doc.id]);
+  }, [slug, doc.id, onApplied]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => clearInterval(timer);
+  }, [load]);
 
   useEffect(() => {
     const query = window.matchMedia(NARROW_QUERY);
@@ -85,7 +105,7 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
   const send = async () => {
     const text = draft.trim();
     if (!text) return;
-    const result = await run(() => sendChatMessage(slug, doc.id, text, references));
+    const result = await run(() => sendChatMessage(slug, doc.id, text, references, activeSlideId));
     if (!result) return;
     setDraft("");
     setReferences([]);
@@ -100,21 +120,30 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
     if (!result) return load();
     setRecords((prev) => [...prev, ...result.records]);
     setPending(null);
-    if (result.document) onApplied(result.document);
   };
 
   const attach = async (files: FileList) => {
-    const images = [...files].filter((file) => file.type.startsWith("image/"));
+    const images = [...files].filter((file) => file.type.startsWith("image/") || /\.hei[cf]$/i.test(file.name));
     const uploaded = await run(() => Promise.all(images.map((file) => uploadChatReference(slug, doc.id, file))));
-    if (uploaded) setReferences((prev) => [...prev, ...uploaded]);
+    if (uploaded) {
+      const typed = uploaded.map(({ id, name, ...meta }) => ({ id, name, role: defaultReferenceRole(meta) }));
+      setReferences((prev) => [...prev, ...typed]);
+    }
   };
+
+  const runningId = runningProposalId(records);
+  const running = records.flatMap((r) => (r.role === "assistant" && r.proposal?.id === runningId ? [r.proposal] : []))[0];
+  const proposalReplyCost = (proposalId: string) =>
+    records.reduce((sum, r) => (r.role === "assistant" && r.proposal?.id === proposalId ? sum + (r.costCents ?? 0) : sum), 0);
+  const slideNumbers = (ids: string[]) =>
+    ids.map((id) => doc.slides.findIndex((s) => s.id === id) + 1).filter((n) => n > 0).join(", ");
 
   if (collapsed) {
     return (
       <aside className="chat-panel chat-panel--collapsed">
         <button type="button" className="chat-rail" onClick={toggle} title={t("chat.expand")}>
           <span className="chat-rail-label">{t("chat.title")}</span>
-          {pending && <span className="chat-rail-badge">{t("chat.pendingBadge")}</span>}
+          {(pending || running) && <span className="chat-rail-badge">{running ? t("chat.runningBadge") : t("chat.pendingBadge")}</span>}
         </button>
       </aside>
     );
@@ -140,7 +169,14 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
         {records.map((record) =>
           record.role === "event" ? (
             <p key={record.id} className="chat-event">
-              {record.kind === "failed" ? t("chat.failedEvent", { error: record.error ?? "" }) : t("chat.appliedEvent")}
+              {record.kind === "failed"
+                ? t("chat.failedEvent", { error: record.error ?? "" })
+                : record.kind === "started"
+                  ? t("chat.startedEvent")
+                  : t("chat.doneEvent", {
+                      slides: slideNumbers(record.results.flatMap((r) => r.slideIds)) || "-",
+                      amount: currency ? formatCost(record.costCents + proposalReplyCost(record.proposalId), currency) : "",
+                    })}
             </p>
           ) : record.text ? (
             <p key={record.id} className={`chat-msg chat-msg--${record.role}`}>
@@ -155,6 +191,18 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
           ) : null,
         )}
       </div>
+      {running && (
+        <section className="chat-proposal chat-proposal--running" aria-busy="true">
+          <h3>{t("chat.runningHeading")}</h3>
+          <ul>
+            {running.actions.map((action) => (
+              <li key={action.id}>
+                <strong>{describeAction(doc, action)}</strong>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {pending && (
         <section className="chat-proposal">
           <h3>{t("chat.proposalHeading")}</h3>
@@ -190,9 +238,22 @@ export function ChatPanel({ slug, doc, dirty, onApplied, onLogChange }: ChatPane
       {references.length > 0 && (
         <div className="chat-refs">
           {references.map((r) => (
-            <button key={r.id} type="button" className="chat-ref" onClick={() => setReferences((prev) => prev.filter((x) => x !== r))}>
-              {t("chat.referenceChip", { name: r.name })} ✕
-            </button>
+            <span key={r.id} className="chat-ref">
+              {t("chat.referenceChip", { name: r.name })}
+              <select
+                value={r.role}
+                aria-label={t("chat.referenceRole")}
+                onChange={(e) =>
+                  setReferences((prev) => prev.map((x) => (x === r ? { ...x, role: e.target.value as "layout" | "content" } : x)))
+                }
+              >
+                <option value="layout">{t("chat.referenceRole.layout")}</option>
+                <option value="content">{t("chat.referenceRole.content")}</option>
+              </select>
+              <button type="button" onClick={() => setReferences((prev) => prev.filter((x) => x !== r))} aria-label={t("chat.referenceRemove")}>
+                ✕
+              </button>
+            </span>
           ))}
         </div>
       )}

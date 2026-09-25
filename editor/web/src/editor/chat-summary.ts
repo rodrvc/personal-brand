@@ -58,6 +58,9 @@ export function describeIntact(doc: CarouselDocument, actions: ChatAction[]): st
   const deleted = new Set<string>();
   for (const action of actions) {
     if (action.type === "delete_slide") deleted.add(action.slideId);
+    if (action.type === "compose_from_reference" && action.slideId) {
+      changedPieces.set(action.slideId, [t("chat.piece.wholeSlide")]);
+    }
     if (action.type === "delete_object") {
       changedPieces.set(action.slideId, [...(changedPieces.get(action.slideId) ?? []), objectName(doc, action)]);
     }
@@ -84,12 +87,38 @@ export function formatCost(cents: number, currency: Currency): string {
   return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.code }).format((cents / 100) * currency.rate);
 }
 
-/** Every paid operation recorded by an `applied` event, so the total survives a reload. */
-export function chatSpend(records: ChatRecord[]): { totalCents: number; items: Array<{ at: string; costCents: number }> } {
-  const items = records.flatMap((record) =>
-    record.role === "event"
-      ? record.results.filter((r) => (r.costCents ?? 0) > 0).map((r) => ({ at: record.at, costCents: r.costCents! }))
-      : [],
-  );
+/** Every paid operation in the log (model replies and generated images), so the total survives a reload. */
+export function chatSpend(records: ChatRecord[]): {
+  totalCents: number;
+  items: Array<{ at: string; costCents: number; kind: "reply" | "image" }>;
+} {
+  type Item = { at: string; costCents: number; kind: "reply" | "image" };
+  const items = records.flatMap((record): Item[] => {
+    if (record.role === "assistant") {
+      return (record.costCents ?? 0) > 0 ? [{ at: record.at, costCents: record.costCents!, kind: "reply" }] : [];
+    }
+    if (record.role !== "event") return [];
+    return record.results
+      .filter((r) => (r.costCents ?? 0) > 0)
+      .map((r) => ({ at: record.at, costCents: r.costCents!, kind: "image" }));
+  });
   return { totalCents: items.reduce((sum, item) => sum + item.costCents, 0), items };
+}
+
+const SLIDE_RATIO = 1080 / 1350;
+
+/** A PNG in slide proportions is most likely a finished poster to copy; anything else brings data or a picture. */
+export function defaultReferenceRole(ref: { mime: string; w?: number; h?: number }): "layout" | "content" {
+  const slideShaped = ref.w !== undefined && ref.h !== undefined && Math.abs(ref.w / ref.h - SLIDE_RATIO) < 0.03;
+  return ref.mime === "image/png" && slideShaped ? "layout" : "content";
+}
+
+/** The proposal whose apply started and has not reached done or failed yet. */
+export function runningProposalId(records: ChatRecord[]): string | undefined {
+  const finished = new Set(
+    records.flatMap((r) => (r.role === "event" && r.kind !== "started" ? [r.proposalId] : [])),
+  );
+  const started = records.filter((r) => r.role === "event" && r.kind === "started");
+  const last = started.at(-1);
+  return last?.role === "event" && !finished.has(last.proposalId) ? last.proposalId : undefined;
 }
