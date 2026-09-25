@@ -15,6 +15,7 @@ import {
   keepTextsPrompt,
   letterbox,
   measureTexts,
+  missingData,
   placePoster,
   refineTexts,
   register,
@@ -23,6 +24,7 @@ import {
   toSlide,
   unregister,
   weightFor,
+  withAbsentLabels,
   withWeekday,
   type PlacedText,
   type PosterText,
@@ -168,6 +170,15 @@ const lines = [
     ],
     "the caption stays, its new value goes to the value's line, the omitted footer keeps its text, the logo gets none",
   );
+  // A value line the model leaves out does not keep the layout's text: it is asked for, named by what it replaces.
+  const omitted = completeTexts([model[0]!], poster, kinds);
+  assert.deepEqual(omitted.map((t) => [t.line, t.zone, t.text, t.from]), [
+    [1, "title", "New Show", "content"],
+    [3, "label", "Place", "layout"],
+    [4, "body", "", "missing"],
+    [5, "footer", "Somewhere | more at example.org", "layout"],
+  ]);
+  assert.deepEqual(missingData(omitted), [{ zone: "body", replaces: "Old Hall" }]);
 }
 {
   const texts = measureTexts([{ line: 0, zone: "chip", text: "NEW", from: "content" }], [{ text: "OLD", box: { x: 0.1, y: 0.1, w: 0.1, h: 0.015 } }]);
@@ -262,5 +273,30 @@ const lines = [
   const placed = placePoster(undefined, "0123456789abcdef", [title!], canvas, brand).objects[1]!;
   assert.equal(placed.geometry!.x, Math.round(0.1 * canvas.w));
   assert.ok(placed.geometry!.x + placed.geometry!.w <= canvas.w);
+}
+{
+  // No event datum is inherited from the layout: marked missing, taken from the layout or left empty, it is asked for.
+  const texts: PosterText[] = [
+    { line: 0, zone: "title", text: "New Show", from: "content" },
+    { line: 1, zone: "time", text: "", from: "missing" },
+    { line: 2, zone: "place", text: "Old Hall", from: "layout" },
+    { line: 3, zone: "label", text: "Place", from: "layout" },
+    { line: 4, zone: "price", text: "", from: "content" },
+    { line: 5, zone: "date", text: "", from: "absent" },
+    { line: 6, zone: "time", text: "", from: "missing" },
+    { line: 7, zone: "entry", text: "Free", from: "owner" },
+    { line: 8, zone: "footer", text: "site", from: "layout" },
+  ];
+  assert.deepEqual(missingData(texts).map((m) => m.zone), ["time", "place", "price"], "every missing datum, once, in order; labels, the footer and what does not exist are not asked for");
+  assert.deepEqual(missingData([texts[0]!, texts[5]!, texts[7]!, texts[8]!]), [], "given by the content or the owner, or not there at all");
+  const lines = [
+    { text: "Place", box: { x: 0.1, y: 0.5, w: 0.1, h: 0.02 } },
+    { text: "Old Hall", box: { x: 0.1, y: 0.525, w: 0.3, h: 0.03 } },
+  ];
+  const labelled = withAbsentLabels([{ line: 0, zone: "label", text: "Place", from: "layout" }, { line: 1, zone: "place", text: "", from: "absent" }], lines);
+  assert.deepEqual(labelled.map((t) => t.from), ["absent", "absent"], "the label of a datum the event does not have goes with it");
+  const measured = measureTexts(labelled, lines);
+  assert.equal(measured.length, 2, "absent texts are kept to be erased, though empty");
+  assert.equal(placePoster(undefined, "0123456789abcdef", measured, canvas, brand).objects.length, 1, "but never placed as texts");
 }
 console.log("ok - recreate-reference");

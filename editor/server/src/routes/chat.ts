@@ -19,6 +19,7 @@ import {
   letterbox,
   numberedLines,
   measureTexts,
+  missingData,
   placePoster,
   refineTexts,
   register,
@@ -27,6 +28,7 @@ import {
   type Box,
   type LineKind,
   type PlacedText,
+  withAbsentLabels,
 } from "../chat/recreate-reference.js";
 import { referenceBackground } from "../chat/reference-background.js";
 import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, inkReader, remap, toPng } from "../image-tools.js";
@@ -93,7 +95,8 @@ function proposeRecreation(
 ): ChatAction {
   const layout = references.find((r) => r.role === "layout");
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
-  const classified = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
+  const completed = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
+  const classified = withAbsentLabels(completed, layoutRead.lines);
   const texts = refineTexts(
     measureTexts(classified, layoutRead.lines),
     { locale: ctx.brand.locale },
@@ -128,7 +131,7 @@ function toProposal(
   activeSlideId: string | undefined,
   request: string,
   layoutRead: LayoutRead,
-): { text: string; rejected: string } | { text: string; actions: ChatAction[] } {
+): { text: string; rejected: string } | { text: string; actions: ChatAction[] } | { text: string; asksFor: string[] } {
   const body = (raw ?? {}) as { text?: unknown; actions?: unknown };
   const text = typeof body.text === "string" ? body.text : "";
   const rawActions = Array.isArray(body.actions) ? body.actions : [];
@@ -159,6 +162,13 @@ function toProposal(
       const referenceIds = asImage.map((r) => r.id);
       return { ...action, provenance: [...action.provenance, ...fromReferences], ...(referenceIds.length > 0 ? { referenceIds } : {}) };
     });
+    // No event datum comes from the layout: a poster missing any is not proposed, the owner is asked for all at once.
+    const compose = actions.find((a) => a.type === "compose_from_reference");
+    const missing = compose ? missingData(compose.texts) : [];
+    if (missing.length > 0) {
+      const names = missing.map((m) => (m.replaces ? messages.proposal.insteadOf(m.replaces) : (messages.proposal.dataNames[m.zone] ?? m.zone)));
+      return { text: messages.proposal.missingData(names), asksFor: missing.map((m) => m.replaces ?? m.zone) };
+    }
     return { text, actions };
   } catch (error) {
     const issue = error instanceof z.ZodError ? error.issues[0] : undefined;
@@ -375,6 +385,18 @@ async function runProposal(
   }
 }
 
+/**
+ * The references a message without its own answers with: those of the message whose answer asked the owner for
+ * missing data, so the reply to that question composes the same poster.
+ */
+function awaitedReferences(history: ChatRecord[]): ChatReference[] {
+  const asked = history.map((r) => r.role).lastIndexOf("assistant");
+  const answer = history[asked];
+  if (answer?.role !== "assistant" || !answer.asksFor) return [];
+  const message = history.slice(0, asked).reverse().find((r) => r.role === "user" && r.text !== "");
+  return message?.role === "user" ? (message.references ?? []) : [];
+}
+
 export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Router {
   const router = Router();
 
@@ -400,21 +422,22 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
 
   router.post(`${BASE}/messages`, async (req, res) => {
     try {
-      const { text, references = [], activeSlideId } = (req.body ?? {}) as {
+      const { text, references: attached = [], activeSlideId } = (req.body ?? {}) as {
         text?: unknown;
         references?: ChatReference[];
         activeSlideId?: string;
       };
       const wellFormed = (r: unknown) =>
         typeof (r as ChatReference)?.id === "string" && typeof (r as ChatReference)?.name === "string";
-      if (typeof text !== "string" || text.trim() === "" || !Array.isArray(references) || !references.every(wellFormed)) {
+      if (typeof text !== "string" || text.trim() === "" || !Array.isArray(attached) || !attached.every(wellFormed)) {
         return void res.status(400).json({ error: 'Body must be { "text": string, "references"?: [{ id, name }] }' });
       }
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
 
-      const ctx = withReferences(buildChatContext(store, req.params.id), references);
       const history = readChatLog(store, req.params.id);
+      const references = attached.length > 0 ? attached : awaitedReferences(history);
+      const ctx = withReferences(buildChatContext(store, req.params.id), references);
       const generator = getGenerator(req.params.slug);
       const images = loadReferenceImages(store, references.map((r) => r.id));
       const layoutRead = readLayout(store, references, ctx.brand.copy.wordmark);
@@ -445,6 +468,12 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
         ...("actions" in outcome && outcome.actions.length > 0
           ? { proposal: { id: newChatId("prop"), actions: outcome.actions } }
           : {}),
+        // A layout with no poster proposed means the model asked something back: the answer keeps the references.
+        ...("asksFor" in outcome
+          ? { asksFor: outcome.asksFor }
+          : "actions" in outcome && outcome.actions.length === 0 && references.some((r) => r.role === "layout")
+            ? { asksFor: [] }
+            : {}),
       });
       res.json({ records: [user, assistant] });
     } catch (error) {

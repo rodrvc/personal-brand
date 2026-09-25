@@ -13,6 +13,9 @@ type Zone = (typeof TEXT_ZONES)[number];
 /** Lines the poster keeps as they are: the brand logo and the texts printed inside the framed picture. */
 export const KEPT_ZONES = ["logo", "picture"] as const;
 
+/** Zones that carry the event's own data: never taken from the layout reference. */
+export const DATA_ZONES = ["title", "date", "time", "place", "entry", "price"] as const;
+
 const ZONE_TYPE: Record<Zone, TypeRole> = {
   chip: "chip",
   title: "title",
@@ -35,7 +38,12 @@ export const posterTextSchema = z.object({
   line: z.number().int().nonnegative().optional(),
   zone: z.enum([...TEXT_ZONES, ...KEPT_ZONES]),
   text: z.string().default(""),
-  from: z.enum(["content", "layout"]).default("content"),
+  /**
+   * Where the text comes from: the content reference, what the owner said (this message or earlier), the layout
+   * reference (labels and the brand's own texts only), "missing" when nobody gave that datum yet, or "absent" when
+   * the owner said the event has no such datum, so the element is removed.
+   */
+  from: z.enum(["content", "owner", "layout", "missing", "absent"]).default("content"),
   original: z.string().optional(),
   box: boxSchema.optional(),
   /** The day a date text stands for, YYYY-MM-DD: its weekday is written from it, not by the model. */
@@ -78,7 +86,7 @@ export const recreateActionFields = {
  */
 export function measureTexts(texts: PosterText[], lines: TextLine[] | undefined): PlacedText[] {
   return texts.flatMap((t): PlacedText[] => {
-    if (!isPlaceable(t) || t.text.trim() === "") return [];
+    if (!isPlaceable(t) || (t.text.trim() === "" && !unwritten(t))) return [];
     const line = t.line !== undefined ? lines?.[t.line] : undefined;
     if (line) return [{ ...t, text: withoutIcon(t.text), ...withoutLeadingIcon(line) }];
     return t.box ? [{ ...t, box: t.box }] : [];
@@ -100,6 +108,37 @@ function withoutLeadingIcon(line: TextLine): { box: Box; original: string } {
   if (!icon) return { box: line.box, original: line.text };
   const cut = Math.min(0.5, (icon.trim().length + 1) / line.text.length) * line.box.w;
   return { box: { ...line.box, x: line.box.x + cut, w: line.box.w - cut }, original: withoutIcon(line.text) };
+}
+
+/** A text with no wording on purpose: a datum still to be asked for, or one the event does not have. */
+function unwritten(t: PosterText): boolean {
+  return t.from === "missing" || t.from === "absent";
+}
+
+function isData(t: PosterText): boolean {
+  return (DATA_ZONES as readonly string[]).includes(t.zone);
+}
+
+/**
+ * The zones of every datum the poster cannot be made without, in order and once each: marked missing, or an event
+ * datum the model took from the layout reference or left empty. Nothing of the event is inherited from the layout.
+ */
+export function missingData(texts: PosterText[]): Array<{ zone: Zone; replaces?: string }> {
+  const missing = texts.filter(
+    (t) => isPlaceable(t) && (t.from === "missing" || (isData(t) && (t.from === "layout" || (t.from !== "absent" && t.text.trim() === "")))),
+  );
+  // A line of no known kind is named by what the layout says there; a known datum by its kind alone.
+  const named = missing.map((t) => (t.zone === "body" && t.original ? { zone: t.zone as Zone, replaces: t.original } : { zone: t.zone as Zone }));
+  return named.filter((m, i) => named.findIndex((n) => n.zone === m.zone && n.replaces === m.replaces) === i);
+}
+
+/** The label of a value the event does not have goes with it: a caption over nothing. */
+export function withAbsentLabels(texts: PosterText[], lines: TextLine[] | undefined): PosterText[] {
+  if (!lines) return texts;
+  const gone = new Set(texts.flatMap((t) => (t.from === "absent" && t.line !== undefined ? [t.line] : [])));
+  return texts.map((t) =>
+    t.zone === "label" && t.line !== undefined && gone.has(valueBelow(lines, t.line) ?? -1) ? { ...t, from: "absent" as const } : t,
+  );
 }
 
 function isPlaceable(t: PosterText): t is PosterText & { zone: Zone } {
@@ -152,23 +191,28 @@ export function valueBelow(lines: TextLine[], i: number): number | undefined {
 /**
  * One text for every line of the poster's frame, so none stays painted in the background. A label keeps its
  * caption; a new value the model wrote on the caption's line moves to the value's line. A line the model left out
- * keeps its current text. The wordmark and the picture's lines get no text.
+ * keeps its text when it is the footer, and is otherwise missing. The wordmark and the picture's lines get no text.
  */
 export function completeTexts(texts: PosterText[], lines: TextLine[], kinds: LineKind[]): PosterText[] {
   const byLine = new Map(texts.flatMap((t) => (t.line !== undefined ? [[t.line, t] as const] : [])));
   kinds.forEach((kind, i) => {
     const given = byLine.get(i);
     const value = kind === "label" ? valueBelow(lines, i) : undefined;
-    if (value === undefined || !given || given.from !== "content" || given.zone === "label") return;
+    if (value === undefined || !given || (given.from !== "content" && given.from !== "owner") || given.zone === "label") return;
     const current = byLine.get(value);
     if (!current || current.from === "layout" || !current.text.trim()) byLine.set(value, { ...given, line: value });
   });
-  const kept = (i: number): PosterText => ({ line: i, zone: lines[i]!.box.y > 0.9 ? "footer" : "body", text: withoutIcon(lines[i]!.text), from: "layout" });
+  // A line the model left out keeps its text only when it is the footer or a label: any other may be event data,
+  // which never comes from the layout, so it is asked for.
+  const kept = (i: number): PosterText =>
+    lines[i]!.box.y > 0.9
+      ? { line: i, zone: "footer", text: withoutIcon(lines[i]!.text), from: "layout" }
+      : { line: i, zone: "body", text: "", from: "missing", original: withoutIcon(lines[i]!.text) };
   const framed = kinds.flatMap((kind, i): PosterText[] => {
     if (kind === "picture" || kind === "logo" || byLine.get(i)?.zone === "logo") return [];
-    if (kind === "label") return [{ ...kept(i), zone: "label" }];
+    if (kind === "label") return [{ line: i, zone: "label", text: withoutIcon(lines[i]!.text), from: "layout" }];
     const given = byLine.get(i);
-    return [given && isPlaceable(given) && given.text.trim() ? given : kept(i)];
+    return [given && isPlaceable(given) && (given.text.trim() || unwritten(given)) ? given : kept(i)];
   });
   return [...framed, ...texts.filter((t) => t.line === undefined)];
 }
@@ -484,7 +528,7 @@ function textObjects(texts: PlacedText[], canvas: CarouselDocument["canvas"], br
     const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
     return contrast(hex, under) >= needed ? wanted : { colorKey: bestContrastColorKey(brand, hex, under) };
   };
-  return texts.map((t) => textObject(t, t.box, canvas, brand, ink(t)));
+  return texts.filter((t) => t.from !== "absent").map((t) => textObject(t, t.box, canvas, brand, ink(t)));
 }
 
 /**
