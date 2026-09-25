@@ -224,28 +224,32 @@ export function SelectionOverlay({
 
   return (
     <div className="selection-overlay" onClick={() => onSelectionChange(null)}>
-      {zoneBoxes.map((zone) => (
-        <div
-          key={zone.id}
-          className={`overlay-zone ${zone.label === "background" && slide.background.pending ? "pending" : ""} ${
-            zone.label === "background" && slide.background.awaitingImage ? "awaiting-image" : ""
-          }`}
-          style={{ left: zone.x * scale, top: zone.y * scale, width: zone.w * scale, height: zone.h * scale }}
-        >
-          <span className="overlay-zone-label">{zone.label.toUpperCase()}</span>
-          {zone.label === "background" && slide.background.awaitingImage && (
-            <button
-              className="overlay-generate-image-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectionChange(null);
-              }}
-            >
-              {t("selectionOverlay.generateImage")}
-            </button>
-          )}
-        </div>
-      ))}
+      {/* Zone guides (margins, background outline) are hidden for now: they block the view.
+          Only the background zone is kept while it is pending or waiting for an image. */}
+      {zoneBoxes
+        .filter((zone) => zone.label === "background" && (slide.background.pending || slide.background.awaitingImage))
+        .map((zone) => (
+          <div
+            key={zone.id}
+            className={`overlay-zone ${zone.label === "background" && slide.background.pending ? "pending" : ""} ${
+              zone.label === "background" && slide.background.awaitingImage ? "awaiting-image" : ""
+            }`}
+            style={{ left: zone.x * scale, top: zone.y * scale, width: zone.w * scale, height: zone.h * scale }}
+          >
+            <span className="overlay-zone-label">{zone.label.toUpperCase()}</span>
+            {zone.label === "background" && slide.background.awaitingImage && (
+              <button
+                className="overlay-generate-image-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectionChange(null);
+                }}
+              >
+                {t("selectionOverlay.generateImage")}
+              </button>
+            )}
+          </div>
+        ))}
 
       {slide.objects.map((object) => {
         const box = boxFor(object.id);
