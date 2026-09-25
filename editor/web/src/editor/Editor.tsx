@@ -9,6 +9,7 @@ import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
 import { PropertiesPanel } from "./panels/PropertiesPanel";
 import { StatusBar } from "./StatusBar";
+import { ChatPanel } from "./ChatPanel";
 import type { Selection } from "./geometry";
 import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
 import { ExportDialog } from "./ExportDialog";
@@ -125,6 +126,15 @@ export function Editor({
     setActiveIndex((index) => Math.max(0, Math.min(index, doc.slides.length - 2)));
   }, [activeSlide, doc.slides.length, update]);
 
+  const handleChatApplied = useCallback(
+    (next: CarouselDocument) => {
+      applyRemote(next);
+      setSelection(null);
+      setActiveIndex((index) => Math.max(0, Math.min(index, next.slides.length - 1)));
+    },
+    [applyRemote],
+  );
+
   return (
     <div className="editor-app">
       <TopBar
@@ -144,6 +154,7 @@ export function Editor({
         onExport={() => setShowExportDialog(true)}
       />
       <div className="editor-body">
+        <ChatPanel slug={slug} doc={doc} dirty={dirty} onApplied={handleChatApplied} />
         <div className="editor-center">
           <PromptHeader
             doc={doc}

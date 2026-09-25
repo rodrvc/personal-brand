@@ -6,13 +6,25 @@
 
 .editor-body {
   display: grid;
-  grid-template-columns: 1fr 288px;
+  grid-template-columns: auto 1fr 288px;
   overflow: hidden;
+}
+
+.editor-body > .chat-panel {
+  width: 320px;
+}
+
+.editor-body > .chat-panel--collapsed {
+  width: 36px;
 }
 
 @media (max-width: 1040px) {
   .editor-body {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto 1fr;
+  }
+
+  .editor-body > .props-panel {
+    grid-column: 1 / -1;
   }
 }
 
