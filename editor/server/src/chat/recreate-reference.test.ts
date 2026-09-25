@@ -28,10 +28,13 @@ import {
   withWeekday,
   type PlacedText,
   type PosterText,
+  posterPrompt,
+  longDate,
   checkSources,
   dataKinds,
   statedByOwner,
   dataZoneOf,
+  forbiddenTexts,
 } from "./recreate-reference.js";
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "profiles", "example");
@@ -304,6 +307,30 @@ const lines = [
   assert.equal(placePoster(undefined, "0123456789abcdef", measured, canvas, brand).objects.length, 1, "but never placed as texts");
 }
 {
+  const prompt = posterPrompt({
+    texts: [
+      { zone: "title", text: "Night market", from: "content", original: "Book fair" },
+      { zone: "date", text: "MON 26 SEP", from: "content", date: "2026-09-26" },
+      { zone: "time", text: "", from: "absent" },
+      { zone: "label", text: "Place", from: "layout" },
+      { zone: "logo", text: "", from: "layout" },
+    ],
+    request: "make the title bigger",
+    contentAttached: true,
+    locale: "en-US",
+  });
+  assert.ok(prompt.includes('event name (in place of "Book fair"): "Night market"'), "each datum stated, with what it replaces");
+  assert.ok(prompt.includes('date: "SAT 26 SEP" (it stands for Saturday, September 26, 2026; a check only, do not write it)'), "the weekday is worked out from the date");
+  assert.match(prompt, /exactly as given, character for character/, "the provider does not reformat a datum");
+  assert.match(prompt, /has no time: remove/, "an absent datum is removed");
+  assert.match(prompt, /short tag naming the kind of event/, "a chip nobody wrote is inferred");
+  assert.match(prompt, /second image/, "the event's picture goes in the frame");
+  assert.match(prompt, /wins over the first image[^\n]*make the title bigger/, "the owner's request wins");
+  assert.ok(!prompt.includes('"Place"'), "labels are kept by the layout, not restated");
+  assert.equal(longDate("2026-02-30x", "en-US"), undefined);
+  assert.equal(longDate("2026-09-26", "es-CL"), "sábado, 26 de septiembre de 2026", "in the profile's locale");
+}
+{
   assert.deepEqual(dataKinds("Apertura desde las 21:00 hrs"), ["time"]);
   assert.deepEqual(dataKinds("21 hrs"), ["time"]);
   assert.deepEqual(dataKinds("20.10 hrs"), ["time"], "a time with a dot is not a date");
@@ -417,5 +444,12 @@ const lines = [
   const moved = checkSources([{ zone: "body", text: "", from: "absent", original: "$4.000 CLP" }], ["hi"]);
   assert.deepEqual(moved.map((t) => [t.zone, t.from]), [["price", "missing"]], "a line whose original is a price is the price, whatever zone the model gave it");
   assert.deepEqual(checkSources([{ zone: "chip", text: "SERIES 01 · CLUB", from: "layout" }], []).map((t) => t.text), [""], "a chip copied from the layout is inferred instead");
+
+  const forbidden = forbiddenTexts([...replay, { zone: "place", text: "", from: "missing", original: "Old Hall Theatre Bar · Av. Ejemplo 123" }]);
+  assert.deepEqual(forbidden, ["JUEVES 24 SEP", "Thursday Club Night", "A tribute and a stand-up set", "Old Hall Theatre Bar · Av. Ejemplo 123"], "every old event text, labels aside");
+  const prompt = posterPrompt({ texts: answered, request: "", contentAttached: true, locale: "es-CL" });
+  assert.ok(prompt.includes('- "Thursday Club Night"'), "the provider is told what must not appear");
+  assert.match(prompt, /label, icon and row/, "an absent element goes entirely");
+  assert.match(prompt, /header or chip wording[^\n]*never kept/);
 }
 console.log("ok - recreate-reference");

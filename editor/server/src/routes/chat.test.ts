@@ -64,6 +64,7 @@ let holdGeneration: Promise<void> | undefined;
 let seenReferenceIds: string[] = [];
 let seenMode: string | undefined;
 let seenPrompt = "";
+let generations = 0;
 const fakeGenerator = {
   async completeJson(request: { images?: unknown[] }) {
     seenImages = request.images?.length ?? 0;
@@ -72,6 +73,7 @@ const fakeGenerator = {
   async generateImage(spec: { referenceAssetIds?: string[]; mode?: string; prompt?: string }) {
     if (holdGeneration) await holdGeneration;
     if (failGeneration) throw new Error("provider down");
+    generations++;
     seenReferenceIds = spec.referenceAssetIds ?? [];
     seenMode = spec.mode;
     seenPrompt = spec.prompt ?? "";
@@ -119,6 +121,28 @@ async function applyAndWait(proposalId: string): Promise<{ status: number; event
 }
 
 const swapBackground = { type: "set_visual_from_library", slideId: "slide-3", slot: "background", assetId: asset.id, why: "" };
+
+/** Runs `fn` with the environment variables set, restoring them after. */
+async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  const before = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(before)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+const editable = { EDITOR_POSTER_ROUTE: "editable" };
+
+async function uploadPair(): Promise<{ layout: any; content: any }> {
+  const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
+  const content = (await post("/references", { name: "event.png", mime: "image/png", dataBase64: Buffer.from(TINY_PNG.toString("hex") + "04", "hex").toString("base64") })).body.reference;
+  return { layout, content };
+}
 
 /** Proposes and applies a poster from a layout and a content reference, on the second slide. */
 async function composePoster(): Promise<{ action: any; event: any; onDisk: any; layout: any; content: any }> {
@@ -233,9 +257,9 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
     },
   ],
   [
-    "compose_from_reference builds the poster from the layout itself, at no cost, with editable texts on top",
+    "with the editable route on, compose_from_reference builds the poster from the layout itself, at no cost, with editable texts on top",
     async () => {
-      const { action, event, onDisk, layout } = await composePoster();
+      const { action, event, onDisk, layout } = await withEnv(editable, composePoster);
       assert.equal(event.costCents, 0, "no image provider involved");
       assert.equal(seenMode, undefined);
       const [poster, ...texts] = onDisk.slides[1].objects;
@@ -250,8 +274,8 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
     NEEDS_IMAGE_TOOL,
   ],
   [
-    "a poster missing event data asks one question for all of it, and the answer composes with the earlier references",
-    async () => {
+    "with the editable route on, a poster missing event data asks one question for all of it, and the answer composes with the earlier references",
+    () => withEnv(editable, async () => {
       reset();
       const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
       const content = (await post("/references", { name: "event.png", mime: "image/png", dataBase64: Buffer.from(TINY_PNG.toString("hex") + "03", "hex").toString("base64") })).body.reference;
@@ -310,12 +334,191 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
       nextReply = { text: "Ok", actions: [] };
       const later = await post("/messages", { text: "thanks", references: [] });
       assert.equal(later.body.records[0].references, undefined, "only the answer to a question inherits the references");
+    }),
+  ],
+  [
+    "by default a poster is one generated image over the whole slide, with no text objects",
+    async () => {
+      reset();
+      generations = 0;
+      const { layout, content } = await uploadPair();
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "chip", text: "LIVE MUSIC", from: "content", original: "ARTS" },
+              { zone: "title", text: "New event", from: "content", original: "Old event" },
+              { zone: "date", text: "MON 26 SEP", from: "content", original: "SAT 20 SEP", date: "2026-09-26" },
+              { zone: "time", text: "21:00", from: "content", original: "20:00" },
+              { zone: "place", text: "The hall", from: "owner", original: "Old venue" },
+              { zone: "price", text: "", from: "absent", original: "$10" },
+            ],
+          },
+        ],
+      };
+      const { body } = await post("/messages", {
+        text: "this poster with this event at The hall, title in red; it has no price",
+        activeSlideId: "slide-2",
+        references: [{ ...layout, role: "layout" }, { ...content, role: "content" }],
+      });
+      const action = body.records[1].proposal.actions[0];
+      assert.equal(action.posterRoute, "image");
+      assert.equal(action.anchors, undefined, "no OCR");
+      assert.equal(action.picture, undefined, "no frame detection");
+      assert.equal(action.texts.find((t: any) => t.zone === "date").text, "SAT 26 SEP", "the weekday comes from the date, not the model");
+      const { event, onDisk } = await applyAndWait(body.records[1].proposal.id);
+      assert.equal(event.kind, "done", event.error);
+      assert.equal(generations, 1, "one image");
+      assert.equal(seenMode, "reproduce");
+      assert.deepEqual(seenReferenceIds, [layout.id, content.id], "the layout goes first, then the event");
+      assert.equal(event.costCents, 4);
+      const objects = onDisk.slides[1].objects;
+      assert.equal(objects.length, 1, "one asset and nothing else");
+      assert.equal(objects[0].kind, "asset");
+      assert.equal(objects[0].assetId, event.results[0].assetIds[0]);
+      assert.deepEqual(objects[0].geometry, { x: 0, y: 0, w: 1080, h: 1350, rotation: 0 }, "over the whole slide");
+      for (const datum of ['"LIVE MUSIC"', '"New event"', '"SAT 26 SEP"', "Saturday, September 26, 2026", '"21:00"', '"The hall"']) {
+        assert.ok(seenPrompt.includes(datum), `the provider is told ${datum}`);
+      }
+      assert.match(seenPrompt, /has no price: remove/, "an absent datum is removed");
+      assert.match(seenPrompt, /Nothing of the first image's event may remain/);
+      assert.match(seenPrompt, /title in red/, "the owner's request reaches the provider");
+      assert.ok(!seenPrompt.includes('"Old event"') || seenPrompt.includes('in place of "Old event"'), "the old event is only named as what is replaced");
     },
   ],
   [
-    "compose_from_reference can still repaint the poster with the image provider",
+    "a merged block is asked for, invented copy is dropped, and the answer with formatted data composes",
+    async () => {
+      reset();
+      generations = 0;
+      const { layout, content } = await uploadPair();
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "Echo! A Tribute Night", from: "content" },
+              { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
+              { zone: "body", text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 hrs\n\nEntrada General\n$5.000 CLP", from: "owner" },
+            ],
+          },
+        ],
+      };
+      const asked = await post("/messages", { text: "genera este afiche pero con este evento", references: [{ ...layout, role: "layout" }, { ...content, role: "content" }] });
+      const question = asked.body.records[1];
+      assert.equal(question.proposal, undefined, "nothing is proposed");
+      assert.deepEqual(question.asksFor, ["price", "time"], "data only: the invented subtitle is dropped, not asked for");
+      assert.equal(generations, 0);
+
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "Echo! A Tribute Night", from: "content" },
+              { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
+              { zone: "time", text: "Apertura desde las 21:00 hrs", from: "owner" },
+              { zone: "price", text: "$5.000 CLP", from: "owner" },
+            ],
+          },
+        ],
+      };
+      const answered = await post("/messages", { text: "abre a las 21:00 y la entrada general cuesta $5.000", references: [] });
+      const reply = answered.body.records[1];
+      assert.equal(reply.asksFor, undefined, "not asked again");
+      assert.ok(reply.proposal, "the poster is proposed");
+      assert.equal(reply.proposal.actions[0].texts.find((t: any) => t.zone === "subtitle").from, "absent");
+    },
+  ],
+  [
+    "a model that calls data absent on its own is not believed: the owner is asked first",
+    async () => {
+      reset();
+      generations = 0;
+      const { layout, content } = await uploadPair();
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "date", text: "SÁB 26 SEP", from: "content", original: "JUEVES 24 SEP", date: "2026-09-26" },
+              { zone: "title", text: "Echo! A Tribute Night", from: "content", original: "Thursday Club Night" },
+              { zone: "subtitle", text: "North presenta Echo! A Tribute Night", from: "content", original: "A tribute and a stand-up set" },
+              { zone: "body", text: "", from: "absent", original: "Ubicación" },
+              { zone: "body", text: "", from: "absent", original: "Horario" },
+              { zone: "body", text: "", from: "absent", original: "Entrada General" },
+            ],
+          },
+        ],
+      };
+      const asked = await post("/messages", { text: "genera este afiche pero con este evento", references: [{ ...layout, role: "layout" }, { ...content, role: "content" }] });
+      const question = asked.body.records[1];
+      assert.equal(question.proposal, undefined, "nothing is generated from the first message");
+      assert.deepEqual(question.asksFor, ["place", "time", "entry"]);
+      assert.equal(generations, 0);
+    },
+  ],
+  [
+    "by default a poster missing an event datum asks before generating, and the answer generates with both messages",
+    async () => {
+      reset();
+      generations = 0;
+      const { layout, content } = await uploadPair();
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "chip", text: "", from: "missing" },
+              { zone: "title", text: "New event", from: "content" },
+              { zone: "place", text: "", from: "missing", original: "Old venue" },
+              { zone: "price", text: "$10", from: "layout", original: "$10" },
+            ],
+          },
+        ],
+      };
+      const asked = await post("/messages", { text: "this poster with this event, bigger title", references: [{ ...layout, role: "layout" }, { ...content, role: "content" }] });
+      const question = asked.body.records[1];
+      assert.equal(question.proposal, undefined, "nothing is generated yet");
+      assert.deepEqual(question.asksFor, ["place", "price"], "the chip is never asked for; a price kept from the layout is");
+      assert.equal(question.text.match(/\?/g)?.length, 1, "one question");
+      assert.equal(generations, 0);
+
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "New event", from: "content" },
+              { zone: "place", text: "The hall", from: "owner" },
+              { zone: "price", text: "", from: "absent" },
+            ],
+          },
+        ],
+      };
+      const answered = await post("/messages", { text: "The hall, and it is free of charge", references: [] });
+      const proposal = answered.body.records[1].proposal;
+      assert.deepEqual(proposal.actions[0].referenceIds, [layout.id, content.id], "the answer reuses the earlier references");
+      const { event } = await applyAndWait(proposal.id);
+      assert.equal(event.kind, "done", event.error);
+      assert.equal(generations, 1);
+      assert.match(seenPrompt, /bigger title/, "the first message's request still reaches the provider");
+      assert.match(seenPrompt, /"The hall"/);
+      assert.match(seenPrompt, /short tag naming the kind of event/, "a chip nobody wrote is inferred by the provider");
+    },
+  ],
+  [
+    "with the editable route on, compose_from_reference can still repaint the poster with the image provider",
     async () => {
       process.env.EDITOR_POSTER_BACKGROUND = "provider";
+      process.env.EDITOR_POSTER_ROUTE = "editable";
       try {
         const { event, onDisk, layout, content } = await composePoster();
         assert.equal(event.costCents, 4);
@@ -327,6 +530,7 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
         assert.match(seenPrompt, /every text exactly as it is written/, "the provider keeps the texts; they are erased after measuring");
       } finally {
         delete process.env.EDITOR_POSTER_BACKGROUND;
+        delete process.env.EDITOR_POSTER_ROUTE;
       }
     },
     NEEDS_IMAGE_TOOL,
@@ -404,21 +608,41 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
   [
     "without image tools, a message with a layout reference still proposes and applies the poster",
     async () => {
-      reset();
-      const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
-      await withoutImageTool(async () => {
-        nextReply = { text: "", actions: [{ type: "compose_from_reference", texts: [{ zone: "title", text: "New event", from: "content", box: { x: 0.1, y: 0.1, w: 0.5, h: 0.05 } }] }] };
-        const { status, body } = await post("/messages", { text: "this poster", references: [{ ...layout, role: "layout" }] });
-        assert.equal(status, 200, "the message does not fail");
-        assert.ok(body.records[1].proposal, "the poster is still proposed");
-        process.env.EDITOR_POSTER_BACKGROUND = "provider";
-        try {
-          const { event } = await applyAndWait(body.records[1].proposal.id);
-          assert.equal(event.kind, "done", event.error);
-        } finally {
-          delete process.env.EDITOR_POSTER_BACKGROUND;
-        }
-      });
+      for (const route of ["editable", "image"]) {
+        reset();
+        const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
+        await withoutImageTool(() =>
+          withEnv({ EDITOR_POSTER_ROUTE: route, EDITOR_POSTER_BACKGROUND: "provider" }, async () => {
+            nextReply = { text: "", actions: [{ type: "compose_from_reference", texts: [{ zone: "title", text: "New event", from: "content", box: { x: 0.1, y: 0.1, w: 0.5, h: 0.05 } }] }] };
+            const { status, body } = await post("/messages", { text: "this poster", references: [{ ...layout, role: "layout" }] });
+            assert.equal(status, 200, `the message does not fail (${route} route)`);
+            assert.ok(body.records[1].proposal, `the poster is still proposed (${route} route)`);
+            const { event } = await applyAndWait(body.records[1].proposal.id);
+            assert.equal(event.kind, "done", event.error);
+          }),
+        );
+      }
+    },
+  ],
+  [
+    "a generated poster is cut back to the slide's proportion, never stretched",
+    async () => {
+      const { fitToSlide } = await import("./chat.js");
+      const { encodePng, toRgba } = await import("../image-tools.js");
+      const { detectImage } = await import("../../../../system/assets/index.js");
+      const canvas = { w: 1080, h: 1350 } as const;
+      // A 2:3 image whose 4:5 middle is red and whose letterbox bands are blue.
+      const [w, h] = [64, 96];
+      const band = (h - (w * 5) / 4) / 2;
+      const pixels = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) pixels.set(y < band || y >= h - band ? [0, 0, 255, 255] : [255, 0, 0, 255], (y * w + x) * 4);
+      const fitted = fitToSlide(encodePng(w, h, pixels), canvas);
+      const size = detectImage(fitted, "fitted.png");
+      assert.deepEqual([size.w, size.h], [1080, 1350], "the canvas size and proportion");
+      const out = toRgba(fitted);
+      for (const y of [30, 675, 1320]) assert.deepEqual([...out.pixels.slice(y * 1080 * 4, y * 1080 * 4 + 3)], [255, 0, 0], `row ${y} is the slide, not a band`);
+      const exact = encodePng(80, 100, new Uint8Array(80 * 100 * 4));
+      assert.equal(fitToSlide(exact, canvas), exact, "an image already at the slide's proportion is kept as it is");
     },
   ],
   [

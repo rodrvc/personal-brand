@@ -73,6 +73,8 @@ export type ChatAction = ModelAction & {
   anchors?: TextLine[];
   /** The layout reference's framed picture, as fractions of it, where the event's picture goes. */
   picture?: { x: number; y: number; w: number; h: number };
+  /** How the poster is made, fixed when proposed: one image by the provider, or the editable composition. */
+  posterRoute?: "image" | "editable";
 };
 
 export type LibraryEntry = Pick<AssetEntry, "id" | "kind" | "tags" | "w" | "h"> & { name: string };
