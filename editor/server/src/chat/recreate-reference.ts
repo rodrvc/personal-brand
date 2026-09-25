@@ -16,7 +16,7 @@ export const KEPT_ZONES = ["logo", "picture"] as const;
 /** Zones that carry the event's own data: never taken from the layout reference. */
 export const DATA_ZONES = ["title", "date", "time", "place", "entry", "price"] as const;
 
-const ZONE_TYPE: Record<Zone, TypeRole> = {
+export const ZONE_TYPE: Record<Zone, TypeRole> = {
   chip: "chip",
   title: "title",
   subtitle: "subtitle",

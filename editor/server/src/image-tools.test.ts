@@ -84,10 +84,14 @@ if (existsSync("/usr/bin/sips")) {
   }
   const png = encodePng(w, h, page);
   const text = { x: 30 / w, y: 45 / h, w: 40 / w, h: 10 / h };
-  assert.deepEqual(findPill(png, text), { x0: 20, x1: 79, y0: 40, y1: 59 }, "the pill around the text");
+  const purple = [120, 60, 170];
+  assert.deepEqual(findPill(png, text), { x0: 20, x1: 79, y0: 40, y1: 59, fill: purple }, "the pill around the text");
   assert.equal(findPill(png, { x: 120 / w, y: 45 / h, w: 20 / w, h: 10 / h }), undefined, "no pill on the bare page");
   const wider = findPill(widenPill(png, findPill(png, text)!, 30), text);
-  assert.deepEqual(wider, { x0: 20, x1: 109, y0: 40, y1: 59 }, "30 px wider, same height");
+  assert.deepEqual(wider, { x0: 20, x1: 109, y0: 40, y1: 59, fill: purple }, "30 px wider, same height");
+  const withIcon = new Uint8Array(page);
+  for (let y = 44; y < 56; y++) for (let x = 24; x < 34; x++) withIcon.set([255, 255, 255, 255], (y * w + x) * 4);
+  assert.deepEqual(findPill(encodePng(w, h, withIcon), text), { x0: 20, x1: 79, y0: 40, y1: 59, fill: purple }, "an icon inside does not end the pill");
   const read = colourReader(png);
   assert.equal(read(text), "783CAA", "what is behind the text: the pill");
   assert.equal(read({ x: 0, y: 0, w: 0.05, h: 0.1 }), "F6F3F8");
