@@ -525,7 +525,14 @@ export function generateImageBrandContext(style: BrandStyle): GenerateImageBrand
 export async function generateForSlot(
   store: ProfileStore,
   generator: PieceGenerator,
-  spec: { prompt: string; kind: AssetEntry["kind"]; canvas: { w: number; h: number }; carouselId: string; slot: string },
+  spec: {
+    prompt: string;
+    kind: AssetEntry["kind"];
+    canvas: { w: number; h: number };
+    carouselId: string;
+    slot: string;
+    referenceAssetIds?: string[];
+  },
 ): Promise<AssetEntry> {
   const generateKind =
     spec.kind === "font" || spec.kind === "logo" || spec.kind === "unclassified" ? "background" : spec.kind;
@@ -533,7 +540,13 @@ export async function generateForSlot(
   // reads, no caching needed) rather than threaded through every route call
   // site — this is the one place every image generation funnels through.
   const brand = generateImageBrandContext(loadBrandStyle(store.roots.profileDir));
-  const image = await generator.generateImage({ prompt: spec.prompt, kind: generateKind, canvas: spec.canvas, brand });
+  const image = await generator.generateImage({
+    prompt: spec.prompt,
+    kind: generateKind,
+    canvas: spec.canvas,
+    brand,
+    referenceAssetIds: spec.referenceAssetIds,
+  });
   // registerFile identifies the file by its own content hash (design.md
   // D7's `assets/generated/<hash>.<ext>`); this file's destination path
   // must be derived from that same hash, not an unrelated random id, so a
@@ -553,6 +566,7 @@ export async function generateForSlot(
     createdAt: new Date().toISOString(),
     carouselId: spec.carouselId,
     slot: spec.slot,
+    ...(image.usedReferenceIds.length > 0 ? { referenceIds: image.usedReferenceIds } : {}),
   });
   return entry;
 }

@@ -72,6 +72,8 @@ export interface GenerateImageSpec {
   /** Target canvas the image will be placed into, for aspect-ratio guidance only — the provider is not asked to crop precisely. */
   canvas: { w: number; h: number };
   brand?: GenerateImageBrandContext;
+  /** Registered asset ids the picture should resemble. Ids the provider cannot take are dropped, per `acceptsReference`. */
+  referenceAssetIds?: string[];
 }
 
 export interface GeneratedImage {
@@ -79,7 +81,12 @@ export interface GeneratedImage {
   mime: string;
   model: string;
   costCents: number;
+  /** The reference ids that actually reached the provider as images. */
+  usedReferenceIds: string[];
 }
+
+/** Turns an asset id into its file; undefined when the id is not in the profile's index. */
+export type AssetFileResolver = (assetId: string) => { bytes: Buffer; mime: string } | undefined;
 
 /**
  * Two operations, matching what the piece-generation spec needs and nothing
@@ -105,6 +112,8 @@ export interface PieceGenerator {
   draftCopy(plan: DraftCopyPlan): Promise<DraftCopyResult>;
   generateImage(spec: GenerateImageSpec): Promise<GeneratedImage>;
   completeJson(request: JsonCompletionRequest): Promise<JsonCompletionResult>;
+  /** Whether a reference of this mime can be passed as an image when generating this kind; otherwise it can only be described in words. */
+  acceptsReference(kind: GenerateImageSpec["kind"], mime: string): boolean;
 }
 
 /** Thrown by `NonePieceGenerator` and caught by routes to answer 503. */

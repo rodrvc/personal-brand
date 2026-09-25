@@ -12,6 +12,7 @@ interface TopBarProps {
   /** Whether anything is selected on the active slide — the deselect button is inert otherwise, and says so. */
   hasSelection: boolean;
   onClearSelection: () => void;
+  onDeleteSelection: () => void;
   onOpenAssets: () => void;
   onAddText: () => void;
   canUndo: boolean;
@@ -40,6 +41,7 @@ export function TopBar({
   doc,
   hasSelection,
   onClearSelection,
+  onDeleteSelection,
   onOpenAssets,
   onAddText,
   canUndo,
@@ -74,6 +76,15 @@ export function TopBar({
       <div className="topbar-sep" />
       <button className="topbar-tool" title={t("topbar.tool.deselect")} aria-label={t("topbar.tool.deselect")} onClick={onClearSelection} disabled={!hasSelection}>
         ▲
+      </button>
+      <button
+        className="topbar-tool"
+        title={t("topbar.tool.deleteObject")}
+        aria-label={t("topbar.tool.deleteObject")}
+        onClick={onDeleteSelection}
+        disabled={!hasSelection}
+      >
+        ⌫
       </button>
       {/* No slide, nothing to put text on (Editor's handler no-ops) — disabled rather than silently inert. */}
       <button className="topbar-tool" title={t("topbar.tool.addText")} aria-label={t("topbar.tool.addText")} onClick={onAddText} disabled={doc.slides.length === 0}>

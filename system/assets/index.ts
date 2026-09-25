@@ -37,7 +37,7 @@ export const ASSET_KINDS = [
 ] as const;
 export type AssetKind = (typeof ASSET_KINDS)[number];
 
-export const ASSET_ORIGINS = ["manual", "ai"] as const;
+export const ASSET_ORIGINS = ["manual", "ai", "reference"] as const;
 export type AssetOrigin = (typeof ASSET_ORIGINS)[number];
 
 export const ASSET_STATUSES = ["candidate", "approved", "hidden"] as const;
@@ -72,6 +72,7 @@ export const generatedSidecarSchema = z.object({
   createdAt: z.string().optional(),
   carouselId: z.string().optional(),
   slot: z.string().optional(),
+  referenceIds: z.array(z.string()).optional(),
 });
 export type GeneratedSidecar = z.infer<typeof generatedSidecarSchema>;
 
@@ -95,6 +96,7 @@ const ASSETS_DIRNAME = "assets";
 const INDEX_FILENAME = "index.json";
 const META_DIRNAME = "meta";
 const GENERATED_DIRNAME = "generated";
+const REFERENCES_DIRNAME = "references";
 const FONTS_DIRNAME = "fonts";
 
 function assetsDir(profileDir: string): string {
@@ -379,6 +381,12 @@ export function scanAssets(profileDir: string): AssetIndexFile {
       const sidecarPath = join(dir, GENERATED_DIRNAME, `${id}.json`);
       const sidecar = readJsonIfExists(sidecarPath, generatedSidecarSchema);
       if (sidecar?.createdAt) createdAt = sidecar.createdAt;
+    }
+
+    // A reference only feeds generation: it never becomes library material on its own.
+    if (relPath.split(sep).includes(REFERENCES_DIRNAME)) {
+      origin = "reference";
+      status = "candidate";
     }
 
     // Font sidecar: assets/fonts/<name>.meta.json

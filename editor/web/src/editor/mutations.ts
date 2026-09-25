@@ -16,6 +16,9 @@ import {
   FREE_TEMPLATE_ID,
   resetObjectToSlot as engineResetObjectToSlot,
 } from "../../../../system/ig-carousel/object-reset.js";
+import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
+
+export { removeObject } from "../../../../system/ig-carousel/free-objects.js";
 
 /**
  * Keeps an object's box fully inside the canvas (QA: a text object was
@@ -242,19 +245,7 @@ export function setBackgroundAsset(doc: CarouselDocument, slideId: string, asset
 }
 
 export function addLibraryAssetObject(doc: CarouselDocument, slideId: string, assetId: string): CarouselDocument {
-  return mapSlide(doc, slideId, (slide) => {
-    const object: AssetObject = {
-      id: newEditorId(`obj-${slideId}-lib`),
-      pinned: true,
-      locked: false,
-      source: "library",
-      kind: "asset",
-      assetId,
-      fit: "cover",
-      geometry: { x: 100, y: 100, w: 400, h: 400, rotation: 0 },
-    };
-    return { ...slide, objects: [...slide.objects, object] };
-  });
+  return addFreeAssetObject(doc, slideId, { id: newEditorId(`obj-${slideId}-lib`), assetId, source: "library" });
 }
 
 /**

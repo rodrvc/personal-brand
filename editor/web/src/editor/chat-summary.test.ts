@@ -23,6 +23,12 @@ assert.equal(lines.length, 2);
 assert.match(lines[1]!, /3/);
 assert.match(lines[1]!, /fondo/);
 
+const removeTitle = { id: "act-2", type: "delete_object", slideId: "slide-2", objectId: "t", why: "", provenance: [] } as ChatAction;
+const withText = { slides: [{ id: "slide-1", objects: [] }, { id: "slide-2", objects: [{ id: "t", kind: "text", text: "Old" }] }] } as unknown as CarouselDocument;
+const removal = describeIntact(withText, [removeTitle]);
+assert.match(removal[0]!, /1\./);
+assert.match(removal[1]!, /«Old»/);
+
 const deleteAll = doc.slides.map((s, i) => ({ id: `act-${i}`, type: "delete_slide", slideId: s.id, why: "", provenance: [] }) as ChatAction);
 assert.equal(describeIntact(doc, deleteAll).length, 1);
 

@@ -29,3 +29,19 @@ export function estimateTextCostCents(promptText: string, responseText: string):
 export function estimateImageCostCents(): number {
   return IMAGE_CENTS_PER_CALL_LOW_QUALITY;
 }
+
+/** Per-token list prices of `IMAGE_MODEL`, used whenever the provider reports usage; the flat estimate is only the fallback. */
+const IMAGE_MODEL_CENTS_PER_1M = { textInput: 200, imageInput: 250, imageOutput: 800 };
+
+export function estimateImageCostFromUsage(usage?: {
+  input_tokens_details?: { text_tokens?: number; image_tokens?: number };
+  output_tokens?: number;
+}): number {
+  if (!usage) return IMAGE_CENTS_PER_CALL_LOW_QUALITY;
+  const cents =
+    ((usage.input_tokens_details?.text_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.textInput +
+      (usage.input_tokens_details?.image_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.imageInput +
+      (usage.output_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.imageOutput) /
+    1_000_000;
+  return Math.round(cents * 100) / 100;
+}

@@ -37,6 +37,24 @@ const OTHER_TINY_PNG = Buffer.from(
 
 const tests: Array<[string, () => void]> = [
   [
+    "a reference survives a full rebuild as a reference candidate, never as approved library material",
+    () => {
+      withTempProfile((profileDir) => {
+        const entry = registerFile(profileDir, TINY_PNG, {
+          kind: "unclassified",
+          origin: "reference",
+          status: "candidate",
+          destRelPath: "assets/references/ref.png",
+        });
+        rmSync(join(profileDir, "assets", "index.json"));
+        const found = scanAssets(profileDir).entries.find((e) => e.id === entry.id);
+        assert.equal(found?.origin, "reference");
+        assert.equal(found?.status, "candidate");
+      });
+    },
+  ],
+
+  [
     "full rebuild after deleting index.json preserves classification",
     () => {
       withTempProfile((profileDir) => {
