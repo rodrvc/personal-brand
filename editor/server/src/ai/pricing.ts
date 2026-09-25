@@ -45,8 +45,7 @@ export function estimateImageCostCents(): number {
 
 /**
  * The model, quality and output size of a poster recreated from a reference (reproduce mode). Chosen by a side-by-side
- * comparison on real layouts (see `odd/tasks/poster-single-image.md`); `EDITOR_POSTER_IMAGE_MODEL` and
- * `EDITOR_POSTER_IMAGE_QUALITY` override them.
+ * comparison on real layouts; `EDITOR_POSTER_IMAGE_MODEL` and `EDITOR_POSTER_IMAGE_QUALITY` override them.
  */
 export const POSTER_IMAGE_MODEL = "gpt-image-2";
 export const POSTER_IMAGE_QUALITY = "medium";
@@ -69,11 +68,22 @@ const IMAGE_CENTS_PER_1M: Record<string, { textInput: number; imageInput: number
   "gpt-image-2.5-sunburst": { textInput: 500, imageInput: 800, imageOutput: 3000 },
 };
 
-function imageRate(model: string): { textInput: number; imageInput: number; imageOutput: number } {
+type ImageRate = { textInput: number; imageInput: number; imageOutput: number };
+
+/** The highest known price for each kind of token: an unlisted model is never priced below what it may really cost. */
+const HIGHEST_IMAGE_RATE: ImageRate = Object.values(IMAGE_CENTS_PER_1M).reduce((max, rate) => ({
+  textInput: Math.max(max.textInput, rate.textInput),
+  imageInput: Math.max(max.imageInput, rate.imageInput),
+  imageOutput: Math.max(max.imageOutput, rate.imageOutput),
+}));
+
+function imageRate(model: string): ImageRate {
   const known = Object.keys(IMAGE_CENTS_PER_1M)
     .filter((name) => model === name || model.startsWith(`${name}-`))
     .sort((a, b) => b.length - a.length)[0];
-  return IMAGE_CENTS_PER_1M[known ?? IMAGE_MODEL]!;
+  if (known) return IMAGE_CENTS_PER_1M[known]!;
+  console.warn(`pricing: no list price for image model "${model}"; estimating at the highest known rate`);
+  return HIGHEST_IMAGE_RATE;
 }
 
 export function estimateImageCostFromUsage(

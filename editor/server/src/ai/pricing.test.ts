@@ -13,6 +13,18 @@ const usage = { input_tokens_details: { text_tokens: 1_000_000, image_tokens: 1_
 assert.equal(estimateImageCostFromUsage(usage, "gpt-image-1-mini"), 1250, "mini at list price, in cents: $2 + $2.50 + $8 per 1M");
 assert.equal(estimateImageCostFromUsage(usage, "gpt-image-2-2026-04-21"), 4300, "a dated snapshot is priced as its model");
 assert.equal(estimateImageCostFromUsage(usage, "gpt-image-1"), 5500, "gpt-image-1 is not mistaken for its mini");
+{
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    assert.equal(estimateImageCostFromUsage(usage, "unlisted-image-model"), 5500, "an unlisted model is priced at the highest known rate, not the mini's");
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(warnings.length, 1, "and the missing price is reported");
+  assert.match(String(warnings[0]![0]), /unlisted-image-model/);
+}
 
 delete process.env.EDITOR_POSTER_IMAGE_MODEL;
 delete process.env.EDITOR_POSTER_IMAGE_QUALITY;
