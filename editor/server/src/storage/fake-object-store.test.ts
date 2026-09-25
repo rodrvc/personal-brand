@@ -13,6 +13,18 @@ const tests: Array<[string, () => Promise<void> | void]> = [
     },
   ],
   [
+    "getStream yields the same content and etag as get",
+    async () => {
+      const store = new FakeObjectStore();
+      const put = await store.put("x/brand.json", Buffer.from("hello"));
+      const { stream, etag } = await store.getStream("x/brand.json");
+      assert.equal(etag, put.etag);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      assert.equal(Buffer.concat(chunks).toString(), "hello");
+    },
+  ],
+  [
     "put with no options always succeeds and returns a stable etag for the same content",
     async () => {
       const store = new FakeObjectStore();

@@ -14,6 +14,12 @@ export interface GetResult {
   etag: string;
 }
 
+export interface GetStreamResult {
+  /** Readable, chunk-at-a-time — the point of `getStream` is that a caller can pipe this straight to disk without ever holding the whole object in memory (issue #99's "don't buffer a large output/reel file whole" requirement). */
+  stream: AsyncIterable<Buffer>;
+  etag: string;
+}
+
 export interface HeadResult {
   etag: string;
   size: number;
@@ -63,6 +69,8 @@ export class PreconditionFailedError extends Error {
 
 export interface ObjectStore {
   get(key: string): Promise<GetResult>;
+  /** Like `get`, but for a caller that wants to stream the body straight to disk (`mirror.ts`'s `fetchObjectOnDemand`) instead of holding it whole in memory — the lazy-media fetch path for a large output/reel file `syncDown` excluded by default. */
+  getStream(key: string): Promise<GetStreamResult>;
   head(key: string): Promise<HeadResult>;
   put(key: string, body: Buffer, options?: PutOptions): Promise<PutResult>;
   /** Lists every object whose key starts with `prefix`, recursively, in no particular order. */

@@ -4,6 +4,7 @@ import {
   ObjectNotFoundError,
   PreconditionFailedError,
   type GetResult,
+  type GetStreamResult,
   type HeadResult,
   type ListedObject,
   type ObjectStore,
@@ -27,6 +28,20 @@ export class FakeObjectStore implements ObjectStore {
     const entry = this.objects.get(key);
     if (!entry) throw new ObjectNotFoundError(key);
     return { body: Buffer.from(entry.body), etag: entry.etag };
+  }
+
+  /** In-memory stand-in for a streamed body: wraps the already-buffered content in a one-chunk async iterable so `mirror.ts`'s streaming pipeline exercises the same code path in tests as it does against a real bucket. */
+  async getStream(key: string): Promise<GetStreamResult> {
+    const entry = this.objects.get(key);
+    if (!entry) throw new ObjectNotFoundError(key);
+    const body = Buffer.from(entry.body);
+    const etag = entry.etag;
+    return {
+      etag,
+      stream: (async function* () {
+        yield body;
+      })(),
+    };
   }
 
   async head(key: string): Promise<HeadResult> {
