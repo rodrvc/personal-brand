@@ -216,6 +216,12 @@ sigue funcionando sin saber que existe un bucket detrás.
   de assets, los PNG que exporta Playwright).
 - `editor/server/src/storage/runtime.ts`: arranca el backend elegido y monta
   el middleware que hidrata/sincroniza por perfil en cada request.
+- `ProfileStore.writeJsonIfRevision` / `appendLine` / `reserveOnce`: las
+  garantías de escritura (revisión obsoleta del carrusel, append del chat
+  log, reserva de versión de export) se cumplen contra el **bucket** en modo
+  `s3` (PutObject condicional real), no solo contra el mirror local — así
+  dos instancias del servidor que compiten por el mismo objeto quedan
+  cubiertas, igual que `fs` ya lo estaba para una sola instancia.
 
 Ver `docs/SETUP.md` para las variables de entorno y cómo levantar un bucket
 local con `docker-compose.storage.yml`.

@@ -97,7 +97,7 @@ S3_REGION=us-east-1                   # default
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 S3_PREFIX=profiles/                   # default; every key is <prefix><slug>/...
-S3_FORCE_PATH_STYLE=true              # default; most self-hosted S3 servers need this
+S3_FORCE_PATH_STYLE=true              # default; MinIO/most self-hosted S3 need this
 PROFILE_CACHE_DIR=/tmp/personal-brand-profile-cache   # default; local mirror root
 ```
 
@@ -115,18 +115,6 @@ adopted: pulls anonymously, persists data on its named volume across
 `docker compose down && up`, and enforces `If-Match`/`If-None-Match` on
 `PutObject`. The same `S3_*` variables point at a real MinIO deployment,
 Railway bucket, Cloudflare R2 or AWS S3 without any code change.
-
-To verify the bucket enforces conditional writes, run the storage
-integration test with the bucket's endpoint set:
-
-```bash
-S3_ENDPOINT=http://localhost:9000 S3_BUCKET=brand-profiles \
-S3_ACCESS_KEY_ID=rustfsadmin S3_SECRET_ACCESS_KEY=rustfsadmin123 \
-pnpm --filter @personal-brand/editor-server test
-```
-
-It SKIPs cleanly (exit 0) when `S3_ENDPOINT` is unset or unreachable, so
-`pnpm test`/`pnpm check` never depend on a bucket being up.
 
 In `s3` mode the server keeps a local mirror under `PROFILE_CACHE_DIR`
 (`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` are pointed at it automatically)
@@ -178,6 +166,28 @@ through `readFileAsync` for this reason, even though `assets/` is eager by
 default (so the on-demand fetch is normally a same-tick no-op) — a profile
 that overrides `S3_MIRROR_EAGER_PROFILE_PREFIXES` still gets a correct,
 lazy-safe read.
+
+The carousel PUT stale-revision check, the chat-log append, and the export
+version reservation all enforce their guarantees at the **bucket** level in
+`s3` mode — real conditional `PutObject`s (`ifMatch`/`ifNoneMatch`) via
+`ProfileStore.writeJsonIfRevision`/`appendLine`/`reserveOnce`, not just the
+local mirror — so two server instances racing on the same carousel, chat
+log, or export version are safe, the same as `fs` mode already was for a
+single instance. Verified against a real bucket (concurrent appenders,
+stale-revision rejection) by
+`profile-store-bucket-guarantees.integration.test.ts`.
+
+To verify the bucket enforces conditional writes, run the storage
+integration tests with the bucket's endpoint set:
+
+```bash
+S3_ENDPOINT=http://localhost:9000 S3_BUCKET=brand-profiles \
+S3_ACCESS_KEY_ID=rustfsadmin S3_SECRET_ACCESS_KEY=rustfsadmin123 \
+pnpm --filter @personal-brand/editor-server test
+```
+
+They SKIP cleanly (exit 0) when `S3_ENDPOINT` is unset or unreachable, so
+`pnpm test`/`pnpm check` never depend on a bucket being up.
 
 ### Migrating an existing local profile into the bucket
 

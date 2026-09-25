@@ -140,9 +140,12 @@ const tests: Array<[string, () => Promise<void>]> = [
         JSON.stringify({ ...document, id: secondCarouselId }, null, 2) + "\n",
       );
 
-      // Pre-create v1 by hand, simulating a race where something already
-      // claimed that directory name before reservation ran.
+      // Pre-create v1's reservation marker by hand, simulating a race where
+      // something already claimed that version slot before this reservation
+      // ran (reserveVersionDir claims `v<N>/.reserved`, not the bare
+      // directory, precisely so this kind of pre-existing claim is detected).
       mkdirSync(join(profileDir, "outputs", SUB, secondCarouselId, "v1"), { recursive: true });
+      writeFileSync(join(profileDir, "outputs", SUB, secondCarouselId, "v1", ".reserved"), "");
 
       const jobId = enqueueExport(store, secondCarouselId, fakeRender);
       const job = await waitForJob(jobId);

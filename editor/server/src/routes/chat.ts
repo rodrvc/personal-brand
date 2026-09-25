@@ -388,6 +388,29 @@ async function runProposal(
   references: ChatReference[],
   rasterise: Rasterise,
 ): Promise<void> {
+  try {
+    await runProposalBody(store, carouselId, proposal, generator, references, rasterise);
+  } finally {
+    // Uploads whatever this proposal wrote to the mirror (generated
+    // assets, the updated carousel document) — a no-op in `fs` mode. Like
+    // export's job completion, this runs well after the HTTP request that
+    // queued it already finished, so the per-request sync-up middleware
+    // never sees these writes.
+    const { syncUpNow } = await import("../storage/runtime.js");
+    await syncUpNow(store.slug).catch((error) => {
+      console.error(`Chat proposal ${proposal.id}: could not sync its output to the bucket:`, error);
+    });
+  }
+}
+
+async function runProposalBody(
+  store: ProfileStore,
+  carouselId: string,
+  proposal: ChatProposal,
+  generator: PieceGenerator,
+  references: ChatReference[],
+  rasterise: Rasterise,
+): Promise<void> {
   const results: EventResults = [];
   const spent = () => results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
   const fail = (error: unknown) =>
@@ -474,7 +497,7 @@ async function runProposal(
     writeDocument(store, validation.document);
     const after = notPlaced(store, readValidatedDocument(store, carouselId), results);
     if (after) throw new Error(messages.proposal.imageRemovedMeanwhile(after.slide, after.image));
-    appendChatRecord(store, carouselId, {
+    await appendChatRecord(store, carouselId, {
       role: "event",
       kind: "done",
       proposalId: proposal.id,
@@ -483,7 +506,7 @@ async function runProposal(
       results,
     });
   } catch (error) {
-    fail(error);
+    await fail(error);
   }
 }
 
@@ -556,7 +579,7 @@ export function chatRouter(
         images,
         tier: references.some((r) => r.role === "layout") ? "vision" : "fast",
       });
-      const user = appendChatRecord(store, req.params.id, {
+      const user = await appendChatRecord(store, req.params.id, {
         role: "user",
         text,
         ...(references.length > 0 ? { references } : {}),
@@ -573,7 +596,7 @@ export function chatRouter(
         [...history.flatMap((r) => (r.role === "user" && r.text !== "" ? [r.text] : [])), text],
         awaited?.asksFor ?? [],
       );
-      const assistant = appendChatRecord(store, req.params.id, {
+      const assistant = await appendChatRecord(store, req.params.id, {
         role: "assistant",
         text: "rejected" in outcome ? [outcome.text, outcome.rejected].filter(Boolean).join("\n\n") : outcome.text,
         costCents: completion.costCents,
@@ -613,7 +636,7 @@ export function chatRouter(
     }
   });
 
-  router.post(`${BASE}/proposals/:proposalId/apply`, (req, res) => {
+  router.post(`${BASE}/proposals/:proposalId/apply`, async (req, res) => {
     try {
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
@@ -625,7 +648,7 @@ export function chatRouter(
       const references = proposalReferences(log, proposal.id);
       const ctx = withReferences(buildChatContext(store, req.params.id), references);
       proposal.actions.forEach((action) => resolveAction(ctx, action));
-      const started = appendChatRecord(store, req.params.id, {
+      const started = await appendChatRecord(store, req.params.id, {
         role: "event",
         kind: "started",
         proposalId: proposal.id,
@@ -642,14 +665,14 @@ export function chatRouter(
     }
   });
 
-  router.post(`${BASE}/proposals/:proposalId/discard`, (req, res) => {
+  router.post(`${BASE}/proposals/:proposalId/discard`, async (req, res) => {
     try {
       const store = open(req.params.slug, req.params.id);
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
       if (pendingProposal(readChatLog(store, req.params.id))?.id !== req.params.proposalId) {
         return void res.status(409).json({ error: messages.proposal.notPending });
       }
-      const record = appendChatRecord(store, req.params.id, {
+      const record = await appendChatRecord(store, req.params.id, {
         role: "user",
         text: "",
         resolves: { proposalId: req.params.proposalId, decision: "discard" },

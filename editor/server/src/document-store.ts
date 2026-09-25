@@ -61,6 +61,37 @@ export function writeDocument(store: ProfileStore, doc: CarouselDocument): void 
 }
 
 /**
+ * Reads the current document together with an opaque revision token (the
+ * bucket's `ETag` in `s3` mode, read straight from the bucket rather than
+ * the local mirror; a content hash in `fs` mode) — the pairing
+ * `writeDocumentIfRevision` needs to refuse a write that raced against
+ * another one since this read. `undefined` when the carousel doesn't exist.
+ */
+export async function readDocumentRevision(
+  store: ProfileStore,
+  carouselId: string,
+): Promise<{ value: unknown; revision: string } | undefined> {
+  assertValidCarouselId(carouselId);
+  return store.readJsonRevision(docRelPath(carouselId));
+}
+
+/**
+ * Writes the document only if its current revision still matches
+ * `expectedRevision` (or, when `null`, only if it doesn't exist yet) —
+ * the PUT route's stale-copy 409 today, and in `s3` mode also a real
+ * guard against two server instances racing on the same carousel.
+ * Throws `RevisionConflictError` (from `profile-store.ts`) otherwise.
+ */
+export async function writeDocumentIfRevision(
+  store: ProfileStore,
+  doc: CarouselDocument,
+  expectedRevision: string | null,
+): Promise<string> {
+  assertValidCarouselId(doc.id);
+  return store.writeJsonIfRevision(docRelPath(doc.id), doc, expectedRevision);
+}
+
+/**
  * Snapshots the current on-disk document to `carousels/<id>/versions/<ISO
  * timestamp>.json` (specs/carousel-document, "Internal document versions").
  * No-ops if the document doesn't exist yet (nothing to snapshot for a

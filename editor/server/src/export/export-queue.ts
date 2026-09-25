@@ -61,29 +61,29 @@ function outputSub(store: ProfileStore): string {
   return resolveOutputSubfolder(store.roots.profileDir, "editor");
 }
 
-function reserveVersionDir(store: ProfileStore, carouselId: string): { version: number; relDir: string } {
+/**
+ * Atomically claims the next free version number via
+ * `ProfileStore.reserveOnce` (issue #99) — a `.reserved` marker file put
+ * with `ifNoneMatch: "*"` in `s3` mode (a real conditional `PutObject`
+ * against the bucket, safe across server instances), or opened with the
+ * exclusive `"wx"` flag in `fs` mode (throws `EEXIST` if taken — the same
+ * race-free "claim or fail" primitive carousel-export's spec calls for, now
+ * expressed as a marker file instead of the version directory itself). On a
+ * lost race, try the next number — never overwrite, never delete
+ * (design.md D11).
+ */
+async function reserveVersionDir(store: ProfileStore, carouselId: string): Promise<{ version: number; relDir: string }> {
   const sub = outputSub(store);
   let version = 1;
-  // Atomic reservation: `mkdirSync` with no `recursive` throws EEXIST if the
-  // directory is already there, which is exactly the race-free "claim this
-  // slot" primitive carousel-export's spec calls for. On EEXIST, try the
-  // next number — never overwrite, never delete (design.md D11).
   for (;;) {
-    try {
-      // Ensure the parent (`outputs/<sub>/<carouselId>/`) exists first —
-      // that part IS safe to create recursively, since collisions can only
-      // happen on the version leaf itself.
-      store.mkdir(`outputs/${sub}/${carouselId}`);
-      const abs = store.resolveInOutputs(`${sub}/${carouselId}/v${version}`);
-      mkdirSync(abs); // no {recursive:true}: throws EEXIST if taken
-      return { version, relDir: `${sub}/${carouselId}/v${version}` };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
-        version += 1;
-        continue;
-      }
-      throw error;
+    const relDir = `${sub}/${carouselId}/v${version}`;
+    const claimed = await store.reserveOnce(`${relDir}/.reserved`, "outputs");
+    if (claimed) {
+      const abs = store.resolveInOutputs(relDir);
+      mkdirSync(abs, { recursive: true });
+      return { version, relDir };
     }
+    version += 1;
   }
 }
 
@@ -190,12 +190,28 @@ export function enqueueExport(
 async function runExport(store: ProfileStore, doc: CarouselDocument, job: ExportJob, render: RenderFn): Promise<void> {
   job.status = "running";
   try {
+    await runExportBody(store, doc, job, render);
+  } finally {
+    // Uploads whatever this job wrote to the mirror (PNGs, manifest.json,
+    // the asset index, the exported-status document) — a no-op in `fs`
+    // mode. This is the ONE place export's writes reach the bucket: they
+    // happen after this HTTP request's own `res.on("finish")` middleware
+    // already ran, since the render itself is queued and runs later.
+    const { syncUpNow } = await import("../storage/runtime.js");
+    await syncUpNow(store.slug).catch((error) => {
+      console.error(`Export ${job.id}: could not sync its output to the bucket:`, error);
+    });
+  }
+}
+
+async function runExportBody(store: ProfileStore, doc: CarouselDocument, job: ExportJob, render: RenderFn): Promise<void> {
+  try {
     const brand = loadBrand(store.roots.profileDir);
     const template = resolveDocumentTemplate(store, brand, doc);
     const index = loadIndex(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 
-    const { version, relDir } = reserveVersionDir(store, doc.id);
+    const { version, relDir } = await reserveVersionDir(store, doc.id);
     const outputDir = store.resolveInOutputs(relDir);
 
     const ctx = buildExportRenderContext(store, brand, doc.slides[0]?.background ?? { mode: "color", colorKey: brand.roles.surface });

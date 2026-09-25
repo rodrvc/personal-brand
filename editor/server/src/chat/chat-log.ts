@@ -1,5 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import { assertValidCarouselId } from "../document-store.js";
@@ -64,15 +63,22 @@ export function readChatLog(store: ProfileStore, carouselId: string): ChatRecord
     .map((line) => JSON.parse(line) as ChatRecord);
 }
 
-export function appendChatRecord(store: ProfileStore, carouselId: string, record: NewRecord): ChatRecord {
+/**
+ * Appends one record to the chat log. Goes through `ProfileStore.appendLine`
+ * (issue #99), which in `s3` mode reads the log's current content and etag
+ * straight from the bucket, appends, and writes back conditioned on that
+ * etag — retrying a bounded number of times, with jitter, if another
+ * writer's append landed first — so two concurrent appenders never lose
+ * either one's record. `fs` mode appends directly, exactly as this always
+ * did before that guarantee existed.
+ */
+export async function appendChatRecord(store: ProfileStore, carouselId: string, record: NewRecord): Promise<ChatRecord> {
   const full = {
     id: newChatId(record.role === "event" ? "evt" : "msg"),
     at: new Date().toISOString(),
     ...record,
   } as ChatRecord;
-  const abs = store.resolveInProfile(logRelPath(carouselId));
-  mkdirSync(dirname(abs), { recursive: true });
-  appendFileSync(abs, JSON.stringify(full) + "\n", "utf-8");
+  await store.appendLine(logRelPath(carouselId), JSON.stringify(full));
   return full;
 }
 
