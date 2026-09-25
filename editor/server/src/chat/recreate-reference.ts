@@ -256,6 +256,16 @@ export function checkSources(texts: PosterText[], ownerMessages: string[], answe
   });
 }
 
+/**
+ * The layout's own event texts that must not appear on the new poster: the originals of every datum and of the
+ * title, subtitle and chip.
+ */
+export function forbiddenTexts(texts: PosterText[]): string[] {
+  const kept = new Set(["label", "footer", "logo", "picture"]);
+  const originals = texts.flatMap((t) => (t.original?.trim() && !kept.has(t.zone) && t.original.trim() !== t.text.trim() ? [t.original.trim()] : []));
+  return originals.filter((o, i) => originals.indexOf(o) === i && !LABEL_ZONES.some(([, pattern]) => pattern.test(normalized(o))));
+}
+
 /** The label of a value the event does not have goes with it: a caption over nothing. */
 export function withAbsentLabels(texts: PosterText[], lines: TextLine[] | undefined): PosterText[] {
   if (!lines) return texts;
@@ -354,6 +364,72 @@ export function keepTextsPrompt(contentAttached: boolean): string {
       ? "Only replace the picture inside the frame with the second image, as it is."
       : "Change nothing else.",
   ].join(" ");
+}
+
+/** The full day a YYYY-MM-DD stands for, in the profile's locale, e.g. "Friday, 26 September 2026"; undefined when invalid. */
+export function longDate(iso: string, locale: string): string | undefined {
+  const date = new Date(`${iso}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(date);
+}
+
+/** The texts a poster made as one image states: event data and the chip, each with its weekday written from its day. */
+export function posterData(texts: PosterText[], locale: string): Array<PosterText & { zone: Zone }> {
+  return texts.flatMap((t) => {
+    if (!isPlaceable(t) || t.zone === "label" || t.zone === "footer") return [];
+    return [t.date && t.text ? { ...t, text: withWeekday(t.text, t.date, locale) } : t];
+  });
+}
+
+const ZONE_NAMES: Record<Zone, string> = {
+  chip: "category chip",
+  title: "event name",
+  subtitle: "subtitle",
+  date: "date",
+  time: "time",
+  place: "place",
+  entry: "entry",
+  price: "price",
+  label: "label",
+  footer: "footer",
+  body: "text",
+};
+
+/**
+ * The instruction for a poster made by the image provider as one image: the first image is the layout reference to
+ * copy, the second the new event. Every event datum is stated, a date with its weekday worked out here, and nothing
+ * of the reference's own event may stay. The owner's message goes last and wins over the layout where it asks for a
+ * change of style.
+ */
+export function posterPrompt(options: { texts: PosterText[]; request: string; contentAttached: boolean; locale: string }): string {
+  const data = posterData(options.texts, options.locale);
+  const named = (t: PosterText & { zone: Zone }) => ZONE_NAMES[t.zone] + (t.original ? ` (in place of "${t.original}")` : "");
+  const written = data.filter((t) => t.from !== "absent" && t.text.trim() !== "");
+  const removed = data.filter((t) => t.from === "absent");
+  const chip = data.find((t) => t.zone === "chip");
+  const forbidden = forbiddenTexts(options.texts);
+  const lines = written.map((t) => {
+    const day = t.date ? longDate(t.date, options.locale) : undefined;
+    return `- ${named(t)}: "${t.text}"${day ? ` (it stands for ${day}; a check only, do not write it)` : ""}`;
+  });
+  return [
+    "Reproduce the first image exactly: the same layout, typography, colours, logo, icons, cards, chips, decorations and spacing, at the same positions and sizes.",
+    options.contentAttached
+      ? "Change only the event data and the framed picture: the framed picture becomes the second image, the new event's own picture, as it is."
+      : "Change only the event data and the framed picture, which shows the new event described here.",
+    "Nothing of the first image's event may remain: none of its name, date, weekday, time, place, address, price or picture.",
+    forbidden.length > 0 ? `These texts of the first image's event must not appear anywhere on the new poster:\n${forbidden.map((f) => `- "${f.replace(/\s*\n\s*/g, " / ")}"`).join("\n")}` : "",
+    "Any header or chip wording of the first image that names its venue, its kind of place or its category is replaced from the second image or removed, never kept.",
+    lines.length > 0 ? `Write these texts exactly as given, character for character (same case, abbreviations and punctuation: do not expand, shorten, translate or reformat them), each where the first image shows that kind of data:\n${lines.join("\n")}` : "",
+    chip && written.includes(chip) ? "" : "Write the category chip as a short tag naming the kind of event, in the first image's wording style.",
+    removed.length > 0
+      ? `The event has no ${removed.map((t) => ZONE_NAMES[t.zone]).join(", no ")}: remove that element entirely (its label, icon and row) from the poster, closing the gap.`
+      : "",
+    "Keep every label, the logo and the footer exactly as in the first image. All text crisp, legible and spelled exactly as given.",
+    options.request.trim() ? `The owner's request, which wins over the first image wherever it asks for a change: "${options.request.trim()}"` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function normalized(text: string): string {

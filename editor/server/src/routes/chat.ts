@@ -9,7 +9,7 @@ import { detectImage, loadIndex } from "../../../../system/assets/index.js";
 import { generateForSlot, storeImage } from "../compose/planner.js";
 import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
-import { buildChatContext, chatInput, CHAT_INSTRUCTIONS } from "../chat/chat-context.js";
+import { buildChatContext, chatInput, chatInstructions, type PosterRoute } from "../chat/chat-context.js";
 import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatProposal, type ChatRecord } from "../chat/chat-log.js";
 import {
   anchorLines,
@@ -22,6 +22,8 @@ import {
   missingData,
   checkSources,
   placePoster,
+  posterData,
+  posterPrompt,
   refineTexts,
   register,
   settleTexts,
@@ -69,12 +71,27 @@ function whereImageToolRuns<T>(read: () => T): T | undefined {
   }
 }
 
-/** The layout reference's measured text lines, proportion and framed picture, read before the model is asked. */
-function readLayout(store: ProfileStore, references: ChatReference[], wordmark: string): LayoutRead {
+/**
+ * How a poster from a reference is made: one image by the image provider (default), or, with
+ * `EDITOR_POSTER_ROUTE=editable`, a background with editable texts on top (see `posterBackground`).
+ */
+export function posterRoute(): PosterRoute {
+  return process.env.EDITOR_POSTER_ROUTE?.trim() === "editable" ? "editable" : "image";
+}
+
+/** The route of a poster proposed before proposals recorded theirs: every one of them was editable. */
+const LEGACY_POSTER_ROUTE: PosterRoute = "editable";
+
+/**
+ * The layout reference's proportion, read before the model is asked; for an editable poster also its measured text
+ * lines and framed picture. A poster made as one image needs no OCR and no frame.
+ */
+function readLayout(store: ProfileStore, references: ChatReference[], wordmark: string, route: PosterRoute): LayoutRead {
   const layout = references.find((r) => r.role === "layout");
   const file = layout ? readAssetFile(store, layout.id) : undefined;
   if (!file) return {};
   const size = detectImage(file.bytes, "reference");
+  if (route === "image") return size.w && size.h ? { aspect: size.w / size.h } : {};
   const picture = whereImageToolRuns(() => findPicture(file.bytes));
   const lines = readTextLines(file.bytes);
   const ink = lines ? whereImageToolRuns(() => inkReader(toPng(file.bytes))) : undefined;
@@ -94,9 +111,11 @@ function proposeRecreation(
   activeSlideId: string | undefined,
   request: string,
   layoutRead: LayoutRead,
+  route: PosterRoute,
 ): ChatAction {
   const layout = references.find((r) => r.role === "layout");
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
+  if (route === "image") return proposePosterImage(ctx, action, references, accepts, activeSlideId, request, layoutRead, layout);
   const completed = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
   const classified = withAbsentLabels(completed, layoutRead.lines);
   const texts = refineTexts(
@@ -114,9 +133,42 @@ function proposeRecreation(
     slideId: action.slideId ?? fallback,
     referenceIds: [layout.id, ...(contentAsImage ? [content!.id] : [])],
     request,
+    posterRoute: "editable",
     ...(layoutRead.aspect ? { layoutAspect: layoutRead.aspect } : {}),
     ...(layoutRead.picture ? { picture: layoutRead.picture } : {}),
     ...(layoutRead.lines ? { anchors: anchorLines(classified, layoutRead.lines, layoutRead.picture) } : {}),
+    provenance: [
+      { source: "layout_reference", detail: layout.name },
+      ...(content ? [{ source: contentAsImage ? ("content_reference" as const) : ("reference_described" as const), detail: content.name }] : []),
+      ...resolveAction(ctx, { ...action, texts }).provenance.map(named),
+    ],
+  };
+}
+
+/** A poster made as one image: only the event's data, each date with its weekday written from its day. */
+function proposePosterImage(
+  ctx: ReturnType<typeof buildChatContext>,
+  action: Extract<ChatAction, { type: "compose_from_reference" }>,
+  references: Array<ChatReference & { mime: string }>,
+  accepts: PieceGenerator["acceptsReference"],
+  activeSlideId: string | undefined,
+  request: string,
+  layoutRead: LayoutRead,
+  layout: ChatReference,
+): ChatAction {
+  const texts = posterData(action.texts, ctx.brand.locale);
+  const content = references.find((r) => r.role === "content");
+  const contentAsImage = content !== undefined && accepts("background", content.mime);
+  const fallback = ctx.doc.slides.some((s) => s.id === activeSlideId) ? activeSlideId : ctx.doc.slides[0]?.id;
+  const named = (p: ChatAction["provenance"][number]) => (p.source === "content_reference" && content ? { ...p, detail: `${content.name} · ${p.detail}` } : p);
+  return {
+    ...action,
+    texts,
+    slideId: action.slideId ?? fallback,
+    referenceIds: [layout.id, ...(contentAsImage ? [content!.id] : [])],
+    request,
+    posterRoute: "image",
+    ...(layoutRead.aspect ? { layoutAspect: layoutRead.aspect } : {}),
     provenance: [
       { source: "layout_reference", detail: layout.name },
       ...(content ? [{ source: contentAsImage ? ("content_reference" as const) : ("reference_described" as const), detail: content.name }] : []),
@@ -133,6 +185,7 @@ function toProposal(
   activeSlideId: string | undefined,
   request: string,
   layoutRead: LayoutRead,
+  route: PosterRoute,
   ownerMessages: string[],
   answering: string[],
 ): { text: string; rejected: string } | { text: string; actions: ChatAction[] } | { text: string; asksFor: string[] } {
@@ -157,7 +210,7 @@ function toProposal(
       if (action.type === "compose_from_reference") {
         // Where each text comes from is checked against what was said, not taken from the model's word.
         const checked = { ...action, texts: checkSources(action.texts, ownerMessages, answering) };
-        return proposeRecreation(ctx, checked, references, accepts, activeSlideId, request, layoutRead);
+        return proposeRecreation(ctx, checked, references, accepts, activeSlideId, request, layoutRead, route);
       }
       if (action.type !== "generate_visual") return action;
       const asImage = references.filter((r) => accepts(action.kind, r.mime));
@@ -251,6 +304,37 @@ function generationFor(store: ProfileStore, action: ChatAction, canvas: Carousel
   return undefined;
 }
 
+/**
+ * A poster made as one image: the layout reference (first, letterboxed to the slide) and the event (second) go to the
+ * image provider with every event datum stated. The result is cut back to the slide's proportion, never stretched.
+ */
+function posterImageFor(store: ProfileStore, action: Extract<ChatAction, { type: "compose_from_reference" }>, canvas: CarouselDocument["canvas"], locale: string): GenerationRequest {
+  const layout = action.referenceIds?.[0] ? readAssetFile(store, action.referenceIds[0]) : undefined;
+  const pad = layout ? whereImageToolRuns(() => edgeColor(layout.bytes)) : undefined;
+  return {
+    prompt: posterPrompt({ texts: action.texts, request: action.request ?? "", contentAttached: (action.referenceIds?.length ?? 0) > 1, locale }),
+    kind: "background",
+    slot: "reference",
+    referenceAssetIds: action.referenceIds,
+    mode: "reproduce",
+    ...(pad ? { padColor: pad } : {}),
+    postProcess: (image) => fitToSlide(image, canvas, pad),
+  };
+}
+
+/**
+ * The generated poster at the slide's proportion: as it is when it already has it, else the slide's letterboxed
+ * region resampled to the canvas, so nothing is stretched.
+ */
+export function fitToSlide(image: Buffer, canvas: CarouselDocument["canvas"], pad?: string): Buffer {
+  const size = detectImage(image, "generated");
+  if (!size.w || !size.h) return image;
+  const imageAspect = size.w / size.h;
+  const slideAspect = canvas.w / canvas.h;
+  if (Math.abs(imageAspect / slideAspect - 1) < 0.005) return image;
+  return remap(image, letterbox(imageAspect, slideAspect), canvas.w, canvas.h, pad);
+}
+
 /** Where the poster's background comes from: the layout reference itself (default) or the image provider. */
 function posterBackground(): "reference" | "provider" {
   return process.env.EDITOR_POSTER_BACKGROUND === "provider" ? "provider" : "reference";
@@ -322,6 +406,13 @@ async function runProposal(
     const canvas = readValidatedDocument(store, carouselId).canvas;
     const brand = buildChatContext(store, carouselId).brand;
     for (const action of proposal.actions) {
+      if (action.type === "compose_from_reference" && (action.posterRoute ?? LEGACY_POSTER_ROUTE) === "image") {
+        const entry = await generateForSlot(store, generator, { ...posterImageFor(store, action, canvas, brand.locale), canvas, carouselId });
+        generated.set(action.id, entry.id);
+        placed.set(action.id, []);
+        results.push({ actionId: action.id, slideIds: [], assetIds: [entry.id], costCents: readGeneratedAssetCostCents(store, entry.id) });
+        continue;
+      }
       if (action.type === "compose_from_reference" && posterBackground() === "reference") {
         const composition = await composeFromLayout(store, action, canvas, brand, carouselId, rasterise);
         composed.set(action.id, composition);
@@ -454,12 +545,13 @@ export function chatRouter(
       const references = attached.length > 0 ? attached : (awaited?.references ?? []);
       // The answer to a question completes the message that asked for the poster: the provider hears both.
       const request = awaited ? `${awaited.text}\n${text}` : text;
+      const route = posterRoute();
       const ctx = withReferences(buildChatContext(store, req.params.id), references);
       const generator = getGenerator(req.params.slug);
       const images = loadReferenceImages(store, references.map((r) => r.id));
-      const layoutRead = readLayout(store, references, ctx.brand.copy.wordmark);
+      const layoutRead = readLayout(store, references, ctx.brand.copy.wordmark, route);
       const completion = await generator.completeJson({
-        instructions: CHAT_INSTRUCTIONS,
+        instructions: chatInstructions(route),
         input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" })), numberedLines(layoutRead.lines, layoutRead.kinds)),
         images,
         tier: references.some((r) => r.role === "layout") ? "vision" : "fast",
@@ -477,6 +569,7 @@ export function chatRouter(
         typeof activeSlideId === "string" ? activeSlideId : undefined,
         request,
         layoutRead,
+        route,
         [...history.flatMap((r) => (r.role === "user" && r.text !== "" ? [r.text] : [])), text],
         awaited?.asksFor ?? [],
       );

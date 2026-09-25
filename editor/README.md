@@ -53,7 +53,10 @@ Read from a `.env` at the **repo root**, not from `editor/`:
 | `OPENAI_API_KEY` | unset | Optional. Without it, AI-generation endpoints return 503; composing from the asset library still works. |
 | `EDITOR_BIND` | `127.0.0.1` | Refuses to start if set to a non-loopback host without `EDITOR_AUTH` — auth isn't implemented yet. |
 | `EDITOR_PORT` | `4310` | |
-| `EDITOR_POSTER_BACKGROUND` | `reference` | Where a poster composed from a reference gets its background: `reference` erases the layout's own texts locally (no cost); `provider` repaints it with the image provider. |
+| `EDITOR_POSTER_ROUTE` | `image` | How a poster is made from a layout and a content reference: `image` has the image provider redraw it as one image with the new event's data (no OCR, no editable texts); `editable` builds a background with the event's texts on top as editable objects. |
+| `EDITOR_POSTER_BACKGROUND` | `reference` | Only with `EDITOR_POSTER_ROUTE=editable`: where the poster's background comes from. `reference` erases the layout's own texts locally (no cost); `provider` repaints it with the image provider. |
+| `EDITOR_POSTER_IMAGE_MODEL` | `gpt-image-2` | Image model for a poster recreated from a reference. A `gpt-image-2*` model is asked for the slide's own proportion (1024x1280 for 4:5); others get their closest fixed size and the slide is cut back out. |
+| `EDITOR_POSTER_IMAGE_QUALITY` | `medium` | Quality for that model (`low`, `medium`, `high`...). |
 | `EDITOR_AUTH` | unset | Reserved, not implemented. |
 
 ## API summary
