@@ -67,6 +67,7 @@ function buildDoc(overParams?: Record<string, unknown>): CarouselDocument {
             text: "Moved by hand",
             fontKey: "body",
             fontSize: 30,
+            fontWeight: 700,
             lineHeight: 1.2,
             align: "left",
             colorKey: "slate",
@@ -268,6 +269,14 @@ const tests: Array<[string, () => void]> = [
         /data-object-id="obj-moved"[^>]*style="[^"]*left: 321px[^"]*top: 654px/,
         "the moved object must render at its own geometry, not a slot default",
       );
+    },
+  ],
+  [
+    "a text's own weight is rendered, and a text without one keeps the font's regular",
+    () => {
+      const html = renderFreeLayoutSlide(brand, template, buildDoc(), 0, ctx);
+      assert.match(html, /data-object-id="obj-moved"[^>]*style="[^"]*font-weight: 700/);
+      assert.doesNotMatch(html, /data-object-id="obj-title"[^>]*style="[^"]*font-weight/);
     },
   ],
 

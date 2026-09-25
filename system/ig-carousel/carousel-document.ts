@@ -119,6 +119,8 @@ const textObjectSchema = z.object({
   // require full styling for unslotted objects enforce it themselves.
   fontKey: z.string().min(1).optional(),
   fontSize: z.number().int().positive().optional(),
+  // CSS weight (100–900); unset renders the font's regular weight.
+  fontWeight: z.number().int().min(100).max(900).optional(),
   lineHeight: z.number().positive().optional(),
   align: z.enum(["left", "center", "right"]).optional(),
   colorKey: z.string().min(1).optional(),

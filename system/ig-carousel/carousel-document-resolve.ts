@@ -32,6 +32,7 @@ export interface ResolvedObject {
         // these filled, either from itself or from the slot.
         fontKey?: string;
         fontSize?: number;
+        fontWeight?: number;
         lineHeight?: number;
         align?: TextObject["align"];
         colorRole?: string;
@@ -93,6 +94,7 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
           text: object.text,
           fontKey: object.fontKey ?? textSlot?.fontKey,
           fontSize: object.fontSize ?? textSlot?.fontSize,
+          fontWeight: object.fontWeight,
           lineHeight: object.lineHeight ?? textSlot?.lineHeight,
           align: object.align ?? textSlot?.align,
           colorRole: textSlot?.colorRole,

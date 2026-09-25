@@ -1,8 +1,10 @@
+import { contrast } from "@personal-brand/core/color";
 import { z } from "zod";
 
 import type { BrandRoles, BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument, Slide, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
-import { DEFAULT_TYPE_SCALE, snapToScale, typeStyle, type TypeRole } from "../../../../system/ig-carousel/typography.js";
+import { snapToScale, typeStyle, type TypeRole } from "../../../../system/ig-carousel/typography.js";
+import { bestContrastColorKey } from "../compose/planner.js";
 import type { TextLine } from "../text-boxes.js";
 import { newChatId } from "./chat-log.js";
 
@@ -95,20 +97,65 @@ function inside(box: Box, area: Box): boolean {
   return cx >= area.x && cx <= area.x + area.w && cy >= area.y && cy <= area.y + area.h;
 }
 
-export type NumberedLine = TextLine & { line: number };
+export type NumberedLine = TextLine & { line: number; kind?: "logo" | "label" };
 
-/** The measured lines outside the framed picture, keeping their numbers: those are the poster's own texts. */
-export function linesOutside(lines: TextLine[] | undefined, picture: Box | undefined): NumberedLine[] | undefined {
-  return lines?.map((l, line) => ({ line, ...l })).filter((l) => !picture || !inside(l.box, picture));
+/** The measured lines outside the framed picture, keeping their numbers, marked when they are the logo or a label. */
+export function numberedLines(lines: TextLine[] | undefined, kinds: LineKind[] | undefined): NumberedLine[] | undefined {
+  return lines?.flatMap((l, line): NumberedLine[] => {
+    const kind = kinds?.[line];
+    if (kind === "picture") return [];
+    return [{ line, ...l, ...(kind === "logo" || kind === "label" ? { kind } : {}) }];
+  });
 }
 
-/** A line whose centre falls inside the framed picture is the picture's own text, whatever zone it was given. */
-export function keepPictureLines(texts: PosterText[], lines: TextLine[] | undefined, picture: Box | undefined): PosterText[] {
-  if (!picture || !lines) return texts;
-  return texts.map((t) => {
-    const line = t.line !== undefined ? lines[t.line] : undefined;
-    return line && inside(line.box, picture) ? { ...t, zone: "picture" } : t;
+export type LineKind = "picture" | "logo" | "label" | "text";
+
+/**
+ * What each measured line of the layout is: the framed picture's own text, the brand's wordmark (kept as it is),
+ * a field label (a short caption right above its value), or any other text of the poster.
+ */
+export function classifyLines(lines: TextLine[], picture: Box | undefined, wordmark: string): LineKind[] {
+  return lines.map((line, i) => {
+    if (picture && inside(line.box, picture)) return "picture";
+    if (similarity(withoutIcon(line.text), wordmark) >= 0.6) return "logo";
+    return valueBelow(lines, i) !== undefined ? "label" : "text";
   });
+}
+
+/** The line a short caption names: right under it, starting where it starts and at least as tall. */
+export function valueBelow(lines: TextLine[], i: number): number | undefined {
+  const caption = lines[i]!.box;
+  if (withoutIcon(lines[i]!.text).trim().split(/\s+/).length > 2) return undefined;
+  const bottom = caption.y + caption.h;
+  const found = lines.findIndex(
+    ({ box }, j) =>
+      j !== i && box.y > caption.y + caption.h / 2 && box.y - bottom < 1.5 * caption.h && Math.abs(box.x - caption.x) < 0.02 && box.h >= 0.95 * caption.h,
+  );
+  return found >= 0 ? found : undefined;
+}
+
+/**
+ * One text for every line of the poster's frame, so none stays painted in the background. A label keeps its
+ * caption; a new value the model wrote on the caption's line moves to the value's line. A line the model left out
+ * keeps its current text. The wordmark and the picture's lines get no text.
+ */
+export function completeTexts(texts: PosterText[], lines: TextLine[], kinds: LineKind[]): PosterText[] {
+  const byLine = new Map(texts.flatMap((t) => (t.line !== undefined ? [[t.line, t] as const] : [])));
+  kinds.forEach((kind, i) => {
+    const given = byLine.get(i);
+    const value = kind === "label" ? valueBelow(lines, i) : undefined;
+    if (value === undefined || !given || given.from !== "content" || given.zone === "label") return;
+    const current = byLine.get(value);
+    if (!current || current.from === "layout" || !current.text.trim()) byLine.set(value, { ...given, line: value });
+  });
+  const kept = (i: number): PosterText => ({ line: i, zone: lines[i]!.box.y > 0.9 ? "footer" : "body", text: withoutIcon(lines[i]!.text), from: "layout" });
+  const framed = kinds.flatMap((kind, i): PosterText[] => {
+    if (kind === "picture" || kind === "logo" || byLine.get(i)?.zone === "logo") return [];
+    if (kind === "label") return [{ ...kept(i), zone: "label" }];
+    const given = byLine.get(i);
+    return [given && isPlaceable(given) && given.text.trim() ? given : kept(i)];
+  });
+  return [...framed, ...texts.filter((t) => t.line === undefined)];
 }
 
 /** The layout lines the generator is asked to keep in place, to register its image against: all but the picture's. */
@@ -275,24 +322,28 @@ const BOX_PER_EM = { flat: 0.88, descending: 1.1 };
 const DESCENDERS = /[gjpqy,;]/;
 const GLYPH_WIDTH = { lower: 0.58, upper: 0.72 };
 /** A chip's pill is about this much wider than the text measured in it. */
-const CHIP_SLACK = 1.3;
+export const CHIP_SLACK = 1.3;
+const LARGE_TEXT = 24;
 
-function fontSizeFor(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): number {
+export function fontSizeFor(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): number {
   const perEm = DESCENDERS.test(t.original ?? t.text) ? BOX_PER_EM.descending : BOX_PER_EM.flat;
   return snapToScale(brand, (box.h * canvas.h) / perEm);
 }
 
-function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): SlideObject {
+/** About how wide the text sets at that size, in pixels. */
+export function textWidth(text: string, fontSize: number): number {
+  return text.length * fontSize * (text === text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower);
+}
+
+function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: string): SlideObject {
   const role = ZONE_TYPE[t.zone];
   const style = typeStyle(brand, role);
   const measuredW = box.w * canvas.w;
-  const glyph = t.text === t.text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower;
   const measured = fontSizeFor(t, box, canvas, brand);
-  // A chip's pill stays in the background at the old text's width: a longer text steps down the scale to fit it.
-  const scale = brand.typeScale ?? DEFAULT_TYPE_SCALE;
-  const fitting = scale.filter((size) => t.text.length * size * glyph <= measuredW * CHIP_SLACK).at(-1) ?? scale[0]!;
-  const fontSize = role === "chip" ? Math.min(measured, fitting) : measured;
-  const neededW = Math.min(canvas.w, t.text.length * fontSize * glyph);
+  // A chip's text must stay inside its pill: past it, the size leaves the brand's scale and shrinks without a floor.
+  const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1));
+  const fontSize = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
+  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize));
   const w = Math.round(Math.max(measuredW, neededW));
   const align = role === "chip" ? "center" : box.x + box.w / 2 > 0.6 ? "right" : "left";
   const left = align === "right" ? box.x * canvas.w + measuredW - w : align === "center" ? box.x * canvas.w + (measuredW - w) / 2 : box.x * canvas.w;
@@ -307,20 +358,24 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
     fontSize,
     lineHeight: 1.15,
     align,
-    colorKey: brand.roles[style.color as keyof BrandRoles],
+    colorKey: ink ?? brand.roles[style.color as keyof BrandRoles],
     pinned: false,
     locked: false,
     source: "ai",
   };
 }
 
-/** The text-free poster fills the slide, pinned; each text (boxes already on the slide) goes on top, editable. */
+/**
+ * The poster's background fills the slide, pinned; the event's picture, when given, goes in the frame, movable;
+ * each text (boxes already on the slide) goes on top, editable, in the ink that reads best on what is behind it.
+ */
 export function placePoster(
   slide: Slide | undefined,
   assetId: string,
   texts: PlacedText[],
   canvas: CarouselDocument["canvas"],
   brand: BrandTokens,
+  options: { picture?: { assetId: string; box: Box }; behind?: (box: Box) => string } = {},
 ): Slide {
   const background: SlideObject = {
     id: newChatId("obj-poster"),
@@ -332,6 +387,28 @@ export function placePoster(
     locked: false,
     source: "ai",
   };
+  const picture: SlideObject[] = options.picture
+    ? [
+        {
+          id: newChatId("obj-poster-picture"),
+          kind: "asset",
+          assetId: options.picture.assetId,
+          fit: "cover",
+          geometry: pixels(options.picture.box, canvas),
+          pinned: false,
+          locked: false,
+          source: "ai",
+        },
+      ]
+    : [];
+  const ink = (t: PlacedText) => {
+    if (!options.behind) return undefined;
+    const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
+    const behind = `#${options.behind(t.box)}`;
+    // WCAG AA: 3:1 is enough for large text, 4.5:1 below that.
+    const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
+    return contrast(brand.colors[roleKey]!, behind) >= needed ? roleKey : bestContrastColorKey(brand, brand.colors[roleKey]!, behind);
+  };
   return {
     id: slide?.id ?? newChatId("slide"),
     kind: slide?.kind ?? "cover",
@@ -339,7 +416,12 @@ export function placePoster(
     objects: [
       ...(slide?.objects ?? []).filter((o) => o.pinned || o.locked),
       background,
-      ...texts.map((t) => textObject(t, t.box, canvas, brand)),
+      ...picture,
+      ...texts.map((t) => textObject(t, t.box, canvas, brand, ink(t))),
     ],
   };
+}
+
+function pixels(box: Box, canvas: CarouselDocument["canvas"]): { x: number; y: number; w: number; h: number; rotation: number } {
+  return { x: Math.round(box.x * canvas.w), y: Math.round(box.y * canvas.h), w: Math.round(box.w * canvas.w), h: Math.round(box.h * canvas.h), rotation: 0 };
 }

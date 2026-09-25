@@ -71,6 +71,8 @@ export type ChatAction = ModelAction & {
   layoutAspect?: number;
   /** Layout lines the generated image is registered against, as fractions of the layout reference. */
   anchors?: TextLine[];
+  /** The layout reference's framed picture, as fractions of it, where the event's picture goes. */
+  picture?: { x: number; y: number; w: number; h: number };
 };
 
 export type LibraryEntry = Pick<AssetEntry, "id" | "kind" | "tags" | "w" | "h"> & { name: string };

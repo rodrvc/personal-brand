@@ -190,6 +190,18 @@ export function SelectionPane({ slug, brand, doc, slide, selection, onSelectionC
               />
             </div>
             <div className="props-field">
+              <label>{t("selectionPane.fontWeightLabel")}</label>
+              <select
+                className="ui-input"
+                value={selectedObject.fontWeight ?? 400}
+                onChange={(e) => onDocUpdate((prev) => setTextStyle(prev, slide.id, selectedObject.id, { fontWeight: Number(e.target.value) }))}
+              >
+                <option value={400}>{t("selectionPane.fontWeightRegular")}</option>
+                <option value={600}>{t("selectionPane.fontWeightSemibold")}</option>
+                <option value={700}>{t("selectionPane.fontWeightBold")}</option>
+              </select>
+            </div>
+            <div className="props-field">
               <label>{t("selectionPane.lineHeightLabel")}</label>
               <input
                 className="ui-input"

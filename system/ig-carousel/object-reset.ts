@@ -21,7 +21,7 @@ import type { LayoutSlot, LayoutTemplate } from "./layout-template.js";
  */
 /**
  * "Reset to template": drops `geometry` and, for a text object, its
- * typographic overrides (`fontKey`/`fontSize`/`lineHeight`/`align`) too —
+ * typographic overrides (`fontKey`/`fontSize`/`fontWeight`/`lineHeight`/`align`) too —
  * dropping only `geometry` left a font-size reset a no-op. `colorKey` stays
  * out: it's a document-level `brand.colors` pin, not slot-defined (a slot
  * only names a `colorRole`), and the editor exposes it separately. Throws
@@ -32,7 +32,8 @@ export function resetObjectToSlot<T extends SlideObject>(object: T): T {
     throw new Error(`Object "${object.id}" has no slot — nothing to reset it to.`);
   }
   if (object.kind === "text") {
-    const { geometry: _geometry, fontKey: _fontKey, fontSize: _fontSize, lineHeight: _lineHeight, align: _align, ...rest } = object;
+    const { geometry: _geometry, fontKey: _fontKey, fontSize: _fontSize, fontWeight: _fontWeight, lineHeight: _lineHeight, align: _align, ...rest } =
+      object;
     return rest as T;
   }
   const { geometry: _geometry, ...rest } = object;

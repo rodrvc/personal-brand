@@ -75,12 +75,14 @@ generic engine change, no brand literal.
 A reference has one of two roles, chosen when it is attached (default: `layout` for a PNG in slide
 proportions, `content` otherwise):
 
-- **`layout`** — the reference *is* the poster. `compose_from_reference` sends it, with the `content` reference,
-  to the provider's image edit: the layout is the base image (letterboxed to the provider's output size) and
-  the content one supplies the new event's picture. The text model only reads the new event's texts off the
-  content reference and lists them as exact replacements for the edit instruction. One full-slide image comes
-  back, joins the library as an AI asset and is placed over the active slide (or a new one), with no text
-  objects; the template's own zones stay as they are.
+- **`layout`** — the reference *is* the poster. `compose_from_reference` measures its text lines locally (OCR)
+  and finds its framed picture. The text model maps every line outside the picture to a zone and reads the new
+  event's data off the `content` reference; the wordmark stays as it is and a field label keeps its caption,
+  with the new value on the line below. By default the background is the layout itself, at the slide's size,
+  with every one of those texts erased locally (a chip's pill grows when its new text needs it); the `content`
+  image goes in the frame as a movable object, and every text goes on top as an editable object in the brand's
+  typography, in the ink that reads on what is behind it. `EDITOR_POSTER_BACKGROUND=provider` repaints the
+  background with the provider's image edit instead, registered to the slide from the texts it keeps.
 - **`content`** — it brings the new event. When the provider does not accept it as an image, it is described
   in words through those replacements, and the proposal says so.
 
