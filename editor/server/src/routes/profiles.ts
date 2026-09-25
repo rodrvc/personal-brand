@@ -18,6 +18,7 @@ import {
   validateAgainstProfile,
   writeDocument,
 } from "../document-store.js";
+import { messages } from "../messages.js";
 import { listProfiles, ProfileStore, ProfileStoreError } from "../profile-store.js";
 
 /**
@@ -61,7 +62,7 @@ export function profilesRouter(): Router {
       // really "the profile exists but isn't configured yet", a 422.
       const message = (error as Error)?.message ?? String(error);
       if (/^No brand\.json found at/.test(message)) {
-        res.status(422).json({ error: `El perfil "${req.params.slug}" no tiene brand.json.` });
+        res.status(422).json({ error: messages.profileWithoutBrand(req.params.slug) });
         return;
       }
       handleStoreError(error, res);
