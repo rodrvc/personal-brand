@@ -411,6 +411,14 @@ export function colourReader(png: Buffer): (box: PixelBox) => string {
 
 const PILL_TOLERANCE = 40;
 
+export type Raster = ReturnType<typeof toRgba>;
+
+/** Whether the pixel is far from `colour` (RGB) on any channel: ink, an icon or the page, not that surface. */
+function differs(r: Raster, x: number, y: number, colour: number[]): boolean {
+  const i = (y * r.width + x) * 4;
+  return [0, 1, 2].some((c) => Math.abs(r.pixels[i + c]! - colour[c]!) > PILL_TOLERANCE);
+}
+
 /**
  * The pill (a rounded label drawn in the background) around the text box (fractions), as a pixel rectangle: from
  * the box's centre, as far as the colour there continues along its row and column. Undefined when that colour does
@@ -431,6 +439,44 @@ export function findPill(png: Buffer, box: PixelBox): { x0: number; x1: number; 
   // A pill hugs its line of text; a taller region of one colour is a card or a panel, not a pill.
   const bounded = x0 > 0 && x1 < width - 1 && y1 - y0 <= 3 * box.h * height;
   return reaches && bounded ? { x0, x1, y0, y1 } : undefined;
+}
+
+export interface InkSpan {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+/**
+ * The icon of a row (a pin, a clock, a ticket), found on an image where the row's texts are already erased: the first
+ * blob of ink to the left of the block (fractions) within its rows, up to two and a half block heights away. A line
+ * that runs on above and below the block (a card's border) is not an icon, and neither is anything wider than the
+ * block is tall. As a box (fractions) a little larger than that ink, or undefined when there is none.
+ */
+export function rowIcon(r: Raster, block: PixelBox): PixelBox | undefined {
+  const { width, height } = r;
+  const [top, bottom] = [Math.max(0, Math.floor(block.y * height)), Math.min(height - 1, Math.ceil((block.y + block.h) * height))];
+  const tall = bottom - top + 1;
+  const left = Math.floor(block.x * width);
+  const middle = Math.round((top + bottom) / 2);
+  const surface = [...r.pixels.subarray((middle * width + left) * 4, (middle * width + left) * 4 + 3)];
+  const outside = (x: number, y: number) => y >= 0 && y < height && differs(r, x, y, surface);
+  let run: InkSpan | undefined;
+  for (let x = left - 1; x >= Math.max(0, left - 2.5 * tall); x--) {
+    let [y0, y1] = [Infinity, -Infinity];
+    for (let y = top; y <= bottom; y++) if (differs(r, x, y, surface)) [y0, y1] = [Math.min(y0, y), Math.max(y1, y)];
+    if (y0 > y1) {
+      if (run && run.x0 - x > 0.3 * tall) break;
+      continue;
+    }
+    // A border passes through: it is there above and below the block too.
+    if (outside(x, top - Math.ceil(0.3 * tall)) && outside(x, bottom + Math.ceil(0.3 * tall))) return undefined;
+    run = run ? { x0: x, x1: run.x1, y0: Math.min(run.y0, y0), y1: Math.max(run.y1, y1) } : { x0: x, x1: x, y0, y1 };
+  }
+  if (!run || run.x1 - run.x0 + 1 > tall) return undefined;
+  const pad = 2;
+  return { x: (run.x0 - pad) / width, y: (run.y0 - pad) / height, w: (run.x1 - run.x0 + 1 + 2 * pad) / width, h: (run.y1 - run.y0 + 1 + 2 * pad) / height };
 }
 
 /**

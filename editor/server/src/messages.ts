@@ -15,6 +15,22 @@ export const messages = {
     malformed: (detail?: string) => `La propuesta vino mal formada${detail ? ` (${detail})` : ""}.`,
     nothingProposed: "No se propone nada.",
     notPending: "Esa propuesta ya no está pendiente.",
+    missingData: (data: string[]) =>
+      `Para armar el afiche me falta ${data.length > 1 ? `${data.slice(0, -1).join(", ")} y ${data.at(-1)}` : data[0]}. ¿Me lo indicas? Si el evento no tiene alguno, dímelo y lo saco del afiche.`,
+    insteadOf: (layoutText: string) => `lo que va en lugar de «${layoutText}»`,
+    dataNames: {
+      chip: "la categoría",
+      title: "el nombre del evento",
+      subtitle: "el subtítulo",
+      date: "la fecha",
+      time: "la hora",
+      place: "el lugar",
+      entry: "la entrada",
+      price: "el precio",
+      label: "una etiqueta",
+      footer: "el pie",
+      body: "un texto",
+    } as Record<string, string>,
     needsLayoutReference: "Para recrear el afiche adjunta una referencia de tipo carrusel.",
     invalidResult: (path: string, detail: string) => `El resultado no es válido en "${path}": ${detail}`,
     imageNotPlaced: (slide: number | undefined, image: string) =>

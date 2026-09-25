@@ -192,7 +192,8 @@ export function resolveAction(ctx: ActionContext, action: ModelAction): ChatActi
     case "compose_from_reference": {
       if (action.slideId) slideOf(ctx.doc, action.slideId);
       for (const t of action.texts) {
-        provenance.push({ source: t.from === "layout" ? "reference_kept" : "content_reference", detail: `${t.zone}: ${t.text}` });
+        const source = t.from === "layout" ? "reference_kept" : t.from === "content" ? "content_reference" : "request";
+        provenance.push({ source, detail: `${t.zone}: ${t.text}` });
       }
       break;
     }

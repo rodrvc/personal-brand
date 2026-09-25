@@ -21,7 +21,16 @@ export type ChatRecord =
       references?: ChatReference[];
       resolves?: { proposalId: string; decision: "discard" };
     }
-  | { id: string; at: string; role: "assistant"; text: string; proposal?: ChatProposal; costCents?: number }
+  | {
+      id: string;
+      at: string;
+      role: "assistant";
+      text: string;
+      proposal?: ChatProposal;
+      costCents?: number;
+      /** The event data this answer asks the owner for; the next message composes with the same references. */
+      asksFor?: string[];
+    }
   | {
       id: string;
       at: string;

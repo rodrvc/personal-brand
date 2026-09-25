@@ -250,6 +250,69 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
     NEEDS_IMAGE_TOOL,
   ],
   [
+    "a poster missing event data asks one question for all of it, and the answer composes with the earlier references",
+    async () => {
+      reset();
+      const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
+      const content = (await post("/references", { name: "event.png", mime: "image/png", dataBase64: Buffer.from(TINY_PNG.toString("hex") + "03", "hex").toString("base64") })).body.reference;
+      const box = (y: number) => ({ x: 0.1, y, w: 0.4, h: 0.04 });
+      nextReply = {
+        text: "Listo",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "New event", from: "content", box: box(0.1) },
+              { zone: "time", text: "20:00", from: "layout", original: "20:00", box: box(0.3) },
+              { zone: "label", text: "Place", from: "layout", box: box(0.4) },
+              { zone: "place", text: "", from: "missing", box: box(0.5) },
+              { zone: "price", text: "", from: "missing", box: box(0.6) },
+            ],
+          },
+        ],
+      };
+      const asked = await post("/messages", { text: "this poster with this event", references: [{ ...layout, role: "layout" }, { ...content, role: "content" }] });
+      const question = asked.body.records[1];
+      assert.equal(question.proposal, undefined, "nothing is composed yet");
+      assert.deepEqual(question.asksFor, ["time", "place", "price"], "a time kept from the layout counts as missing");
+      assert.equal(question.text.match(/\?/g)?.length, 1, "one question");
+      for (const name of ["la hora", "el lugar", "el precio"]) assert.ok(question.text.includes(name), `it names ${name}`);
+
+      seenImages = 0;
+      nextReply = {
+        text: "",
+        actions: [
+          {
+            type: "compose_from_reference",
+            texts: [
+              { zone: "title", text: "New event", from: "content", box: box(0.1) },
+              { zone: "time", text: "", from: "absent", box: box(0.3) },
+              { zone: "label", text: "Place", from: "layout", box: box(0.4) },
+              { zone: "place", text: "The hall", from: "owner", box: box(0.5) },
+              { zone: "price", text: "Free", from: "owner", box: box(0.6) },
+            ],
+          },
+        ],
+      };
+      const answered = await post("/messages", { text: "The hall, free, and it has no time", references: [] });
+      const [user, assistant] = answered.body.records;
+      assert.equal(seenImages, 2, "the model sees the earlier references again");
+      assert.deepEqual(user.references.map((r: any) => r.id), [layout.id, content.id], "the answer carries them, for apply");
+      const action = assistant.proposal.actions[0];
+      assert.deepEqual(action.referenceIds, [layout.id, content.id]);
+      // The provider repaints the background, so the question flow is checked without macOS image tools.
+      process.env.EDITOR_POSTER_BACKGROUND = "provider";
+      const { event, onDisk } = await applyAndWait(assistant.proposal.id).finally(() => delete process.env.EDITOR_POSTER_BACKGROUND);
+      assert.equal(event.kind, "done", event.error);
+      const texts = onDisk.slides[0].objects.filter((o: any) => o.kind === "text").map((o: any) => o.text);
+      assert.deepEqual(texts, ["New event", "Place", "The hall", "Free"], "the time the event does not have is removed, not placed");
+
+      nextReply = { text: "Ok", actions: [] };
+      const later = await post("/messages", { text: "thanks", references: [] });
+      assert.equal(later.body.records[0].references, undefined, "only the answer to a question inherits the references");
+    },
+  ],
+  [
     "compose_from_reference can still repaint the poster with the image provider",
     async () => {
       process.env.EDITOR_POSTER_BACKGROUND = "provider";
