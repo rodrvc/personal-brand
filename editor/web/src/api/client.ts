@@ -5,6 +5,8 @@ import type {
   CarouselDocument,
   CarouselSummary,
   ChatRecord,
+  ChatReference,
+  Currency,
   CompositionPlanResponse,
   ContrastMeasurement,
   CreateCarouselResponse,
@@ -86,9 +88,12 @@ export function getCarousel(slug: string, id: string): Promise<CarouselDocument>
 export function putCarousel(
   slug: string,
   doc: CarouselDocument,
-  opts?: { snapshot?: boolean; keepalive?: boolean; signal?: AbortSignal },
+  opts?: { snapshot?: boolean; keepalive?: boolean; signal?: AbortSignal; base?: string },
 ): Promise<CarouselDocument> {
-  const query = opts?.snapshot ? "?snapshot=true" : "";
+  const params = new URLSearchParams();
+  if (opts?.snapshot) params.set("snapshot", "true");
+  if (opts?.base) params.set("base", opts.base);
+  const query = params.size > 0 ? `?${params}` : "";
   return request(`/profiles/${slug}/carousels/${doc.id}${query}`, {
     method: "PUT",
     body: JSON.stringify(doc),
@@ -269,15 +274,34 @@ export function listOutputs(slug: string, carouselId: string): Promise<{ version
   return request(`/profiles/${slug}/carousels/${carouselId}/outputs`);
 }
 
-export function getChat(slug: string, carouselId: string): Promise<{ records: ChatRecord[]; pendingProposalId: string | null }> {
+export function getChat(
+  slug: string,
+  carouselId: string,
+): Promise<{ records: ChatRecord[]; pendingProposalId: string | null; currency: Currency }> {
   return request(`/profiles/${slug}/carousels/${carouselId}/chat`);
 }
 
-export function sendChatMessage(slug: string, carouselId: string, text: string): Promise<{ records: ChatRecord[] }> {
+export function sendChatMessage(
+  slug: string,
+  carouselId: string,
+  text: string,
+  references: ChatReference[],
+): Promise<{ records: ChatRecord[] }> {
   return request(`/profiles/${slug}/carousels/${carouselId}/chat/messages`, {
     method: "POST",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, references }),
   });
+}
+
+export async function uploadChatReference(slug: string, carouselId: string, file: File): Promise<ChatReference> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const { reference } = await request<{ reference: ChatReference }>(`/profiles/${slug}/carousels/${carouselId}/chat/references`, {
+    method: "POST",
+    body: JSON.stringify({ name: file.name, mime: file.type, dataBase64: btoa(binary) }),
+  });
+  return reference;
 }
 
 export function resolveProposal(

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { CarouselDocument, ChatAction } from "../api/types";
-import { describeIntact } from "./chat-summary";
+import { chatSpend, describeIntact } from "./chat-summary";
 
 const doc = {
   slides: ["slide-1", "slide-2", "slide-3", "slide-4"].map((id) => ({ id })),
@@ -25,5 +25,13 @@ assert.match(lines[1]!, /fondo/);
 
 const deleteAll = doc.slides.map((s, i) => ({ id: `act-${i}`, type: "delete_slide", slideId: s.id, why: "", provenance: [] }) as ChatAction);
 assert.equal(describeIntact(doc, deleteAll).length, 1);
+
+const at = "2026-01-01T00:00:00.000Z";
+const spend = chatSpend([
+  { id: "e1", at, role: "event", kind: "applied", proposalId: "p1", costCents: 4, results: [{ actionId: "a", slideIds: [], costCents: 4 }] },
+  { id: "e2", at, role: "event", kind: "applied", proposalId: "p2", costCents: 0, results: [{ actionId: "b", slideIds: [] }] },
+  { id: "m", at, role: "assistant", text: "", costCents: 1 },
+]);
+assert.deepEqual(spend, { totalCents: 4, items: [{ at, costCents: 4 }] });
 
 console.log("ok - chat-summary");

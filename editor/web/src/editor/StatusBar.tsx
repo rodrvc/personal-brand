@@ -11,9 +11,11 @@ interface StatusBarProps {
   totalPieceCount: number;
   dirty: boolean;
   saveError: string | null;
+  /** Already formatted in the profile's currency; the tooltip carries one line per paid operation. */
+  spend: { total: string; breakdown: string } | null;
 }
 
-export function StatusBar({ doc, activeIndex, selection, pinnedCount, totalPieceCount, dirty, saveError }: StatusBarProps) {
+export function StatusBar({ doc, activeIndex, selection, pinnedCount, totalPieceCount, dirty, saveError, spend }: StatusBarProps) {
   const slide = doc.slides[activeIndex];
   const selectedObject = selection ? slide?.objects.find((o) => o.id === selection.objectId) : undefined;
 
@@ -40,6 +42,11 @@ export function StatusBar({ doc, activeIndex, selection, pinnedCount, totalPiece
         </span>
       )}
       <span style={{ flex: 1 }} />
+      {spend && (
+        <span className="status-group" title={spend.breakdown}>
+          {t("statusBar.spend", { amount: spend.total })}
+        </span>
+      )}
       <span className="status-group">
         {t("statusBar.pinnedPieces", { pinned: pinnedCount, total: totalPieceCount })}
       </span>

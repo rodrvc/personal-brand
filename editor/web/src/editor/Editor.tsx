@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
+import type { BrandTokens, CarouselDocument, ChatRecord, Currency, LayoutTemplate, StatsResponse } from "../api/types";
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate, getCarousel } from "../api/client";
 import { addSlideWithColor, addTextObject, newEditorId, removeSlide } from "./mutations";
@@ -10,6 +10,7 @@ import { Stage } from "./Stage";
 import { PropertiesPanel } from "./panels/PropertiesPanel";
 import { StatusBar } from "./StatusBar";
 import { ChatPanel } from "./ChatPanel";
+import { chatSpend, formatCost } from "./chat-summary";
 import type { Selection } from "./geometry";
 import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
 import { ExportDialog } from "./ExportDialog";
@@ -126,6 +127,15 @@ export function Editor({
     setActiveIndex((index) => Math.max(0, Math.min(index, doc.slides.length - 2)));
   }, [activeSlide, doc.slides.length, update]);
 
+  const [spend, setSpend] = useState<{ total: string; breakdown: string } | null>(null);
+  const handleChatLog = useCallback((records: ChatRecord[], currency: Currency) => {
+    const { totalCents, items } = chatSpend(records);
+    const lines = items.map((item) =>
+      t("statusBar.spendItem", { when: new Date(item.at).toLocaleString(), amount: formatCost(item.costCents, currency) }),
+    );
+    setSpend({ total: formatCost(totalCents, currency), breakdown: lines.length > 0 ? lines.join("\n") : t("statusBar.spendNone") });
+  }, []);
+
   const handleChatApplied = useCallback(
     (next: CarouselDocument) => {
       applyRemote(next);
@@ -154,7 +164,7 @@ export function Editor({
         onExport={() => setShowExportDialog(true)}
       />
       <div className="editor-body">
-        <ChatPanel slug={slug} doc={doc} dirty={dirty} onApplied={handleChatApplied} />
+        <ChatPanel slug={slug} doc={doc} dirty={dirty} onApplied={handleChatApplied} onLogChange={handleChatLog} />
         <div className="editor-center">
           <PromptHeader
             doc={doc}
@@ -204,6 +214,7 @@ export function Editor({
         totalPieceCount={totalPieceCount}
         dirty={dirty}
         saveError={saveError}
+        spend={spend}
       />
       {showRegenDialog && activeSlide && (
         <RegenerateUnpinnedDialog

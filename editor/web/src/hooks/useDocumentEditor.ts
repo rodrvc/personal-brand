@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { putCarousel } from "../api/client";
+import { ApiError, getCarousel, putCarousel } from "../api/client";
+import { t } from "../i18n";
 import type { CarouselDocument } from "../api/types";
 
 const PERSIST_DEBOUNCE_MS = 600;
@@ -60,6 +61,38 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
   // never touch B's state after EditorRoute.tsx remounts with a new `key`.
   const alive = useRef(true);
   const abortController = useRef<AbortController | null>(null);
+  // The on-disk `updatedAt` this copy descends from. Every PUT sends it, and
+  // the server answers 409 when another writer has moved the file since.
+  const baseRevision = useRef(initial.updatedAt);
+  // Bumped by applyRemote: a PUT response that lands after a replacement
+  // must not overwrite the replacement's revision with its own.
+  const remoteGeneration = useRef(0);
+
+  /**
+   * Server-authoritative replacement (plan apply, regenerate): not part of
+   * the undo stack. Bumps `generation` too, so a debounced PUT for the
+   * pre-replacement doc still in flight sees it moved and won't clobber
+   * this replacement with a stale write or clear `dirty` on its behalf.
+   */
+  const applyRemote = useCallback(
+    (next: CarouselDocument) => {
+      undoStack.current = [];
+      redoStack.current = [];
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+        persistTimer.current = null;
+      }
+      generation.current += 1;
+      remoteGeneration.current += 1;
+      baseRevision.current = next.updatedAt;
+      docRef.current = next;
+      setDocState(next);
+      setDirtyBoth(false);
+      setSaveError(null);
+      setRenderVersion((v) => v + 1);
+    },
+    [setDirtyBoth],
+  );
 
   /**
    * The single save path: debounce timer, `pagehide`, `visibilitychange:
@@ -88,6 +121,7 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
           abortController.current?.abort();
           putCarousel(slug, docRef.current, {
             keepalive: true,
+            base: baseRevision.current,
             ...(snapshotRequests.current > 0 ? { snapshot: true } : {}),
           }).catch(() => {});
         }
@@ -97,13 +131,16 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       const sent = docRef.current;
       const myGeneration = generation.current;
       const snapshotAtSend = snapshotRequests.current;
+      const remoteAtSend = remoteGeneration.current;
       inFlight.current = true;
       abortController.current = unloading ? null : new AbortController();
       putCarousel(slug, sent, {
+        base: baseRevision.current,
         ...(snapshotAtSend > 0 ? { snapshot: true } : {}),
         ...(unloading ? { keepalive: true } : { signal: abortController.current!.signal }),
       })
-        .then(() => {
+        .then((saved) => {
+          if (remoteGeneration.current === remoteAtSend) baseRevision.current = saved.updatedAt;
           inFlight.current = false;
           abortController.current = null;
           // Subtract what this PUT satisfied rather than zeroing: a request
@@ -125,10 +162,20 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
           // `pageshow` re-runs persist if the page comes back from bfcache.
           if (error instanceof DOMException && error.name === "AbortError") return;
           if (unloading) return;
+          if (error instanceof ApiError && error.status === 409) {
+            getCarousel(slug, sent.id)
+              .then((fresh) => {
+                if (!alive.current) return;
+                applyRemote(fresh);
+                setSaveError(t("editor.conflictReloaded"));
+              })
+              .catch((reloadError: unknown) => setSaveError(String(reloadError)));
+            return;
+          }
           setSaveError(error instanceof Error ? error.message : String(error));
         });
     },
-    [setDirtyBoth, slug],
+    [applyRemote, setDirtyBoth, slug],
   );
 
   const schedulePersist = useCallback(
@@ -174,30 +221,6 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       setDocState(next);
     },
     [schedulePersist],
-  );
-
-  /**
-   * Server-authoritative replacement (plan apply, regenerate): not part of
-   * the undo stack. Bumps `generation` too, so a debounced PUT for the
-   * pre-replacement doc still in flight sees it moved and won't clobber
-   * this replacement with a stale write or clear `dirty` on its behalf.
-   */
-  const applyRemote = useCallback(
-    (next: CarouselDocument) => {
-      undoStack.current = [];
-      redoStack.current = [];
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current);
-        persistTimer.current = null;
-      }
-      generation.current += 1;
-      docRef.current = next;
-      setDocState(next);
-      setDirtyBoth(false);
-      setSaveError(null);
-      setRenderVersion((v) => v + 1);
-    },
-    [setDirtyBoth],
   );
 
   const undo = useCallback(() => {
@@ -261,6 +284,7 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
       if (dirtyRef.current) {
         putCarousel(slug, docRef.current, {
           keepalive: true,
+          base: baseRevision.current,
           ...(snapshotRequests.current > 0 ? { snapshot: true } : {}),
         }).catch(() => {});
       }

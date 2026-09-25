@@ -1,4 +1,4 @@
-import type { CarouselDocument, ChatAction, Provenance } from "../api/types";
+import type { CarouselDocument, ChatAction, ChatRecord, Currency, Provenance } from "../api/types";
 import { t } from "../i18n";
 
 const BACKGROUND_SLOT = "background";
@@ -54,4 +54,18 @@ export function describeIntact(doc: CarouselDocument, actions: ChatAction[]): st
     lines.push(t("chat.intact.onlyPieces", { n: slideNumber(doc, slideId), pieces: pieces.join(", ") }));
   }
   return lines;
+}
+
+export function formatCost(cents: number, currency: Currency): string {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.code }).format((cents / 100) * currency.rate);
+}
+
+/** Every paid operation recorded by an `applied` event, so the total survives a reload. */
+export function chatSpend(records: ChatRecord[]): { totalCents: number; items: Array<{ at: string; costCents: number }> } {
+  const items = records.flatMap((record) =>
+    record.role === "event"
+      ? record.results.filter((r) => (r.costCents ?? 0) > 0).map((r) => ({ at: record.at, costCents: r.costCents! }))
+      : [],
+  );
+  return { totalCents: items.reduce((sum, item) => sum + item.costCents, 0), items };
 }
