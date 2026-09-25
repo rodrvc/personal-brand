@@ -88,9 +88,22 @@ export interface GeneratedImage {
  * route) are responsible for turning a thrown error into a user-facing
  * message; this interface itself carries no retry or fallback policy.
  */
+export interface JsonCompletionRequest {
+  instructions: string;
+  input: string;
+}
+
+export interface JsonCompletionResult {
+  /** Parsed JSON, not yet validated: the caller owns its schema. */
+  json: unknown;
+  model: string;
+  costCents: number;
+}
+
 export interface PieceGenerator {
   draftCopy(plan: DraftCopyPlan): Promise<DraftCopyResult>;
   generateImage(spec: GenerateImageSpec): Promise<GeneratedImage>;
+  completeJson(request: JsonCompletionRequest): Promise<JsonCompletionResult>;
 }
 
 /** Thrown by `NonePieceGenerator` and caught by routes to answer 503. */

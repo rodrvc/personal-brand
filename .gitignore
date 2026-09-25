@@ -97,3 +97,4 @@ docs/CONTEXTO-FEATURE-VOZ.md
 profiles/example*/assets/index.json
 profiles/example*/assets/meta/
 profiles/example*/carousels/*/versions/
+profiles/example*/carousels/*/chat.jsonl
