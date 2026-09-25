@@ -36,6 +36,14 @@ import {
  * A path that doesn't exist yet (a write target) is checked by resolving its
  * *parent* directory's real path instead — the file itself has no realpath
  * to follow.
+ *
+ * This class is always filesystem-backed — it never learns about the S3
+ * storage backend (issue #99). In `s3` mode, `storage/runtime.ts` repoints
+ * `BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` at a local bucket mirror before
+ * any `ProfileStore` is constructed, and syncs that mirror against the
+ * bucket around each request (`storage/mirror.ts`). `ProfileStore` itself,
+ * and every confinement rule above, stays exactly as it is for the fs
+ * backend — the mirror is just another directory tree on disk to it.
  */
 
 const SLUG = /^[a-z0-9-]+$/;
@@ -261,4 +269,26 @@ export function listProfiles(): ProfileListingEntry[] {
     .filter((entry) => SLUG.test(entry.name) && isProfileDirectory(root, entry))
     .map((entry) => ({ slug: entry.name, hasBrand: existsSync(join(root, entry.name, "brand.json")) }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/**
+ * Same listing, but sourced from the bucket directly in `s3` mode (issue
+ * #99) instead of the local mirror — a profile with no request served yet
+ * has no mirror on disk at all, so listing the mirror would silently hide
+ * it. In `fs` mode this is exactly `listProfiles()`, resolved immediately.
+ */
+export async function listProfilesAsync(): Promise<ProfileListingEntry[]> {
+  const { getStorageRuntime } = await import("./storage/runtime.js");
+  const { config, store } = getStorageRuntime();
+  if (config.backend !== "s3" || !store || !config.s3) {
+    return listProfiles();
+  }
+  const { listProfileSlugsFromBucket, bucketHasBrand } = await import("./storage/mirror.js");
+  const slugs = await listProfileSlugsFromBucket(store, config.s3);
+  const entries = await Promise.all(
+    slugs
+      .filter((slug) => SLUG.test(slug))
+      .map(async (slug) => ({ slug, hasBrand: await bucketHasBrand(store, config.s3!, slug) })),
+  );
+  return entries.sort((a, b) => a.slug.localeCompare(b.slug));
 }

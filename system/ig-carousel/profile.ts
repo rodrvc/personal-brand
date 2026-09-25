@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -143,8 +143,18 @@ export function readProfileCurrency(profileDir: string): { code: string; rate: n
  * (e.g. "~/Pictures/<marca>/carruseles") to keep generated files entirely
  * outside the repo — every machine points this wherever makes sense; nothing
  * about the path is assumed here.
+ *
+ * `BRAND_OUTPUTS_ROOT`, when set, overrides `base_dir` entirely and resolves
+ * outputs to `<BRAND_OUTPUTS_ROOT>/<slug>` instead — used by the editor's s3
+ * storage backend (issue #99) to redirect every output write into its local
+ * mirror of the bucket, regardless of what a profile's own `config.yaml`
+ * says. Unset by default, so filesystem-backend behaviour is unchanged.
  */
 export function resolveOutputBaseDir(profileDir: string): string {
+  const outputsRoot = process.env.BRAND_OUTPUTS_ROOT?.trim();
+  if (outputsRoot) {
+    return join(outputsRoot, basename(profileDir));
+  }
   const baseDir = readOutputsBaseDir(profileDir);
   return isAbsolute(baseDir) ? baseDir : join(profileDir, baseDir);
 }
