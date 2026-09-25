@@ -413,6 +413,15 @@ const PILL_TOLERANCE = 40;
 
 export type Raster = ReturnType<typeof toRgba>;
 
+export interface Pill {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  /** The pill's own colour, RGB. */
+  fill: number[];
+}
+
 /** Whether the pixel is far from `colour` (RGB) on any channel: ink, an icon or the page, not that surface. */
 function differs(r: Raster, x: number, y: number, colour: number[]): boolean {
   const i = (y * r.width + x) * 4;
@@ -421,24 +430,64 @@ function differs(r: Raster, x: number, y: number, colour: number[]): boolean {
 
 /**
  * The pill (a rounded label drawn in the background) around the text box (fractions), as a pixel rectangle: from
- * the box's centre, as far as the colour there continues along its row and column. Undefined when that colour does
- * not reach past the box, so there is no pill.
+ * the box's centre, as far as the colour there continues along its row and column; an icon inside the pill does not
+ * end it. Undefined when that colour does not
+ * reach past the box, so there is no pill.
  */
-export function findPill(png: Buffer, box: PixelBox): { x0: number; x1: number; y0: number; y1: number } | undefined {
-  const { width, height, pixels } = toRgba(png);
-  const cx = Math.round((box.x + box.w / 2) * width);
-  const cy = Math.round((box.y + box.h / 2) * height);
+export function pillIn(r: Raster, box: PixelBox): Pill | undefined {
+  const { width, height, pixels } = r;
+  const cx = Math.min(width - 1, Math.round((box.x + box.w / 2) * width));
+  const cy = Math.min(height - 1, Math.round((box.y + box.h / 2) * height));
   const fill = [...pixels.subarray((cy * width + cx) * 4, (cy * width + cx) * 4 + 3)];
-  const same = (x: number, y: number) => [0, 1, 2].every((c) => Math.abs(pixels[(y * width + x) * 4 + c]! - fill[c]!) <= PILL_TOLERANCE);
-  let [x0, x1, y0, y1] = [cx, cx, cy, cy];
-  while (x0 > 0 && same(x0 - 1, cy)) x0--;
-  while (x1 < width - 1 && same(x1 + 1, cy)) x1++;
+  const same = (x: number, y: number) => !differs(r, x, y, fill);
+  let [y0, y1] = [cy, cy];
   while (y0 > 0 && same(cx, y0 - 1)) y0--;
   while (y1 < height - 1 && same(cx, y1 + 1)) y1++;
+  // A column is still the pill where its colour runs through the middle row, or, over an icon, both above and below
+  // it. A gap in the colour on every row (the page between the pill and a border of the same colour) ends it.
+  const inset = Math.max(1, Math.round(0.15 * (y1 - y0 + 1)));
+  const inPill = (x: number) => same(x, cy) || (same(x, y0 + inset) && same(x, y1 - inset));
+  const reach = (step: number) => {
+    let x = cx;
+    while (x + step >= 0 && x + step < width && inPill(x + step)) x += step;
+    return x;
+  };
+  const [x0, x1] = [reach(-1), reach(1)];
   const reaches = x0 < box.x * width && x1 > (box.x + box.w) * width && y0 < box.y * height && y1 > (box.y + box.h) * height;
   // A pill hugs its line of text; a taller region of one colour is a card or a panel, not a pill.
   const bounded = x0 > 0 && x1 < width - 1 && y1 - y0 <= 3 * box.h * height;
-  return reaches && bounded ? { x0, x1, y0, y1 } : undefined;
+  return reaches && bounded ? { x0, x1, y0, y1, fill } : undefined;
+}
+
+export function findPill(png: Buffer, box: PixelBox): Pill | undefined {
+  return pillIn(toRgba(png), box);
+}
+
+/**
+ * The pill's corner radius: how far in its colour starts on a row near its top, against where it starts on its
+ * middle row, fitted to a circle. Half the height for a capsule, less for a rounded rectangle.
+ */
+export function pillRadius(r: Raster, pill: Pill): number {
+  const height = pill.y1 - pill.y0 + 1;
+  const y = pill.y0 + Math.max(1, Math.round(0.15 * height));
+  let x = Math.max(0, pill.x0 - 2);
+  while (x < pill.x1 && differs(r, x, y, pill.fill)) x++;
+  const off = x - pill.x0;
+  const depth = y - pill.y0 + 0.5;
+  let best = { radius: height / 2, error: Infinity };
+  for (let radius = 0; radius <= height / 2; radius += 0.25) {
+    const predicted = depth >= radius ? 0 : radius - Math.sqrt(radius ** 2 - (radius - depth) ** 2);
+    const error = Math.abs(predicted - off);
+    if (error <= best.error + 0.25) best = { radius, error: Math.min(error, best.error) };
+  }
+  return best.radius;
+}
+
+/** Signed distance from a pixel's centre to a rounded rectangle [left, right) x [top, bottom): negative inside. */
+export function roundedDistance(x: number, y: number, rect: { left: number; right: number; top: number; bottom: number }, radius: number): number {
+  const qx = Math.abs(x + 0.5 - (rect.left + rect.right) / 2) - ((rect.right - rect.left) / 2 - radius);
+  const qy = Math.abs(y + 0.5 - (rect.top + rect.bottom) / 2) - ((rect.bottom - rect.top) / 2 - radius);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - radius;
 }
 
 export interface InkSpan {
@@ -446,6 +495,76 @@ export interface InkSpan {
   x1: number;
   y0: number;
   y1: number;
+}
+
+/**
+ * What is drawn inside the pill, off its colour, as horizontal groups of ink (an icon, each word), left to right.
+ * Columns closer than an eighth of the pill's height belong to the same group, so a word's letters stay together.
+ */
+export function inkGroups(r: Raster, pill: Pill, radius: number): InkSpan[] {
+  const rect = { left: pill.x0, right: pill.x1 + 1, top: pill.y0, bottom: pill.y1 + 1 };
+  const join = Math.max(2, Math.round(0.12 * (pill.y1 - pill.y0 + 1)));
+  const groups: InkSpan[] = [];
+  for (let x = pill.x0; x <= pill.x1; x++) {
+    let [top, bottom] = [Infinity, -Infinity];
+    for (let y = pill.y0; y <= pill.y1; y++) {
+      if (roundedDistance(x, y, rect, radius) < -1.5 && differs(r, x, y, pill.fill)) [top, bottom] = [Math.min(top, y), Math.max(bottom, y)];
+    }
+    if (top > bottom) continue;
+    const last = groups.at(-1);
+    if (last && x - last.x1 <= join) Object.assign(last, { x1: x, y0: Math.min(last.y0, top), y1: Math.max(last.y1, bottom) });
+    else groups.push({ x0: x, x1: x, y0: top, y1: bottom });
+  }
+  return groups;
+}
+
+/** Paints a rounded rectangle in `fill` (RGB) over the raster, its edge anti-aliased by pixel coverage. */
+export function drawRounded(r: Raster, rect: { left: number; right: number; top: number; bottom: number }, radius: number, fill: number[]): void {
+  for (let y = Math.max(0, Math.floor(rect.top) - 1); y < Math.min(r.height, Math.ceil(rect.bottom) + 1); y++) {
+    for (let x = Math.max(0, Math.floor(rect.left) - 1); x < Math.min(r.width, Math.ceil(rect.right) + 1); x++) {
+      const cover = Math.min(1, Math.max(0, 0.5 - roundedDistance(x, y, rect, radius)));
+      if (cover === 0) continue;
+      const i = (y * r.width + x) * 4;
+      for (let c = 0; c < 3; c++) r.pixels[i + c] = Math.round(fill[c]! * cover + r.pixels[i + c]! * (1 - cover));
+    }
+  }
+}
+
+/** Copies a pixel rectangle of `from` into `to`, moved by `dx`. */
+export function copyRect(from: Raster, to: Raster, span: InkSpan, dx: number): void {
+  for (let y = Math.max(0, span.y0); y <= Math.min(from.height - 1, span.y1); y++) {
+    for (let x = Math.max(0, span.x0); x <= Math.min(from.width - 1, span.x1); x++) {
+      if (x + dx < 0 || x + dx >= to.width) continue;
+      to.pixels.set(from.pixels.subarray((y * from.width + x) * 4, (y * from.width + x) * 4 + 4), (y * to.width + x + dx) * 4);
+    }
+  }
+}
+
+/** Where a transparent image has ink (alpha past a faint edge), or undefined when it has none. */
+export function opaqueSpan(r: Raster): InkSpan | undefined {
+  let span: InkSpan | undefined;
+  for (let y = 0; y < r.height; y++) {
+    for (let x = 0; x < r.width; x++) {
+      if (r.pixels[(y * r.width + x) * 4 + 3]! <= 24) continue;
+      span = span ? { x0: Math.min(span.x0, x), x1: Math.max(span.x1, x), y0: Math.min(span.y0, y), y1: Math.max(span.y1, y) } : { x0: x, x1: x, y0: y, y1: y };
+    }
+  }
+  return span;
+}
+
+/** Blends a transparent image over the raster with its top-left at (x, y), by its alpha. */
+export function blendOver(r: Raster, over: Raster, x: number, y: number): void {
+  for (let oy = 0; oy < over.height; oy++) {
+    for (let ox = 0; ox < over.width; ox++) {
+      const [tx, ty] = [x + ox, y + oy];
+      if (tx < 0 || ty < 0 || tx >= r.width || ty >= r.height) continue;
+      const o = (oy * over.width + ox) * 4;
+      const a = over.pixels[o + 3]! / 255;
+      if (a === 0) continue;
+      const i = (ty * r.width + tx) * 4;
+      for (let c = 0; c < 3; c++) r.pixels[i + c] = Math.round(over.pixels[o + c]! * a + r.pixels[i + c]! * (1 - a));
+    }
+  }
 }
 
 /**

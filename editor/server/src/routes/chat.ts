@@ -33,6 +33,7 @@ import {
 import { referenceBackground } from "../chat/reference-background.js";
 import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, inkReader, remap, toPng } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
+import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
@@ -257,20 +258,24 @@ interface Composition {
   behind: (box: Box) => string;
 }
 
-/** The poster built locally, at no cost: the layout reference with its texts erased, and the event's picture framed. */
-function composeFromLayout(
+/**
+ * The poster built locally, at no cost: the layout reference with its texts erased and its pills redrawn with their
+ * new texts, and the event's picture framed.
+ */
+async function composeFromLayout(
   store: ProfileStore,
   action: Extract<ChatAction, { type: "compose_from_reference" }>,
   canvas: CarouselDocument["canvas"],
   brand: ReturnType<typeof buildChatContext>["brand"],
   carouselId: string,
-): Composition {
+  rasterise: Rasterise,
+): Promise<Composition> {
   const [layoutId, contentId] = action.referenceIds ?? [];
   const layout = layoutId ? readAssetFile(store, layoutId) : undefined;
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
   const aspect = action.layoutAspect ?? canvas.w / canvas.h;
   const onSlide = measureTexts(action.texts, undefined).map((t) => ({ ...t, box: toSlide(t.box, aspect, canvas) }));
-  const built = referenceBackground(layout.bytes, onSlide, aspect, canvas, brand);
+  const built = await referenceBackground(layout.bytes, onSlide, aspect, canvas, brand, rasterise);
   const entry = storeImage(
     store,
     { buffer: built.image, mime: "image/png", model: "layout-reference", costCents: 0, usedReferenceIds: [layoutId!] },
@@ -292,6 +297,7 @@ async function runProposal(
   proposal: ChatProposal,
   generator: PieceGenerator,
   references: ChatReference[],
+  rasterise: Rasterise,
 ): Promise<void> {
   const results: EventResults = [];
   const spent = () => results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
@@ -312,7 +318,7 @@ async function runProposal(
     const brand = buildChatContext(store, carouselId).brand;
     for (const action of proposal.actions) {
       if (action.type === "compose_from_reference" && posterBackground() === "reference") {
-        const composition = composeFromLayout(store, action, canvas, brand, carouselId);
+        const composition = await composeFromLayout(store, action, canvas, brand, carouselId, rasterise);
         composed.set(action.id, composition);
         generated.set(action.id, composition.backgroundId);
         placed.set(action.id, composition.texts);
@@ -397,7 +403,10 @@ function awaitedReferences(history: ChatRecord[]): ChatReference[] {
   return message?.role === "user" ? (message.references ?? []) : [];
 }
 
-export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Router {
+export function chatRouter(
+  getGenerator: (slug: string) => PieceGenerator,
+  rasteriserFor: (store: ProfileStore, brand: ReturnType<typeof buildChatContext>["brand"]) => Rasterise = chromiumRasteriser,
+): Router {
   const router = Router();
 
   function open(slug: string, id: string): ProfileStore | undefined {
@@ -521,7 +530,7 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator): Rout
         results: [],
       });
       res.status(202).json({ records: [started] });
-      runProposal(store, req.params.id, proposal, getGenerator(req.params.slug), references).catch((error: unknown) =>
+      runProposal(store, req.params.id, proposal, getGenerator(req.params.slug), references, rasteriserFor(store, ctx.brand)).catch((error: unknown) =>
         console.error(`Chat proposal ${proposal.id} could not record its outcome:`, error),
       );
     } catch (error) {
