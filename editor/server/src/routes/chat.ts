@@ -25,7 +25,7 @@ import {
   type Box,
   type PlacedText,
 } from "../chat/recreate-reference.js";
-import { edgeColor, eraseBoxes, findPicture, remap } from "../image-tools.js";
+import { edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, remap } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
@@ -49,13 +49,23 @@ interface LayoutRead {
   picture?: Box;
 }
 
+/** What an image-tool read returns, or undefined where the tool is unavailable (off macOS): a reading that only refines a poster never fails the request. */
+function whereImageToolRuns<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof ImageToolUnavailableError) return undefined;
+    throw error;
+  }
+}
+
 /** The layout reference's measured text lines, proportion and framed picture, read before the model is asked. */
 function readLayout(store: ProfileStore, references: ChatReference[]): LayoutRead {
   const layout = references.find((r) => r.role === "layout");
   const file = layout ? readAssetFile(store, layout.id) : undefined;
   if (!file) return {};
   const size = detectImage(file.bytes, "reference");
-  const picture = findPicture(file.bytes);
+  const picture = whereImageToolRuns(() => findPicture(file.bytes));
   return { lines: readTextLines(file.bytes), ...(size.w && size.h ? { aspect: size.w / size.h } : {}), ...(picture ? { picture } : {}) };
 }
 
@@ -179,7 +189,7 @@ type PlacedTexts = Map<string, PlacedText[]>;
 function generationFor(store: ProfileStore, action: ChatAction, canvas: CarouselDocument["canvas"], placed: PlacedTexts): GenerationRequest | undefined {
   if (action.type === "compose_from_reference") {
     const layout = action.referenceIds?.[0] ? readAssetFile(store, action.referenceIds[0]) : undefined;
-    const pad = layout ? edgeColor(layout.bytes) : undefined;
+    const pad = layout ? whereImageToolRuns(() => edgeColor(layout.bytes)) : undefined;
     const aspect = action.layoutAspect ?? canvas.w / canvas.h;
     const texts = measureTexts(action.texts, undefined).map((t) => ({ ...t, box: toSlide(t.box, aspect, canvas) }));
     const anchors = (action.anchors ?? []).map((line) => ({ ...line, box: toSlide(line.box, aspect, canvas) }));

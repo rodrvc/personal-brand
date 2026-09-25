@@ -120,7 +120,21 @@ async function applyAndWait(proposalId: string): Promise<{ status: number; event
 
 const swapBackground = { type: "set_visual_from_library", slideId: "slide-3", slot: "background", assetId: asset.id, why: "" };
 
-const tests: Array<[string, () => Promise<void>]> = [
+/** Marks a test that runs macOS `sips` for real; it is skipped elsewhere, as image-tools.test.ts does. */
+const NEEDS_IMAGE_TOOL = { needsImageTool: true };
+
+/** Runs `fn` as if on a system without `sips`, so the fallback is exercised on macOS too. */
+async function withoutImageTool(fn: () => Promise<void>): Promise<void> {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  try {
+    await fn();
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+}
+
+const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]> = [
   [
     "apply snapshots the document before writing and logs the version path",
     async () => {
@@ -228,6 +242,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.match(seenPrompt, /every text exactly as it is written/, "the provider keeps the texts; they are erased after measuring");
       assert.deepEqual(onDisk.slides[0], document.slides[0], "other slides are untouched");
     },
+    NEEDS_IMAGE_TOOL,
   ],
   [
     "a content reference placed with set_visual_from_library is still placeable when the proposal is applied",
@@ -297,6 +312,22 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal(onDisk.slides.length, 1, "a new slide holds the poster");
       assert.deepEqual(event.results[0].slideIds, [onDisk.slides[0].id]);
     },
+    NEEDS_IMAGE_TOOL,
+  ],
+  [
+    "without image tools, a message with a layout reference still proposes and applies the poster",
+    async () => {
+      reset();
+      const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
+      await withoutImageTool(async () => {
+        nextReply = { text: "", actions: [{ type: "compose_from_reference", texts: [{ zone: "title", text: "New event", from: "content", box: { x: 0.1, y: 0.1, w: 0.5, h: 0.05 } }] }] };
+        const { status, body } = await post("/messages", { text: "this poster", references: [{ ...layout, role: "layout" }] });
+        assert.equal(status, 200, "the message does not fail");
+        assert.ok(body.records[1].proposal, "the poster is still proposed");
+        const { event } = await applyAndWait(body.records[1].proposal.id);
+        assert.equal(event.kind, "done", event.error);
+      });
+    },
   ],
   [
     "an action outside the closed set is refused with a message naming it",
@@ -335,7 +366,11 @@ const tests: Array<[string, () => Promise<void>]> = [
 ];
 
 let failed = 0;
-for (const [name, fn] of tests) {
+for (const [name, fn, options] of tests) {
+  if (options?.needsImageTool && process.platform !== "darwin") {
+    console.log(`skip - ${name} (no sips on this system)`);
+    continue;
+  }
   try {
     await fn();
     console.log(`ok - ${name}`);
