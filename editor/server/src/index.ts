@@ -6,7 +6,7 @@ import { messages } from "./messages.js";
 loadRepoRootEnv();
 
 import { checkChromiumAvailable, closeSharedBrowser } from "./browser.js";
-import { listProfiles, ProfileStore } from "./profile-store.js";
+import { listProfilesAsync, ProfileStore } from "./profile-store.js";
 import { readAssetFile } from "./chat/chat-references.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { assetsRouter } from "./routes/assets.js";
@@ -17,6 +17,21 @@ import { chatRouter } from "./routes/chat.js";
 import { NonePieceGenerator } from "./ai/none.js";
 import { OpenAiPieceGenerator } from "./ai/openai.js";
 import type { PieceGenerator } from "./ai/piece-generator.js";
+import { initStorageRuntime, storageSyncMiddleware } from "./storage/runtime.js";
+
+/**
+ * Selects the storage backend (issue #99: `fs` default, `s3` opt-in via
+ * `STORAGE_BACKEND`) before anything else touches a profile — in `s3` mode
+ * this also repoints `BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` at the local
+ * bucket mirror, so every existing path-based reader keeps working
+ * unmodified against the mirror instead of expecting a bucket.
+ */
+const storageRuntime = initStorageRuntime();
+console.log(
+  storageRuntime.config.backend === "s3"
+    ? `Storage backend: s3 (bucket "${storageRuntime.config.s3?.bucket}")`
+    : "Storage backend: fs (local profiles/ tree)",
+);
 
 /**
  * Entry point (design.md D13, editor-api spec "Local server on top of
@@ -56,6 +71,7 @@ function getGenerator(slug: string): PieceGenerator {
 
 const app = express();
 app.use(express.json({ limit: "40mb" }));
+app.use(storageSyncMiddleware());
 
 app.use(profilesRouter());
 app.use(assetsRouter());
@@ -76,7 +92,7 @@ app.use((error: { type?: string }, _req: express.Request, res: express.Response,
 const server = app.listen(port, bind, async () => {
   console.log(`editor-server listening on http://${bind}:${port}`);
 
-  const profiles = listProfiles();
+  const profiles = await listProfilesAsync();
   console.log(
     profiles.length > 0
       ? `Profiles found: ${profiles.map((p) => (p.hasBrand ? p.slug : `${p.slug} (no brand.json)`)).join(", ")}`

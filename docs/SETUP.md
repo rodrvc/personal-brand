@@ -128,6 +128,15 @@ pnpm --filter @personal-brand/editor-server test
 It SKIPs cleanly (exit 0) when `S3_ENDPOINT` is unset or unreachable, so
 `pnpm test`/`pnpm check` never depend on a bucket being up.
 
+In `s3` mode the server keeps a local mirror under `PROFILE_CACHE_DIR`
+(`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` are pointed at it automatically)
+and syncs it against the bucket around each `/api/profiles/:slug/...`
+request: hydrating before the handler runs (at most every few seconds per
+profile), and uploading whatever the handler — or a filesystem-level writer
+like Playwright's export or the asset index — changed, once the response
+finishes. Every path-based reader in the repo keeps working unmodified
+against that mirror.
+
 ### Eager vs. lazy hydration
 
 `syncDown` does not pull every object into the local mirror on first

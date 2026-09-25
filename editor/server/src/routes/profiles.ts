@@ -19,7 +19,7 @@ import {
   writeDocument,
 } from "../document-store.js";
 import { messages } from "../messages.js";
-import { listProfiles, ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { listProfilesAsync, ProfileStore, ProfileStoreError } from "../profile-store.js";
 
 /**
  * Turns a rejected path or id into a 400, everything else into a 404/500 as
@@ -44,8 +44,12 @@ function handleStoreError(error: unknown, res: import("express").Response): void
 export function profilesRouter(): Router {
   const router = Router();
 
-  router.get("/api/profiles", (_req, res) => {
-    res.json({ profiles: listProfiles() });
+  router.get("/api/profiles", async (_req, res) => {
+    try {
+      res.json({ profiles: await listProfilesAsync() });
+    } catch (error) {
+      handleStoreError(error, res);
+    }
   });
 
   router.get("/api/profiles/:slug/brand", (req, res) => {

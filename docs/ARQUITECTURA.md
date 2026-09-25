@@ -195,6 +195,31 @@ lee `profiles/<slug>/assets/fonts/` — cuando el reel necesite un logo, sale
 del mismo índice. El esquema del índice y de los sidecars está en
 `system/config/assets.schema.md`.
 
+## Backend de almacenamiento del editor (issue #99)
+
+`editor/server` puede leer y escribir perfiles contra el filesystem local
+(default, sin configurar nada) o contra un bucket S3-compatible
+(`STORAGE_BACKEND=s3`), sin que cambie ninguna otra pieza del motor. El
+bucket es la fuente de verdad; en modo `s3` el servidor mantiene un
+**mirror local** (bajo `PROFILE_CACHE_DIR`) al que redirige
+`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` — así todo lector basado en rutas
+(`ProfileStore`, `system/ig-carousel`, `system/assets`, Playwright)
+sigue funcionando sin saber que existe un bucket detrás.
+
+- `editor/server/src/storage/object-store.ts`: interfaz `ObjectStore`
+  (get/head/put/list) con escritura condicional (`ifMatch`/`ifNoneMatch`),
+  implementada por `S3ObjectStore` (bucket real) y `FakeObjectStore`
+  (en memoria, para tests).
+- `editor/server/src/storage/mirror.ts`: `syncDown` (hidrata el mirror antes
+  de leer, con TTL) y `syncUp` (sube lo que cambió en el mirror después de
+  cada escritura, incluidas las que no pasan por `ProfileStore` — el índice
+  de assets, los PNG que exporta Playwright).
+- `editor/server/src/storage/runtime.ts`: arranca el backend elegido y monta
+  el middleware que hidrata/sincroniza por perfil en cada request.
+
+Ver `docs/SETUP.md` para las variables de entorno y cómo levantar un bucket
+local con `docker-compose.storage.yml`.
+
 ## Especificaciones (OpenSpec)
 
 Los cambios de arquitectura y las decisiones de diseño de cada módulo se
