@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 
 import { detectImage } from "../../../system/assets/index.js";
-import { colourReader, cropToSize, inkReader, recolourPill, edgeColor, encodePng, eraseBoxes, findPicture, findPill, padToSize, remap, toRgba, widenPill } from "./image-tools.js";
+import { colourReader, cropToSize, inkReader, edgeColor, encodePng, eraseBoxes, findPicture, findPill, padToSize, remap, toRgba, widenPill } from "./image-tools.js";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -91,9 +91,6 @@ if (existsSync("/usr/bin/sips")) {
   const read = colourReader(png);
   assert.equal(read(text), "783CAA", "what is behind the text: the pill");
   assert.equal(read({ x: 0, y: 0, w: 0.05, h: 0.1 }), "F6F3F8");
-  const red = toRgba(recolourPill(png, findPill(png, text)!, "#E63946")).pixels;
-  assert.deepEqual([...red.subarray((50 * w + 50) * 4, (50 * w + 50) * 4 + 3)], [230, 57, 70], "the pill takes the new colour");
-  assert.deepEqual([...red.subarray((50 * w + 150) * 4, (50 * w + 150) * 4 + 3)], [246, 243, 248], "the page around it does not");
   console.log("ok - image-tools pill");
 }
 {
@@ -112,5 +109,6 @@ if (existsSync("/usr/bin/sips")) {
   const thick = { x: 60 / w, y: 10 / h, w: 50 / w, h: 20 / h };
   assert.ok(Math.abs(ink.stroke(thin) - 0.1) < 1e-9 && Math.abs(ink.stroke(thick) - 0.25) < 1e-9, "stroke width over line height");
   assert.equal(ink.left(thin), 20 / w, "the first column with ink, past the box's padding");
+  assert.equal(ink.colour(thick), "#141414", "the ink's own colour, not the page's");
   console.log("ok - image-tools ink");
 }

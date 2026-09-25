@@ -37,6 +37,8 @@ export interface ResolvedObject {
         align?: TextObject["align"];
         colorRole?: string;
         colorKey?: string;
+        /** Literal `#rrggbb`; wins over `colorKey`/`colorRole` at render time (free-layout.ts). */
+        color?: string;
       }
     // `assetId` is optional here for the same reason it's optional on
     // `AssetObject` (carousel-document.ts): a `pending: true` placeholder
@@ -99,6 +101,7 @@ export function resolveSlide(_doc: CarouselDocument, slide: Slide, template: Lay
           align: object.align ?? textSlot?.align,
           colorRole: textSlot?.colorRole,
           colorKey: object.colorKey,
+          color: object.color,
         },
       };
     }

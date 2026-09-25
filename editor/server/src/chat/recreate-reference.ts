@@ -38,6 +38,21 @@ export const posterTextSchema = z.object({
   from: z.enum(["content", "layout"]).default("content"),
   original: z.string().optional(),
   box: boxSchema.optional(),
+  /** The day a date text stands for, YYYY-MM-DD: its weekday is written from it, not by the model. */
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** CSS weight measured on the layout's line. */
+  weight: z.number().int().min(100).max(900).optional(),
+  /** The ink colour measured on the layout's line, #rrggbb. */
+  color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  /** What the owner's message asks to change in this text's style; it wins over what the layout says. */
+  restyle: z
+    .object({
+      scale: z.number().positive().max(4).optional(),
+      color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      weight: z.number().int().min(100).max(900).optional(),
+    })
+    .optional()
+    .catch(undefined),
 });
 export type PosterText = z.infer<typeof posterTextSchema>;
 export type PlacedText = PosterText & { zone: Zone; box: Box };
@@ -321,31 +336,116 @@ export function toSlide(box: Box, referenceAspect: number, canvas: CarouselDocum
 const BOX_PER_EM = { flat: 0.88, descending: 1.1 };
 const DESCENDERS = /[gjpqy,;]/;
 const GLYPH_WIDTH = { lower: 0.58, upper: 0.72 };
+/** A bold weight sets about this much wider. */
+const BOLD_WIDTH = 1.08;
 /** A chip's pill is about this much wider than the text measured in it. */
 export const CHIP_SLACK = 1.3;
 const LARGE_TEXT = 24;
+/** Colour distance (RGB) under which a measured ink is taken as a brand colour. */
+const SAME_COLOUR = 28;
+/** A text centred past this fraction of the slide's width is aligned right, on its measured right edge. */
+const RIGHT_ALIGNED = 0.6;
+
+/** The CSS weight of a measured stroke-to-height ratio (see `inkReader`). */
+export function weightFor(stroke: number): number {
+  return stroke >= 0.18 ? 700 : stroke >= 0.145 ? 600 : 400;
+}
+
+const COLUMN_TOLERANCE = 0.012;
+
+/**
+ * Texts that start at about the same x on the layout share one column: each gets the column's median start, so a
+ * card's captions and values line up instead of following each line's own measuring error. Right-aligned and
+ * chip texts keep their boxes.
+ */
+export function alignColumns(texts: PlacedText[]): PlacedText[] {
+  const leftAligned = (t: PlacedText) => t.zone !== "chip" && t.box.x + t.box.w / 2 <= RIGHT_ALIGNED;
+  const starts = texts.filter(leftAligned).map((t) => t.box.x).sort((a, b) => a - b);
+  const columns: number[][] = [];
+  for (const x of starts) {
+    const column = columns.at(-1);
+    if (column && x - column.at(-1)! <= COLUMN_TOLERANCE) column.push(x);
+    else columns.push([x]);
+  }
+  const columnOf = (x: number) => columns.find((c) => x >= c[0]! && x <= c.at(-1)!)!;
+  return texts.map((t) => {
+    if (!leftAligned(t)) return t;
+    const column = columnOf(t.box.x);
+    const x = column[column.length >> 1]!;
+    return { ...t, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
+  });
+}
+
+/**
+ * Writes the weekday of `iso` in the profile's locale over the text's leading word, in that word's case, when the
+ * text shows that day of the month; any other text is returned as it is.
+ */
+export function withWeekday(text: string, iso: string, locale: string): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  if (Number.isNaN(date.getTime()) || !new RegExp(`(^|\\D)0?${date.getUTCDate()}(\\D|$)`).test(text)) return text;
+  const leading = /^(\p{L}+)\.?(?=\s)/u.exec(text);
+  if (!leading) return text;
+  const word = leading[1]!;
+  const name = new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(date).replace(/\.$/, "");
+  const upper = word === word.toLocaleUpperCase(locale);
+  const capital = word[0] === word[0]!.toLocaleUpperCase(locale);
+  const cased = upper ? name.toLocaleUpperCase(locale) : capital ? name[0]!.toLocaleUpperCase(locale) + name.slice(1) : name;
+  return cased + text.slice(leading[0].length);
+}
+
+/**
+ * What the model cannot be trusted with, settled from the layout and the profile: each text's weight, colour and
+ * start measured on the layout's ink, columns lined up, and a date's weekday written from its day.
+ */
+export function refineTexts(
+  texts: PlacedText[],
+  profile: { locale: string },
+  ink?: { stroke: (box: Box) => number; left: (box: Box) => number; colour: (box: Box) => string },
+): PlacedText[] {
+  const measured = texts.map((t): PlacedText => {
+    if (!ink || t.line === undefined) return t;
+    const weight = weightFor(ink.stroke(t.box));
+    const color = ink.colour(t.box);
+    if (t.zone === "chip") return { ...t, weight, color };
+    const x = ink.left(t.box);
+    return { ...t, weight, color, box: { ...t.box, x, w: t.box.x + t.box.w - x } };
+  });
+  return alignColumns(measured).map((t) => (t.date ? { ...t, text: withWeekday(t.text, t.date, profile.locale) } : t));
+}
 
 export function fontSizeFor(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens): number {
   const perEm = DESCENDERS.test(t.original ?? t.text) ? BOX_PER_EM.descending : BOX_PER_EM.flat;
   return snapToScale(brand, (box.h * canvas.h) / perEm);
 }
 
-/** About how wide the text sets at that size, in pixels. */
-export function textWidth(text: string, fontSize: number): number {
-  return text.length * fontSize * (text === text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower);
+/** About how wide the text sets at that size and weight, in pixels. */
+export function textWidth(text: string, fontSize: number, weight = 400): number {
+  const glyph = text === text.toUpperCase() ? GLYPH_WIDTH.upper : GLYPH_WIDTH.lower;
+  return text.length * fontSize * glyph * (weight >= 600 ? BOLD_WIDTH : 1);
 }
 
-function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: string): SlideObject {
+type Ink = { colorKey: string } | { color: string };
+
+function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"], brand: BrandTokens, ink?: Ink): SlideObject {
   const role = ZONE_TYPE[t.zone];
   const style = typeStyle(brand, role);
   const measuredW = box.w * canvas.w;
   const measured = fontSizeFor(t, box, canvas, brand);
   // A chip's text must stay inside its pill: past it, the size leaves the brand's scale and shrinks without a floor.
-  const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1));
-  const fontSize = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
-  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize));
-  const w = Math.round(Math.max(measuredW, neededW));
-  const align = role === "chip" ? "center" : box.x + box.w / 2 > 0.6 ? "right" : "left";
+  const fitting = Math.floor((measuredW * CHIP_SLACK) / textWidth(t.text, 1, t.weight));
+  const fitted = role === "chip" ? Math.max(1, Math.min(measured, fitting)) : measured;
+  const weight = t.restyle?.weight ?? t.weight;
+  // A size the owner asked for is used as asked, off the brand's scale, but it stays inside the layout's margins.
+  // The width estimate is calibrated on the line it replaces, whose real width was measured.
+  const calibration = t.original ? Math.min(1.5, Math.max(0.5, measuredW / textWidth(t.original, measured, t.weight))) : 1;
+  const margin = Math.max(0, Math.min(box.x, 1 - box.x - box.w)) * canvas.w;
+  const roomy = Math.floor((canvas.w - 2 * margin) / (textWidth(t.text, 1, weight) * calibration));
+  const fontSize = t.restyle?.scale ? Math.max(1, Math.min(Math.round(fitted * t.restyle.scale), Math.max(roomy, fitted))) : fitted;
+  const neededW = Math.min(canvas.w, textWidth(t.text, fontSize, weight));
+  const align = role === "chip" ? "center" : box.x + box.w / 2 > RIGHT_ALIGNED ? "right" : "left";
+  // The estimate runs wide, so a left or right text keeps its anchored edge and loses width at the canvas edge instead.
+  const room = align === "left" ? canvas.w - box.x * canvas.w : align === "right" ? box.x * canvas.w + measuredW : canvas.w;
+  const w = Math.round(Math.max(measuredW, Math.min(neededW, room)));
   const left = align === "right" ? box.x * canvas.w + measuredW - w : align === "center" ? box.x * canvas.w + (measuredW - w) / 2 : box.x * canvas.w;
   const x = Math.round(Math.min(Math.max(left, 0), canvas.w - w));
   const height = Math.round(fontSize * 1.3);
@@ -356,13 +456,35 @@ function textObject(t: PlacedText, box: Box, canvas: CarouselDocument["canvas"],
     geometry: { x, y: Math.round(box.y * canvas.h - (height - box.h * canvas.h) / 2), w, h: height, rotation: 0 },
     fontKey: style.font,
     fontSize,
+    ...(weight ? { fontWeight: weight } : {}),
     lineHeight: 1.15,
     align,
-    colorKey: ink ?? brand.roles[style.color as keyof BrandRoles],
+    ...(ink ?? { colorKey: brand.roles[style.color as keyof BrandRoles] }),
     pinned: false,
     locked: false,
     source: "ai",
   };
+}
+
+/**
+ * Each text (box on the slide) as an editable text object in the brand's typography: its measured colour, as a brand
+ * colour when it is one, else the role's; replaced by the best-contrast brand colour when it would not read on what
+ * `behind` says is under it (a hex without `#`).
+ */
+function textObjects(texts: PlacedText[], canvas: CarouselDocument["canvas"], brand: BrandTokens, behind?: (box: Box) => string): SlideObject[] {
+  const ink = (t: PlacedText): Ink | undefined => {
+    const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
+    // The owner's colour is used as asked, without the contrast check.
+    if (t.restyle?.color) return inkFor(brand, t.restyle.color);
+    const wanted: Ink = t.color ? inkFor(brand, t.color) : { colorKey: roleKey };
+    if (!behind) return t.color ? wanted : undefined;
+    const under = `#${behind(t.box)}`;
+    const hex = "color" in wanted ? wanted.color : brand.colors[wanted.colorKey]!;
+    // WCAG AA: 3:1 is enough for large text, 4.5:1 below that.
+    const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
+    return contrast(hex, under) >= needed ? wanted : { colorKey: bestContrastColorKey(brand, hex, under) };
+  };
+  return texts.map((t) => textObject(t, t.box, canvas, brand, ink(t)));
 }
 
 /**
@@ -401,14 +523,7 @@ export function placePoster(
         },
       ]
     : [];
-  const ink = (t: PlacedText) => {
-    if (!options.behind) return undefined;
-    const roleKey = brand.roles[typeStyle(brand, ZONE_TYPE[t.zone]).color as keyof BrandRoles];
-    const behind = `#${options.behind(t.box)}`;
-    // WCAG AA: 3:1 is enough for large text, 4.5:1 below that.
-    const needed = fontSizeFor(t, t.box, canvas, brand) >= LARGE_TEXT ? 3 : 4.5;
-    return contrast(brand.colors[roleKey]!, behind) >= needed ? roleKey : bestContrastColorKey(brand, brand.colors[roleKey]!, behind);
-  };
+  const placed = textObjects(texts, canvas, brand, options.behind);
   return {
     id: slide?.id ?? newChatId("slide"),
     kind: slide?.kind ?? "cover",
@@ -417,9 +532,17 @@ export function placePoster(
       ...(slide?.objects ?? []).filter((o) => o.pinned || o.locked),
       background,
       ...picture,
-      ...texts.map((t) => textObject(t, t.box, canvas, brand, ink(t))),
+      ...placed,
     ],
   };
+}
+
+/** A measured colour as a brand colour when it is one of them, give or take rendering, else as it is. */
+function inkFor(brand: BrandTokens, color: string): Ink {
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const measured = rgb(color);
+  const near = Object.entries(brand.colors).find(([, hex]) => Math.hypot(...rgb(hex).map((v, c) => v - measured[c]!)) <= SAME_COLOUR);
+  return near ? { colorKey: near[0] } : { color: color.toLowerCase() };
 }
 
 function pixels(box: Box, canvas: CarouselDocument["canvas"]): { x: number; y: number; w: number; h: number; rotation: number } {

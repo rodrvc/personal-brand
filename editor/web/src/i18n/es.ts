@@ -168,6 +168,7 @@ export const es = {
   "selectionPane.textHeadingFallback": "Texto",
   "selectionPane.assetHeadingFallback": "Asset",
   "selectionPane.pinned": "fijado",
+  "selectionPane.literalColorLabel": "Color de la referencia",
   "selectionPane.fontSizeLabel": "Tamaño",
   "selectionPane.lineHeightLabel": "Interlínea",
   "selectionPane.fontWeightLabel": "Peso",

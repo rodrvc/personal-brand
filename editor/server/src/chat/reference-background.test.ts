@@ -24,7 +24,7 @@ if (existsSync("/usr/bin/sips")) {
       page.set(pillText ? [255, 255, 255, 255] : pill ? [120, 60, 170, 255] : line ? [30, 30, 30, 255] : [246, 243, 248, 255], (y * w + x) * 4);
     }
   }
-  const chip = { line: 0, zone: "chip" as const, text: "A MUCH LONGER CATEGORY", from: "content" as const, box: { x: 30 / w, y: 46 / h, w: 40 / w, h: 8 / h } };
+  const chip = { line: 0, zone: "chip" as const, text: "A MUCH LONGER CATEGORY", original: "OLD", from: "content" as const, box: { x: 30 / w, y: 46 / h, w: 40 / w, h: 8 / h } };
   const title = { line: 1, zone: "title" as const, text: "New", from: "content" as const, box: { x: 20 / w, y: 80 / h, w: 180 / w, h: 12 / h } };
   const built = referenceBackground(encodePng(w, h, page), [chip, title], 0.8, canvas, brand);
   const size = detectImage(built.image, "out");

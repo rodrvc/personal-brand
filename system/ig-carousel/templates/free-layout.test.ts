@@ -474,6 +474,24 @@ const tests: Array<[string, () => void]> = [
       assert.doesNotMatch(renderFreeLayoutSlide(brand, template, covered, 0, ctx), /data-zone="footer"/);
     },
   ],
+  [
+    "a text object's literal `color` wins over its colorKey",
+    () => {
+      const doc = buildFreeDoc();
+      const literal = {
+        ...doc,
+        slides: [
+          {
+            ...doc.slides[0]!,
+            objects: [{ ...(doc.slides[0]!.objects[0] as any), colorKey: "ink", color: "#a1b2c3" }],
+          },
+        ],
+      };
+      const html = renderFreeLayoutSlide(brand, template, literal, 0, ctx);
+      assert.match(html, /color: #a1b2c3/, "the literal color must be painted");
+      assert.doesNotMatch(html, new RegExp(`color: ${brand.colors.ink}`), "the colorKey's value must not win");
+    },
+  ],
 ];
 
 let failed = 0;

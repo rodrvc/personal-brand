@@ -11,8 +11,8 @@ function onSlide(aspect: number, canvas: CarouselDocument["canvas"]): Registrati
 
 /**
  * The layout reference itself as the poster's background, at the slide's exact size, with every text that will be
- * placed on top erased from it. A chip whose new text does not fit its pill gets a wider pill, and the text's box
- * moves to the pill's new centre. Boxes of `texts` are on the slide.
+ * placed on top erased from it. A text whose new wording does not fit the pill it sits in gets a wider pill, and the text's box
+ * moves to the pill's new centre when it is a chip. Boxes of `texts` are on the slide.
  */
 export function referenceBackground(
   layout: Buffer,
@@ -23,15 +23,18 @@ export function referenceBackground(
 ): { image: Buffer; texts: PlacedText[] } {
   let image = eraseBoxes(remap(toPng(layout), onSlide(aspect, canvas), canvas.w, canvas.h, edgeColor(layout)), texts.map((t) => t.box));
   const placed = texts.map((t) => {
-    if (t.zone !== "chip") return t;
     const pill = findPill(image, t.box);
     if (!pill) return t;
-    const needed = textWidth(t.text, fontSizeFor(t, t.box, canvas, brand));
+    // Relative to the measured old text, so the estimate's own error cancels out: same length, same width.
+    const size = fontSizeFor(t, t.box, canvas, brand);
+    const needed = (t.box.w * canvas.w * textWidth(t.text, size, t.weight)) / textWidth(t.original ?? t.text, size, t.weight);
     const padding = pill.x1 - pill.x0 - t.box.w * canvas.w;
     const by = Math.ceil(needed + padding - (pill.x1 - pill.x0));
     if (by > 0) image = widenPill(image, pill, by);
-    const centre = (pill.x0 + pill.x1 + Math.max(0, by)) / 2;
     const w = Math.max(needed, t.box.w * canvas.w);
+    // A chip's text is centred in its pill; any other text keeps its start, after the pill's icon.
+    if (t.zone !== "chip") return { ...t, box: { ...t.box, w: w / canvas.w } };
+    const centre = (pill.x0 + pill.x1 + Math.max(0, by)) / 2;
     return { ...t, box: { ...t.box, x: (centre - w / 2) / canvas.w, w: w / canvas.w } };
   });
   return { image, texts: placed };

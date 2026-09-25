@@ -454,7 +454,11 @@ export function widenPill(png: Buffer, pill: { x0: number; x1: number; y0: numbe
  * Reads the ink of the text inside a box (fractions) of one decoded image: the ink is whichever side of the box's
  * mid luminance is the minority, so dark text on a light card and light text on a dark pill read the same way.
  */
-export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; left: (box: PixelBox) => number } {
+export function inkReader(png: Buffer): {
+  stroke: (box: PixelBox) => number;
+  left: (box: PixelBox) => number;
+  colour: (box: PixelBox) => string;
+} {
   const { width, height, pixels } = toRgba(png);
   const luma = (x: number, y: number) => {
     const i = (y * width + x) * 4;
@@ -490,6 +494,20 @@ export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; lef
       }
       return runs > 0 && y1 > y0 ? total / runs / (y1 - y0) : 0;
     },
+    // The ink's colour, from its core: anti-aliased edge pixels, half ink and half surface, are left out.
+    colour: (box) => {
+      const { x0, x1, y0, y1, ink } = scan(box);
+      const core: number[][] = [];
+      for (let y = y0 + 1; y < y1 - 1; y++) {
+        for (let x = x0 + 1; x < x1 - 1; x++) {
+          if (ink(x, y) && ink(x - 1, y) && ink(x + 1, y) && ink(x, y - 1) && ink(x, y + 1)) {
+            core.push([...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)]);
+          }
+        }
+      }
+      const rgb = dominantColour(core.length > 0 ? core : [[0, 0, 0]]);
+      return `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+    },
     // Where the ink starts: OCR boxes carry some padding before the first letter, a different amount per line.
     left: (box) => {
       const { x0, x1, y0, y1, ink } = scan(box);
@@ -501,31 +519,4 @@ export function inkReader(png: Buffer): { stroke: (box: PixelBox) => number; lef
       return box.x;
     },
   };
-}
-
-/**
- * Repaints the pill in another colour, keeping its anti-aliased edge: each pixel is placed on the line from the
- * surface around the pill to the pill's own colour, and moved to the same point on the line to the new colour.
- */
-export function recolourPill(png: Buffer, pill: { x0: number; x1: number; y0: number; y1: number }, hex: string): Buffer {
-  const { width, height, pixels } = toRgba(png);
-  const at = (x: number, y: number) => [...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)];
-  const cy = Math.round((pill.y0 + pill.y1) / 2);
-  const fill = at(Math.round((pill.x0 + pill.x1) / 2), cy);
-  const surface = at(Math.max(0, pill.x0 - 4), cy);
-  const target = [0, 2, 4].map((i) => parseInt(hex.replace("#", "").slice(i, i + 2), 16));
-  const span = fill.map((v, c) => v - surface[c]!);
-  const length = span.reduce((sum, v) => sum + v * v, 0);
-  if (length === 0) return png;
-  const margin = 3;
-  for (let y = Math.max(0, pill.y0 - margin); y <= Math.min(height - 1, pill.y1 + margin); y++) {
-    for (let x = Math.max(0, pill.x0 - margin); x <= Math.min(width - 1, pill.x1 + margin); x++) {
-      const p = at(x, y);
-      const t = Math.min(1, Math.max(0, p.reduce((sum, v, c) => sum + (v - surface[c]!) * span[c]!, 0) / length));
-      const off = Math.sqrt(p.reduce((sum, v, c) => sum + (v - surface[c]! - t * span[c]!) ** 2, 0));
-      if (off > PILL_TOLERANCE || t === 0) continue;
-      for (let c = 0; c < 3; c++) pixels[(y * width + x) * 4 + c] = Math.round(surface[c]! + t * (target[c]! - surface[c]!));
-    }
-  }
-  return encodePng(width, height, pixels);
 }

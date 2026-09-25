@@ -20,6 +20,7 @@ import {
   numberedLines,
   measureTexts,
   placePoster,
+  refineTexts,
   register,
   settleTexts,
   toSlide,
@@ -28,7 +29,7 @@ import {
   type PlacedText,
 } from "../chat/recreate-reference.js";
 import { referenceBackground } from "../chat/reference-background.js";
-import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, remap } from "../image-tools.js";
+import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, inkReader, remap, toPng } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocument } from "../document-store.js";
@@ -51,6 +52,7 @@ interface LayoutRead {
   kinds?: LineKind[];
   aspect?: number;
   picture?: Box;
+  ink?: ReturnType<typeof inkReader>;
 }
 
 /** What an image-tool read returns, or undefined where the tool is unavailable (off macOS): a reading that only refines a poster never fails the request. */
@@ -71,10 +73,12 @@ function readLayout(store: ProfileStore, references: ChatReference[], wordmark: 
   const size = detectImage(file.bytes, "reference");
   const picture = whereImageToolRuns(() => findPicture(file.bytes));
   const lines = readTextLines(file.bytes);
+  const ink = lines ? whereImageToolRuns(() => inkReader(toPng(file.bytes))) : undefined;
   return {
     ...(lines ? { lines, kinds: classifyLines(lines, picture, wordmark) } : {}),
     ...(size.w && size.h ? { aspect: size.w / size.h } : {}),
     ...(picture ? { picture } : {}),
+    ...(ink ? { ink } : {}),
   };
 }
 
@@ -90,7 +94,11 @@ function proposeRecreation(
   const layout = references.find((r) => r.role === "layout");
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
   const classified = layoutRead.lines && layoutRead.kinds ? completeTexts(action.texts, layoutRead.lines, layoutRead.kinds) : action.texts;
-  const texts = measureTexts(classified, layoutRead.lines);
+  const texts = refineTexts(
+    measureTexts(classified, layoutRead.lines),
+    { locale: ctx.brand.locale },
+    layoutRead.ink,
+  );
   const content = references.find((r) => r.role === "content");
   const contentAsImage = content !== undefined && accepts("background", content.mime);
   const fallback = ctx.doc.slides.some((s) => s.id === activeSlideId) ? activeSlideId : ctx.doc.slides[0]?.id;
