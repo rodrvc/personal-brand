@@ -243,6 +243,42 @@ export class ProfileStore {
     }
   }
 
+  /**
+   * Fetches `relPath` into the local mirror on demand if it's missing there
+   * and the process is running in `s3` mode — a no-op in `fs` mode, and a
+   * no-op whenever the file is already present (the common case: eager
+   * `syncDown` already hydrated it, or a previous call already fetched it).
+   * Covers a profile-area path `syncDown` excluded from eager hydration by
+   * default (`mirror.ts`'s lazy-media rules) that a caller still needs to
+   * read right now, rather than waiting for a full resync.
+   */
+  async ensureHydrated(relPath: string): Promise<void> {
+    const abs = this.resolveInProfile(relPath);
+    if (existsSync(abs)) return;
+    const bucket = await this.bucketContext(relPath, "profile");
+    if (!bucket) return;
+    const { fetchObjectOnDemand } = await import("./storage/mirror.js");
+    await fetchObjectOnDemand(bucket.store, bucket.s3, bucket.cacheDir, this.slug, "profile", relPath);
+  }
+
+  /** Hydration-aware `readFile`: fetches the object on demand first when it's absent locally in `s3` mode, then reads it exactly like `readFile`. */
+  async readFileAsync(relPath: string): Promise<Buffer> {
+    await this.ensureHydrated(relPath);
+    return this.readFile(relPath);
+  }
+
+  /** Hydration-aware `exists`: a lazily-excluded object that hasn't been fetched yet still counts as existing, since it's real in the bucket — this fetches it first so a caller that follows up with `readFile`/`absPath` doesn't see a false negative. */
+  async existsAsync(relPath: string): Promise<boolean> {
+    await this.ensureHydrated(relPath);
+    return this.exists(relPath);
+  }
+
+  /** Hydration-aware `absPath`: for a caller (e.g. Playwright) that needs the object physically on disk before handling its path. */
+  async absPathAsync(relPath: string): Promise<string> {
+    await this.ensureHydrated(relPath);
+    return this.absPath(relPath);
+  }
+
   private absForArea(relPath: string, area: StorageArea): string {
     return area === "outputs" ? this.resolveInOutputs(relPath) : this.resolveInProfile(relPath);
   }

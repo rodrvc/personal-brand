@@ -168,6 +168,17 @@ S3_MIRROR_LAZY_PROFILE_PREFIXES=outputs/,reels/
 S3_MIRROR_EAGER_PROFILE_PREFIXES=assets/,carousels/
 ```
 
+A caller that still needs a lazily-excluded file right now — rather than
+waiting for `syncDown`'s TTL to run again — reads it through
+`ProfileStore.readFileAsync`/`existsAsync`/`absPathAsync` instead of the
+plain sync `readFile`/`exists`/`absPath`: they fetch it on demand first if
+it's missing locally, then behave exactly like the sync method. The assets
+`files/*splat` route and the render engine's asset interception both go
+through `readFileAsync` for this reason, even though `assets/` is eager by
+default (so the on-demand fetch is normally a same-tick no-op) — a profile
+that overrides `S3_MIRROR_EAGER_PROFILE_PREFIXES` still gets a correct,
+lazy-safe read.
+
 ### Migrating an existing local profile into the bucket
 
 ```bash

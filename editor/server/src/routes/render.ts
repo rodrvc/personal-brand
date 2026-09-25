@@ -41,7 +41,7 @@ async function loadSlide(page: Page, html: string): Promise<void> {
     try {
       if (!match) throw new Error("not an asset");
       const [, slug, relUnderAssets] = match;
-      await route.fulfill({ body: new ProfileStore(slug!).readFile(`assets/${decodeURIComponent(relUnderAssets!)}`) });
+      await route.fulfill({ body: await new ProfileStore(slug!).readFileAsync(`assets/${decodeURIComponent(relUnderAssets!)}`) });
     } catch {
       await route.abort();
     }

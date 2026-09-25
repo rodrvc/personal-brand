@@ -187,17 +187,20 @@ export function assetsRouter(): Router {
    * Read-only, confined static serving of `assets/**` (editor-api spec's
    * "Asset and font serving"). `req.params.splat` is Express 5's named
    * wildcard capture for `*splat` (path-to-regexp v8 no longer allows a
-   * bare `*`); `ProfileStore.readFile` re-confines it regardless, so a
+   * bare `*`); `ProfileStore.readFileAsync` re-confines it regardless, so a
    * request shaped like `../brand.json` 404s rather than ever touching disk
-   * outside `assets/`.
+   * outside `assets/`. `assets/` is eagerly hydrated by default (see
+   * `mirror.ts`'s lazy-media rules), so the on-demand fetch inside
+   * `readFileAsync` is normally a same-tick no-op; it only does real work
+   * for a profile whose config overrides that default.
    */
-  router.get("/api/profiles/:slug/assets/files/*splat", (req, res) => {
+  router.get("/api/profiles/:slug/assets/files/*splat", async (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
       const wildcard = (req.params as unknown as Record<string, string | string[]>).splat;
       const relUnderAssets = Array.isArray(wildcard) ? wildcard.join("/") : String(wildcard ?? "");
       const relPath = `assets/${relUnderAssets}`;
-      const buffer = store.readFile(relPath);
+      const buffer = await store.readFileAsync(relPath);
       res.setHeader("Content-Type", mimeFromPath(relPath));
       // Hash-based cache: the path itself never changes for the same
       // content (identity is the file's hash in the library), so this is
