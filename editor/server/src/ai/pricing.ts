@@ -43,17 +43,52 @@ export function estimateImageCostCents(): number {
   return IMAGE_CENTS_PER_CALL_LOW_QUALITY;
 }
 
-const IMAGE_MODEL_CENTS_PER_1M = { textInput: 200, imageInput: 250, imageOutput: 800 };
+/**
+ * The model, quality and output size of a poster recreated from a reference (reproduce mode). Chosen by a side-by-side
+ * comparison on real layouts (see `odd/tasks/poster-single-image.md`); `EDITOR_POSTER_IMAGE_MODEL` and
+ * `EDITOR_POSTER_IMAGE_QUALITY` override them.
+ */
+export const POSTER_IMAGE_MODEL = "gpt-image-2";
+export const POSTER_IMAGE_QUALITY = "medium";
 
-export function estimateImageCostFromUsage(usage?: {
-  input_tokens_details?: { text_tokens?: number; image_tokens?: number };
-  output_tokens?: number;
-}): number {
+export function posterImageModel(): string {
+  return process.env.EDITOR_POSTER_IMAGE_MODEL?.trim() || POSTER_IMAGE_MODEL;
+}
+
+export function posterImageQuality(): string {
+  return process.env.EDITOR_POSTER_IMAGE_QUALITY?.trim() || POSTER_IMAGE_QUALITY;
+}
+
+/** List prices, US cents per 1M tokens (OpenAI pricing page, September 2026). */
+const IMAGE_CENTS_PER_1M: Record<string, { textInput: number; imageInput: number; imageOutput: number }> = {
+  "gpt-image-1-mini": { textInput: 200, imageInput: 250, imageOutput: 800 },
+  "gpt-image-1": { textInput: 500, imageInput: 1000, imageOutput: 4000 },
+  "gpt-image-1.5": { textInput: 500, imageInput: 800, imageOutput: 3200 },
+  "gpt-image-2": { textInput: 500, imageInput: 800, imageOutput: 3000 },
+  "gpt-image-2.5-flare": { textInput: 500, imageInput: 800, imageOutput: 3000 },
+  "gpt-image-2.5-sunburst": { textInput: 500, imageInput: 800, imageOutput: 3000 },
+};
+
+function imageRate(model: string): { textInput: number; imageInput: number; imageOutput: number } {
+  const known = Object.keys(IMAGE_CENTS_PER_1M)
+    .filter((name) => model === name || model.startsWith(`${name}-`))
+    .sort((a, b) => b.length - a.length)[0];
+  return IMAGE_CENTS_PER_1M[known ?? IMAGE_MODEL]!;
+}
+
+export function estimateImageCostFromUsage(
+  usage?: {
+    input_tokens_details?: { text_tokens?: number; image_tokens?: number };
+    output_tokens?: number;
+  },
+  model: string = IMAGE_MODEL,
+): number {
   if (!usage) return IMAGE_CENTS_PER_CALL_LOW_QUALITY;
+  const rate = imageRate(model);
   const cents =
-    ((usage.input_tokens_details?.text_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.textInput +
-      (usage.input_tokens_details?.image_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.imageInput +
-      (usage.output_tokens ?? 0) * IMAGE_MODEL_CENTS_PER_1M.imageOutput) /
+    ((usage.input_tokens_details?.text_tokens ?? 0) * rate.textInput +
+      (usage.input_tokens_details?.image_tokens ?? 0) * rate.imageInput +
+      (usage.output_tokens ?? 0) * rate.imageOutput) /
     1_000_000;
   return Math.round(cents * 100) / 100;
 }

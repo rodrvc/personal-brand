@@ -1,5 +1,5 @@
 import { padToSize } from "../image-tools.js";
-import { chatCostCents, estimateImageCostFromUsage, estimateTextCostCents, IMAGE_MODEL, TEXT_MODEL, VISION_MODEL } from "./pricing.js";
+import { chatCostCents, estimateImageCostFromUsage, estimateTextCostCents, IMAGE_MODEL, posterImageModel, posterImageQuality, TEXT_MODEL, VISION_MODEL } from "./pricing.js";
 import type {
   DraftCopyPlan,
   DraftCopyResult,
@@ -200,11 +200,12 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       ? spec.prompt
       : `${spec.prompt}${brandContextForImage(spec.brand)}\n\n${NO_TEXT_INSTRUCTION}${cutout ? `\n\n${CUTOUT_INSTRUCTION}` : ""}`;
     logPrompt("generateImage", prompt);
+    const model = reproduce ? posterImageModel() : IMAGE_MODEL;
     const fields: Record<string, string> = {
-      model: IMAGE_MODEL,
+      model,
       prompt,
-      quality: reproduce ? "high" : "low",
-      size: cutout ? "1024x1024" : reproduce ? sizeHolding(spec.canvas) : pickSize(spec.canvas),
+      quality: reproduce ? posterImageQuality() : "low",
+      size: cutout ? "1024x1024" : reproduce ? sizeHolding(spec.canvas, model) : pickSize(spec.canvas),
       n: "1",
       ...(cutout ? { background: "transparent", output_format: "png" } : {}),
     };
@@ -218,8 +219,9 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       const form = new FormData();
       for (const [key, value] of Object.entries(fields)) form.append(key, value);
       references.forEach(({ id, file }, i) => {
-        // The provider's sizes do not include the slide's proportion: the base image is letterboxed to the slide, then
-        // to the provider's size. The provider does not keep that letterbox exactly, so the caller registers the result.
+        // The base image is letterboxed to the slide, then to the provider's size, so it is never stretched. A model that
+        // takes any size gets the slide's own proportion and that second letterbox is a no-op; with a fixed set of
+        // sizes the caller crops the slide back out of the result.
         const [w, h] = fields.size!.split("x").map(Number) as [number, number];
         const pad = spec.padColor ?? "FFFFFF";
         const bytes = reproduce && i === 0 ? padToSize(padToSize(file!.bytes, spec.canvas.w, spec.canvas.h, pad), w, h, pad) : file!.bytes;
@@ -242,11 +244,14 @@ export class OpenAiPieceGenerator implements PieceGenerator {
     }
 
     const generated = Buffer.from(b64, "base64");
+    const costCents = estimateImageCostFromUsage(json.usage, model);
+    // One line per paid image, never the key: what was asked and what it cost, to keep a spend ledger honest.
+    console.info(`[ai:image] ${model} ${fields.size} ${fields.quality} usage=${JSON.stringify(json.usage ?? null)} cents=${costCents}`);
     return {
       buffer: generated,
       mime: "image/png",
-      model: IMAGE_MODEL,
-      costCents: estimateImageCostFromUsage(json.usage),
+      model,
+      costCents,
       usedReferenceIds: references.map((r) => r.id),
     };
   }
@@ -255,9 +260,21 @@ export class OpenAiPieceGenerator implements PieceGenerator {
 /** OpenAI's image endpoint only accepts a fixed set of sizes; pick the closest aspect to the carousel canvas (portrait 4:5). */
 const SIZES: Array<[number, number]> = [[1024, 1024], [1024, 1536], [1536, 1024]];
 
-/** The provider size that holds the largest region of the slide's proportion. */
-function sizeHolding(canvas: { w: number; h: number }): string {
+/** Models that take any output size (edges multiples of 16, between 655,360 and 8,294,400 pixels, aspect 1:3 to 3:1). */
+const ANY_SIZE_MODELS = /^gpt-image-2/;
+const ANY_SIZE_PIXELS = 1024 * 1280;
+
+/**
+ * The output size for a poster: the slide's own proportion at about 1.3 megapixels when the model takes any size,
+ * else the fixed size that holds the largest region of that proportion.
+ */
+export function sizeHolding(canvas: { w: number; h: number }, model: string): string {
   const aspect = canvas.w / canvas.h;
+  if (ANY_SIZE_MODELS.test(model) && aspect >= 1 / 3 && aspect <= 3) {
+    const round16 = (n: number) => Math.max(16, Math.round(n / 16) * 16);
+    const w = round16(Math.sqrt(ANY_SIZE_PIXELS * aspect));
+    return `${w}x${round16(w / aspect)}`;
+  }
   const area = ([w, h]: [number, number]) => Math.min(w, h * aspect) * Math.min(h, w / aspect);
   const [w, h] = SIZES.reduce((best, size) => (area(size) > area(best) ? size : best));
   return `${w}x${h}`;
