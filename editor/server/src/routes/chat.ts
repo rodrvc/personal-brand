@@ -79,6 +79,9 @@ export function posterRoute(): PosterRoute {
   return process.env.EDITOR_POSTER_ROUTE?.trim() === "editable" ? "editable" : "image";
 }
 
+/** The route of a poster proposed before proposals recorded theirs: every one of them was editable. */
+const LEGACY_POSTER_ROUTE: PosterRoute = "editable";
+
 /**
  * The layout reference's proportion, read before the model is asked; for an editable poster also its measured text
  * lines and framed picture. A poster made as one image needs no OCR and no frame.
@@ -403,7 +406,7 @@ async function runProposal(
     const canvas = readValidatedDocument(store, carouselId).canvas;
     const brand = buildChatContext(store, carouselId).brand;
     for (const action of proposal.actions) {
-      if (action.type === "compose_from_reference" && (action.posterRoute ?? posterRoute()) === "image") {
+      if (action.type === "compose_from_reference" && (action.posterRoute ?? LEGACY_POSTER_ROUTE) === "image") {
         const entry = await generateForSlot(store, generator, { ...posterImageFor(store, action, canvas, brand.locale), canvas, carouselId });
         generated.set(action.id, entry.id);
         placed.set(action.id, []);

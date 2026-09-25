@@ -625,6 +625,30 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
     },
   ],
   [
+    "a poster proposed before the route was recorded is still applied as an editable poster",
+    async () => {
+      reset();
+      const layout = (await post("/references", { name: "layout.png", mime: "image/png", dataBase64: TINY_PNG.toString("base64") })).body.reference;
+      const proposal = await withEnv(editable, async () => {
+        nextReply = { text: "", actions: [{ type: "compose_from_reference", texts: [{ zone: "title", text: "New event", from: "content", box: { x: 0.1, y: 0.1, w: 0.5, h: 0.05 } }] }] };
+        const { body } = await post("/messages", { text: "this poster", activeSlideId: "slide-2", references: [{ ...layout, role: "layout" }] });
+        return body.records[1].proposal;
+      });
+      const logPath = join(carouselDir, "chat.jsonl");
+      const legacy = readFileSync(logPath, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .map((record) => (record.proposal?.id === proposal.id ? { ...record, proposal: { ...record.proposal, actions: record.proposal.actions.map(({ posterRoute: _, ...action }: any) => action) } } : record));
+      writeFileSync(logPath, legacy.map((record) => JSON.stringify(record)).join("\n") + "\n");
+
+      const { event, onDisk } = await withEnv({ EDITOR_POSTER_BACKGROUND: "provider" }, () => applyAndWait(proposal.id));
+      assert.equal(event.kind, "done", event.error);
+      assert.match(seenPrompt, /every text exactly as it is written/, "the editable route, not one generated image");
+      assert.ok(onDisk.slides[1].objects.some((o: any) => o.kind === "text" && o.text === "New event"), "with its texts editable on top");
+    },
+  ],
+  [
     "a generated poster is cut back to the slide's proportion, never stretched",
     async () => {
       const { fitToSlide } = await import("./chat.js");
