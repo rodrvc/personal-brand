@@ -447,6 +447,26 @@ export async function fetchObjectOnDemand(
   return localPath;
 }
 
+/**
+ * Records (or overwrites) one manifest entry directly — used by
+ * `ProfileStore`'s bucket-backed write guarantees (`writeJsonIfRevision`,
+ * `appendLine`, `reserveOnce`) right after a direct, conditional write to
+ * the bucket, so the next `syncUp` sees the mirror file's hash already
+ * matching and does NOT re-upload it unconditionally — which would either
+ * be a harmless no-op or, worse, clobber a write that landed in the bucket
+ * after this one.
+ */
+export function updateManifestEntry(
+  config: S3StorageConfig,
+  cacheDir: string,
+  slug: string,
+  key: string,
+  entry: ManifestEntry,
+): void {
+  const roots = resolveMirrorRoots(config, cacheDir, slug);
+  patchManifestEntry(roots.manifestPath, key, entry);
+}
+
 const lastSyncedAt = new Map<string, number>();
 const DEFAULT_TTL_MS = 3000;
 

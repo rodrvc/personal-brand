@@ -58,6 +58,11 @@ export function resetStorageRuntimeForTests(): void {
   runtime = undefined;
 }
 
+/** Test-only: injects a runtime directly (e.g. an `s3` config paired with a `FakeObjectStore`) — lets `ProfileStore`'s bucket-backed methods be exercised without a real bucket or `@aws-sdk/client-s3` credentials. */
+export function setStorageRuntimeForTests(override: StorageRuntime): void {
+  runtime = override;
+}
+
 const SLUG_FROM_PATH = /^\/api\/profiles\/([a-z0-9-]+)(?:\/|$)/;
 
 /** Extracts the profile slug from an `/api/profiles/:slug/...` request path, before Express has matched a route (used by the hydrate/sync-up middleware, which is mounted ahead of every router). */
