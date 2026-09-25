@@ -168,6 +168,22 @@ S3_MIRROR_LAZY_PROFILE_PREFIXES=outputs/,reels/
 S3_MIRROR_EAGER_PROFILE_PREFIXES=assets/,carousels/
 ```
 
+### Migrating an existing local profile into the bucket
+
+```bash
+pnpm --filter @personal-brand/editor-server run migrate:profile -- --profile <slug> [--dry-run]
+```
+
+Copies a profile's own directory and its resolved `outputs.base_dir` into
+the bucket configured by the `S3_*` vars above (independently of
+`STORAGE_BACKEND` — the script always targets a bucket). Never deletes
+anything, locally or remotely: a file already present with the same
+content is skipped, a remote file with *different* content is reported as
+a conflict and left untouched, and it's safe to re-run at any time. Run it
+with `BRAND_OUTPUTS_ROOT` unset — that variable is the editor's own
+s3-mode mirror redirect, and the migration needs to read the real local
+output tree, not a mirror.
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs
