@@ -1,0 +1,73 @@
+# Local S3-compatible bucket for the editor's `STORAGE_BACKEND=s3` mode (see
+# `docs/SETUP.md`). The same `ObjectStore` code later talks to Railway
+# buckets, Cloudflare R2, AWS S3 or a real MinIO deployment by changing
+# `S3_*` environment variables only — nothing here is brand- or
+# profile-specific.
+#
+# Runs RustFS (https://rustfs.com, Apache-2.0) rather than MinIO: as of this
+# writing MinIO's own container images (`minio/minio`, `minio/mc`) are no
+# longer pullable anonymously from Docker Hub or quay.io (both now require a
+# MinIO account/subscription), and its direct binary download
+# (dl.min.io) returns 410 Gone. RustFS was verified directly against this
+# repo's `ObjectStore`/`S3ObjectStore` code before being adopted here:
+#   - pulls anonymously (`docker pull rustfs/rustfs:latest`)
+#   - persists data across `docker compose down && up` on the named volume
+#     below (confirmed: objects written before a container recreation are
+#     still listable after)
+#   - enforces `If-Match`/`If-None-Match` on `PutObject` — the
+#     `storage/s3-object-store.integration.test.ts` suite passes against it
+#     unmodified
+# If MinIO's images become pullable again, or you already have a MinIO
+# account, this file can point at `minio/minio` instead — `ObjectStore`
+# itself does not change either way.
+#
+# Usage:
+#   docker compose -f docker-compose.storage.yml up -d
+#   docker compose -f docker-compose.storage.yml down          # keep the volume
+#   docker compose -f docker-compose.storage.yml down -v       # wipe local data
+#
+# S3 API: http://localhost:9000 (console on :9001, also served by the image)
+
+services:
+  storage:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin123}
+    volumes:
+      - storage-data:/data
+    healthcheck:
+      # RustFS answers an unauthenticated request with 403 once it's up —
+      # `curl` with no `-f` still exits 0 on any received HTTP response, so
+      # this only waits for the port to accept connections at all (the
+      # actual signed request happens in `storage-init` below).
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://localhost:9000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Bucket creation needs a real SigV4-signed request (unauthenticated PUT,
+  # which worked against the previous s3mock-based setup, does not against
+  # RustFS) — `aws s3api create-bucket` is the simplest signer available as
+  # a ready-made, freely-pullable image.
+  storage-init:
+    image: amazon/aws-cli:latest
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin123}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url http://storage:9000 s3api create-bucket --bucket ${S3_BUCKET:-brand-profiles} >/tmp/create.log 2>&1 || cat /tmp/create.log;
+      aws --endpoint-url http://storage:9000 s3api head-bucket --bucket ${S3_BUCKET:-brand-profiles} && echo 'bucket ready'
+      "
+
+volumes:
+  storage-data:
