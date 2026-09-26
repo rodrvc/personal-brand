@@ -59,6 +59,44 @@ escribir, descargar o renderizar nada**:
 no es resolución válida. Preguntar de más es gratis; renderizar con la marca
 equivocada, en silencio, y que se publique, no lo es.
 
+## Paso 1.5 — Sincronizar con el bucket, si aplica
+
+Cuando el editor corre contra un bucket (`STORAGE_BACKEND=s3` en el entorno),
+el perfil vive ahí y no en el filesystem local: hay que traerlo antes de leer
+cualquier archivo suyo. Ejecuta esto siempre, **antes** de leer `profile.md`,
+`brand.json`, las skills del perfil o cualquier otra cosa bajo
+`profiles/<slug>/` — encadenado en el mismo comando de shell que lo usa, las
+variables no sobreviven entre llamadas de shell separadas:
+
+```bash
+npx tsx editor/server/scripts/profile-sync.ts pull --profile <slug> \
+  && eval "$(npx tsx editor/server/scripts/profile-sync.ts env)"
+```
+
+Con backend `fs` (el default, sin configurar nada) esto es **no-op**: el CLI
+lo detecta solo, imprime que no hay nada que sincronizar y sale en 0 — se
+invoca siempre, sin preguntar antes qué backend está activo.
+
+Con backend `s3`, `pull` trae al mirror local los archivos "eager" del
+perfil, y el `eval` apunta `BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` a ese
+mirror — desde ahí, cada ruta `profiles/<slug>/...` de esta skill (y de
+`system/`) se resuelve contra el mirror, sin que ningún path cambie. Un
+archivo grande ya renderizado (algo bajo `outputs/`/`reels/`) puede no bajar
+en el `pull`: si hace falta uno puntual, usa
+
+```bash
+npx tsx editor/server/scripts/profile-sync.ts fetch --profile <slug> --path <ruta-relativa>
+```
+
+**Repite el `eval` en cada llamada de shell nueva** que necesite
+`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT`: encadénalo con `&&` en el mismo
+comando en vez de asumir que ya quedó exportado desde una llamada anterior.
+
+Al terminar de escribir (drafts, el input del carrusel/reel, o renders), la
+skill que orquesta el flujo hace el `push` correspondiente — ver
+`generar-carrusel-semana` / `generar-reel-semana`. Esta skill solo resuelve y
+trae; no sube nada por sí sola.
+
 ## Paso 2 — Cargar las reglas de esa marca
 
 Lee lo que exista, en este orden. **Las skills del perfil son lo más

@@ -270,8 +270,11 @@ export async function runStatus(
 
 export function runEnv(config: StorageConfig): CliResult {
   if (config.backend !== "s3" || !config.s3) {
+    // A leading "#" keeps `eval "$(profile-sync env)"` a no-op shell comment
+    // instead of a "command not found" on the fs backend — a skill can call
+    // this unconditionally without branching on STORAGE_BACKEND itself.
     return {
-      lines: ['storage backend is "fs" — no mirror env vars to export; BRAND_PROFILES_DIR/BRAND_OUTPUTS_ROOT keep their existing defaults.'],
+      lines: ['# storage backend is "fs" — no mirror env vars to export; BRAND_PROFILES_DIR/BRAND_OUTPUTS_ROOT keep their existing defaults.'],
       exitCode: 0,
     };
   }

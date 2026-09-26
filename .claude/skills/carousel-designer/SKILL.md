@@ -76,6 +76,18 @@ When a design decision changes a brand value, update `brand-spec.md` first
 (it's the source of truth and carries provenance), then mirror it into
 `brand.json`.
 
+Before step 1 reads anything under `profiles/<name>/`, run `usar-perfil`'s
+bucket sync (`.claude/skills/usar-perfil/SKILL.md` → "Sincronizar con el
+bucket, si aplica") — a no-op on the default filesystem backend, required
+when the editor runs against `STORAGE_BACKEND=s3`. After step 6 writes
+`brand-spec.md`/`brand.json`, push them back the same way:
+
+```bash
+npx tsx editor/server/scripts/profile-sync.ts push --profile <name>
+```
+
+On a reported conflict, don't force it — pull again and reconcile by hand.
+
 ## When the brief is vague
 
 "Make it pop", "I don't know what style", "make this more interesting" —

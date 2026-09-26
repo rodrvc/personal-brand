@@ -205,6 +205,86 @@ with `BRAND_OUTPUTS_ROOT` unset — that variable is the editor's own
 s3-mode mirror redirect, and the migration needs to read the real local
 output tree, not a mirror.
 
+### Terminal workflows against the bucket
+
+The editor server is not the only thing that reads and writes a profile: a
+terminal skill or recipe does too (issue #115). `profile-sync` (the same
+mirror engine as `storageSyncMiddleware`, so conditional writes, no-clobber
+and the lazy-media rule all apply identically) lets one run without starting
+the Express process:
+
+```bash
+npx tsx editor/server/scripts/profile-sync.ts pull   --profile <slug>
+npx tsx editor/server/scripts/profile-sync.ts push   --profile <slug>
+npx tsx editor/server/scripts/profile-sync.ts status --profile <slug> [--remote]
+npx tsx editor/server/scripts/profile-sync.ts fetch  --profile <slug> --path <relPath> [--area profile|outputs]
+npx tsx editor/server/scripts/profile-sync.ts env
+```
+
+- **`pull`** (`syncDown`) hydrates the eager parts of a profile into the local
+  mirror and leaves lazy media (`outputs/`, `reels/`, anything under a
+  resolved export's `_outputs/`) alone — same rule as the editor, so a normal
+  pull never downloads hundreds of MB of rendered history.
+- **`push`** (`syncUp`) uploads every changed mirror file with a conditional
+  write (`ifMatch`/`ifNoneMatch`), the same bucket-level guarantee described
+  above. A file the bucket moved past since the last `pull` is left alone,
+  reported as a conflict, and `push` exits non-zero — pull again and
+  reconcile by hand; it never force-overwrites or deletes.
+- **`status`** is a cheap, local-only report by default (unsynced edits,
+  untracked files); `--remote` adds one `head` per manifest entry to also
+  report objects the bucket moved past locally.
+- **`fetch`** downloads one specific lazy file on demand, for a caller that
+  needs it right now rather than waiting for the next `pull`.
+- **`env`** prints `export BRAND_PROFILES_DIR=...` / `export
+  BRAND_OUTPUTS_ROOT=...` for the resolved mirror roots — `eval` it before
+  any command that reads/writes profile paths so those variables point at
+  the mirror instead of the plain filesystem default:
+
+  ```bash
+  eval "$(npx tsx editor/server/scripts/profile-sync.ts env)"
+  ```
+
+  Environment variables do not persist between separate shell invocations —
+  chain the `eval` with `&&` in the same command as whatever needs it,
+  rather than assuming an earlier `eval` is still in effect.
+
+With `STORAGE_BACKEND` unset or `fs`, every subcommand (including `env`,
+whose fs-mode line is a shell comment, so `eval`-ing it is a genuine no-op)
+detects the backend itself, prints that there is nothing to do, and exits 0
+— a skill can call `profile-sync` unconditionally on any clone.
+
+Use a `PROFILE_CACHE_DIR` distinct from a running editor server's: the
+manifest file is a plain synchronous read-then-write with no cross-process
+lock, so two processes patching it around the same time can race and lose an
+entry (the bucket's own conditional writes still protect the actual
+profile/output files either way).
+
+### Starting the editor in bucket mode
+
+```bash
+pnpm run editor:bucket
+```
+
+One command for both `editor/server` and `editor/web` against a bucket,
+reusing `dev:editor`'s process wiring. It fails fast, before spawning
+anything, if the bucket is not configured — listing exactly which of
+`STORAGE_BACKEND=s3`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+is missing or blank (`S3_ENDPOINT` stays optional, needed only for a
+non-AWS endpoint). Set these in the repo-root `.env` or the shell
+environment, same as the `s3` mode described above.
+
+`EDITOR_PORT` (API, already read by `editor/server`) and `EDITOR_WEB_PORT`
+(Vite's dev server) let this run beside a default `pnpm dev:editor` instance
+on different ports — the web proxy follows `EDITOR_PORT` automatically:
+
+```bash
+STORAGE_BACKEND=s3 S3_ENDPOINT=http://localhost:9000 S3_BUCKET=brand-profiles \
+S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... PROFILE_CACHE_DIR=/tmp/some-other-cache \
+EDITOR_PORT=4330 EDITOR_WEB_PORT=5191 pnpm run editor:bucket
+```
+
+`pnpm run dev:editor`'s default behavior and ports are unchanged either way.
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs
