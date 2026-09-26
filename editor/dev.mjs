@@ -30,14 +30,23 @@ function run(name, cwd, args) {
   return child;
 }
 
-const server = run("server", join(editorDir, "server"), ["run", "dev"]);
-const web = run("web", join(editorDir, "web"), ["run", "dev"]);
+// Exported so editor/dev-bucket.mjs (issue #115) can reuse the same process
+// wiring after its own bucket-config check, instead of duplicating it.
+export function startEditor() {
+  const server = run("server", join(editorDir, "server"), ["run", "dev"]);
+  const web = run("web", join(editorDir, "web"), ["run", "dev"]);
 
-function shutdown() {
-  server.kill();
-  web.kill();
-  process.exit(0);
+  function shutdown() {
+    server.kill();
+    web.kill();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+// Only run when invoked directly (not when imported by dev-bucket.mjs).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  startEditor();
+}
