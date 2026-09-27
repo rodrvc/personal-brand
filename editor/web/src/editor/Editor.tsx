@@ -15,10 +15,13 @@ import type { Selection } from "./geometry";
 import { RegenerateUnpinnedDialog } from "./RegenerateUnpinnedDialog";
 import { ExportDialog } from "./ExportDialog";
 import { t } from "../i18n";
+import { BrushControls } from "./BrushControls";
+import { useBrushMask } from "./brush/useBrushMask";
 import "./Editor.css";
 
 const ACTIVE_SLIDE_STORAGE_PREFIX = "editor-active-slide:";
 
+export type Tool = "select" | "brush";
 export type PanelTab = "sel" | "bucket" | "lam" | "marca" | "templates";
 
 interface EditorProps {
@@ -45,7 +48,8 @@ export function Editor({
   onToggleTheme,
   onTemplateChange,
 }: EditorProps) {
-  const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion } = editorState;
+  const { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion, setUndoSuppressed } =
+    editorState;
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.min(initialActiveSlide, Math.max(0, doc.slides.length - 1)),
   );
@@ -56,6 +60,8 @@ export function Editor({
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tool, setTool] = useState<Tool>("select");
+  const brush = useBrushMask();
 
   useEffect(() => {
     try {
@@ -74,6 +80,23 @@ export function Editor({
     const timer = setTimeout(() => setNotice(null), 6000);
     return () => clearTimeout(timer);
   }, [notice]);
+  // While brush mode is active: the document's own Ctrl/Cmd+Z stays off
+  // (brush.undoStroke, wired in BrushControls, owns that keystroke instead
+  // — see useDocumentEditor.ts's `setUndoSuppressed`), and Esc exits back to
+  // the select tool without touching the document.
+  useEffect(() => {
+    setUndoSuppressed(tool === "brush");
+    if (tool !== "brush") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setTool("select");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [tool, setUndoSuppressed]);
+
+  useEffect(() => {
+    if (tool !== "brush") brush.reset();
+  }, [tool, brush.reset]);
 
   const activeSlide = doc.slides[activeIndex];
 
@@ -190,6 +213,8 @@ export function Editor({
         onDeleteSelection={handleDeleteObject}
         onOpenAssets={() => setPanelTab("bucket")}
         onAddText={handleAddText}
+        tool={tool}
+        onToolChange={setTool}
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={undo}
@@ -208,12 +233,16 @@ export function Editor({
           onLogChange={handleChatLog}
         />
         <div className="editor-center">
-          <PromptHeader
-            doc={doc}
-            stats={stats}
-            onRegenerateUnpinned={() => setShowRegenDialog(true)}
-            regenerateUnpinnedError={regenUnpinnedError}
-          />
+          {tool === "brush" ? (
+            <BrushControls brush={brush} onConfirm={brush.confirm} />
+          ) : (
+            <PromptHeader
+              doc={doc}
+              stats={stats}
+              onRegenerateUnpinned={() => setShowRegenDialog(true)}
+              regenerateUnpinnedError={regenUnpinnedError}
+            />
+          )}
           <Stage
             slug={slug}
             doc={doc}
@@ -225,6 +254,8 @@ export function Editor({
             selection={selection}
             onSelectionChange={setSelection}
             onDocUpdate={update}
+            tool={tool}
+            brush={brush}
             fallbackColorKey={Object.keys(brand.colors)[0] ?? ""}
             onAddSlide={handleAddSlide}
             onDeleteSlide={handleDeleteSlide}

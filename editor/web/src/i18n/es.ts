@@ -92,11 +92,20 @@ export const es = {
   "topbar.tool.deleteObject": "Eliminar el objeto seleccionado (Supr)",
   "topbar.tool.addText": "Añadir texto",
   "topbar.tool.addAsset": "Añadir asset",
+  "topbar.tool.brush": "Pincel",
   "topbar.tool.undo": "Deshacer",
   "topbar.tool.redo": "Rehacer",
   "topbar.tool.toggleTheme": "Tema claro / oscuro",
   "topbar.tool.toggleThemeAriaLabel": "Cambiar tema",
   "topbar.export": "Exportar {count} PNG",
+
+  // Brush controls (editor/BrushControls.tsx)
+  "brush.label": "Pincel",
+  "brush.size": "Tamaño",
+  "brush.eraser": "Borrador",
+  "brush.undoStroke": "Deshacer trazo",
+  "brush.clear": "Limpiar",
+  "brush.confirm": "Confirmar",
 
   // Status bar (editor/StatusBar.tsx)
   "statusBar.slideOfTotal": "Lámina {index} de {total}",

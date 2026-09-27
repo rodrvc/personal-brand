@@ -24,6 +24,13 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const docRef = useRef(doc);
   docRef.current = doc;
+  // Brush mode (issue #85) owns its own Ctrl/Cmd+Z (undo the last stroke,
+  // not the document) while active — set by Editor.tsx, read here so the
+  // document undo stack doesn't also react to the same keystroke.
+  const undoSuppressed = useRef(false);
+  const setUndoSuppressed = useCallback((suppressed: boolean) => {
+    undoSuppressed.current = suppressed;
+  }, []);
 
   /**
    * Bumped only after a document version is confirmed by the server (a
@@ -247,6 +254,7 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
     function onKeyDown(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
+      if (undoSuppressed.current) return;
       const key = e.key.toLowerCase();
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();
@@ -333,5 +341,5 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
     };
   }, [persist, slug]);
 
-  return { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion };
+  return { doc, update, applyRemote, undo, redo, canUndo, canRedo, dirty, saveError, renderVersion, setUndoSuppressed };
 }
