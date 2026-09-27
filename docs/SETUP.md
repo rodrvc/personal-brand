@@ -253,11 +253,14 @@ whose fs-mode line is a shell comment, so `eval`-ing it is a genuine no-op)
 detects the backend itself, prints that there is nothing to do, and exits 0
 — a skill can call `profile-sync` unconditionally on any clone.
 
-Use a `PROFILE_CACHE_DIR` distinct from a running editor server's: the
-manifest file is a plain synchronous read-then-write with no cross-process
-lock, so two processes patching it around the same time can race and lose an
-entry (the bucket's own conditional writes still protect the actual
-profile/output files either way).
+`profile-sync` defaults `PROFILE_CACHE_DIR` to its own OS-temp path
+(`personal-brand-profile-cache-terminal`), distinct from the editor server's
+default (`personal-brand-profile-cache`) — the two are never the same
+directory unless you set `PROFILE_CACHE_DIR` to the same value yourself. Keep
+them apart: the manifest file is a plain synchronous read-then-write with no
+cross-process lock, so two processes patching it around the same time can
+race and lose an entry (the bucket's own conditional writes still protect the
+actual profile/output files either way).
 
 ### Starting the editor in bucket mode
 
