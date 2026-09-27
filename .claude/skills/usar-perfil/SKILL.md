@@ -61,8 +61,9 @@ equivocada, en silencio, y que se publique, no lo es.
 
 ## Paso 1.5 — Sincronizar con el bucket, si aplica
 
-Cuando el editor corre contra un bucket (`STORAGE_BACKEND=s3` en el entorno),
-el perfil vive ahí y no en el filesystem local: hay que traerlo antes de leer
+Cuando el editor corre contra un bucket (`STORAGE_BACKEND=s3`, sea en el
+`.env` de la raíz del repo o exportado en el shell — el shell gana si está en
+ambos lados), el perfil vive ahí y no en el filesystem local: hay que traerlo antes de leer
 cualquier archivo suyo. Ejecuta esto siempre, **antes** de leer `profile.md`,
 `brand.json`, las skills del perfil o cualquier otra cosa bajo
 `profiles/<slug>/` — encadenado en el mismo comando de shell que lo usa, las

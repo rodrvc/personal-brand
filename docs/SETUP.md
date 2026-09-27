@@ -274,7 +274,11 @@ anything, if the bucket is not configured — listing exactly which of
 `STORAGE_BACKEND=s3`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
 is missing or blank (`S3_ENDPOINT` stays optional, needed only for a
 non-AWS endpoint). Set these in the repo-root `.env` or the shell
-environment, same as the `s3` mode described above.
+environment, same as the `s3` mode described above — the shell wins when a
+variable is set both places, so a one-off override never needs editing
+`.env`. This launcher and `profile-sync` (below) both read the repo-root
+`.env` themselves before validating, so a bucket configured only there is
+picked up the same way the editor server already does.
 
 `EDITOR_PORT` (API, already read by `editor/server`) and `EDITOR_WEB_PORT`
 (Vite's dev server) let this run beside a default `pnpm dev:editor` instance
@@ -287,6 +291,11 @@ EDITOR_PORT=4330 EDITOR_WEB_PORT=5191 pnpm run editor:bucket
 ```
 
 `pnpm run dev:editor`'s default behavior and ports are unchanged either way.
+
+Open the web UI at `http://localhost:<EDITOR_WEB_PORT>`, not
+`http://127.0.0.1:<EDITOR_WEB_PORT>`: Vite's dev server binds the `localhost`
+hostname, which on some setups resolves to the IPv6 loopback address only,
+so the IPv4 literal can fail to connect even though the server is up.
 
 ## Specs (OpenSpec)
 

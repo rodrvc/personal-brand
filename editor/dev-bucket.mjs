@@ -14,9 +14,37 @@
 //   STORAGE_BACKEND=s3 S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
 //   [S3_ENDPOINT=...] [EDITOR_PORT=4330] [EDITOR_WEB_PORT=5191] pnpm run editor:bucket
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { startEditor } from "./dev.mjs";
 
 const REQUIRED_VARS = ["S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
+
+/**
+ * Loads `envPath` into `process.env` if it exists, shell env wins (same
+ * semantics as `editor/server/src/env.ts`'s `loadRepoRootEnv`, used by the
+ * Express process and the `profile-sync` CLI). This file is `.mjs`, not
+ * `.ts`, so it can't import that module directly without `tsx`;
+ * `process.loadEnvFile` (stable since Node 20.6) already does not override a
+ * variable already set in the environment, so it needs no extra parsing.
+ * Exported so a test can point it at a temp file instead of the real
+ * repo-root `.env`.
+ */
+export function loadEnvFileIfPresent(envPath) {
+  if (existsSync(envPath)) process.loadEnvFile(envPath);
+}
+
+/**
+ * Loads the repo-root `.env` before validation. Without this, bucket config
+ * that lives only in `.env` (not the shell) was invisible here and this
+ * launcher's fail-fast check rejected startup even though the Express
+ * process would have read it fine.
+ */
+function loadRepoRootEnv() {
+  loadEnvFileIfPresent(join(dirname(fileURLToPath(import.meta.url)), "..", ".env"));
+}
 
 /** Pure so it can be unit-tested without spawning anything. Returns the list of missing/invalid settings, empty when bucket mode is ready to start. */
 export function validateBucketEnv(env) {
@@ -29,6 +57,7 @@ export function validateBucketEnv(env) {
 }
 
 function main() {
+  loadRepoRootEnv();
   const missing = validateBucketEnv(process.env);
   if (missing.length > 0) {
     console.error(

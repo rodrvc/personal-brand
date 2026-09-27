@@ -60,6 +60,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
 import { createObjectStore, loadStorageConfig, type S3StorageConfig, type StorageConfig } from "../src/storage/config.js";
+import { loadRepoRootEnv } from "../src/env.js";
 import { ObjectNotFoundError, type ObjectStore } from "../src/storage/object-store.js";
 import { fetchObjectOnDemand, objectKeyFor, resolveMirrorRoots, syncDown, syncUp, type Manifest } from "../src/storage/mirror.js";
 
@@ -353,6 +354,13 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv): Promise<Cl
 }
 
 async function main(): Promise<void> {
+  // Loads the repo-root `.env` (same file `editor/server/src/index.ts` reads
+  // for the Express process) into `process.env`, shell env wins — only in
+  // this real-invocation entry path, so `runCli`/`parseArgs`/etc. stay
+  // hermetic for tests: without this, a bucket config that lives in `.env`
+  // rather than the shell is invisible here and the CLI silently reports
+  // itself as fs-mode no-op instead of syncing.
+  loadRepoRootEnv();
   const result = await runCli(process.argv.slice(2), process.env);
   for (const line of result.lines) console.log(line);
   process.exitCode = result.exitCode;
