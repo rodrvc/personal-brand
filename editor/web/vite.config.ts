@@ -8,7 +8,9 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    // EDITOR_WEB_PORT lets a second instance (e.g. bucket mode, issue #115)
+    // run beside the default one without a port clash.
+    port: Number(process.env.EDITOR_WEB_PORT) || 5173,
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${process.env.EDITOR_PORT ?? 4310}`,

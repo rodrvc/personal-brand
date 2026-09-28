@@ -41,24 +41,33 @@
  * When `STORAGE_BACKEND` is not `s3`, every subcommand is a no-op that exits
  * 0 and says so, so a skill can call this unconditionally on any clone.
  *
- * Cache dir: `PROFILE_CACHE_DIR` if set, else `loadStorageConfig`'s own
- * default (a fixed OS-temp path, the same one the editor server falls back
- * to). Sharing that default with a live server is NOT recommended:
+ * Cache dir: `PROFILE_CACHE_DIR` if set, else a CLI-specific OS-temp path
+ * (`personal-brand-profile-cache-terminal`, distinct from the editor
+ * server's own `personal-brand-profile-cache` default in
+ * `storage/config.ts`). The two defaults are kept apart on purpose:
  * `syncDown`/`syncUp` only dedupe concurrent callers in-process, and the
  * manifest file is a plain synchronous read-then-write with no cross-process
  * lock, so two processes patching it around the same time can race and lose
  * an entry (the object store's own conditional writes still protect the
- * actual profile/output files). Use a `PROFILE_CACHE_DIR` distinct from the
- * server's when running this alongside a live editor.
+ * actual profile/output files). Set `PROFILE_CACHE_DIR` explicitly to point
+ * this at the same mirror a live editor is using, if that's what you want.
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { createObjectStore, loadStorageConfig, type S3StorageConfig, type StorageConfig } from "../src/storage/config.js";
+import { loadRepoRootEnv } from "../src/env.js";
 import { ObjectNotFoundError, type ObjectStore } from "../src/storage/object-store.js";
 import { fetchObjectOnDemand, objectKeyFor, resolveMirrorRoots, syncDown, syncUp, type Manifest } from "../src/storage/mirror.js";
+
+/** The CLI's own cache dir default, kept separate from the editor server's default in `storage/config.ts` — see the header comment above. */
+export function resolveCliCacheDir(env: NodeJS.ProcessEnv): string {
+  return env.PROFILE_CACHE_DIR || join(tmpdir(), "personal-brand-profile-cache-terminal");
+}
 
 export interface CliResult {
   lines: string[];
@@ -91,20 +100,36 @@ export type Command = PullCommand | PushCommand | StatusCommand | FetchCommand |
 
 const USAGE = "Usage: profile-sync <pull|push|status|fetch|env> --profile <slug> [--remote] [--path <relPath>] [--area profile|outputs]";
 
+const KNOWN_FLAGS = new Set(["profile", "remote", "path", "area"]);
+
 export function parseArgs(argv: string[]): Command {
+  // `pnpm run sync:profile -- pull --profile x` forwards a leading bare
+  // `--` (pnpm's own passthrough separator, not part of the command) —
+  // strip any number of them so the CLI still parses the real command.
+  while (argv[0] === "--") argv = argv.slice(1);
+
   const [kind, ...rest] = argv;
   if (kind === "env") return { kind: "env" };
 
   const flags = new Map<string, string | true>();
   for (let i = 0; i < rest.length; i++) {
     const token = rest[i];
-    if (token === "--remote") {
+    if (!token.startsWith("--")) {
+      throw new Error(`Unexpected argument "${token}". ${USAGE}`);
+    }
+    const name = token.slice(2);
+    if (name === "remote") {
       flags.set("remote", true);
       continue;
     }
-    if (token.startsWith("--")) {
-      flags.set(token.slice(2), rest[++i]);
+    if (!KNOWN_FLAGS.has(name)) {
+      throw new Error(`Unknown flag "--${name}". ${USAGE}`);
     }
+    const value = rest[++i];
+    if (value === undefined) {
+      throw new Error(`Flag "--${name}" is missing a value. ${USAGE}`);
+    }
+    flags.set(name, value);
   }
 
   const profile = flags.get("profile");
@@ -187,12 +212,15 @@ function listLocalFiles(root: string): string[] {
   return results;
 }
 
-function loadManifestSnapshot(manifestPath: string): Manifest {
-  if (!existsSync(manifestPath)) return {};
+function loadManifestSnapshot(manifestPath: string): { manifest: Manifest; corrupt: boolean } {
+  if (!existsSync(manifestPath)) return { manifest: {}, corrupt: false };
   try {
-    return JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+    return { manifest: JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest, corrupt: false };
   } catch {
-    return {};
+    // Conservative: treat a corrupt manifest as empty (every local file
+    // reports as untracked) rather than throwing, but `runStatus` surfaces
+    // this loudly instead of pretending nothing is wrong.
+    return { manifest: {}, corrupt: true };
   }
 }
 
@@ -203,6 +231,8 @@ export interface StatusReport {
   untracked: string[];
   /** Object keys whose bucket etag no longer matches the manifest's last-seen etag — only populated when `checkRemote` is true. */
   remoteNewer: string[];
+  /** True when the manifest file exists but failed to parse as JSON — `unsynced`/`untracked` above were computed as if it were empty. */
+  manifestCorrupt: boolean;
 }
 
 export async function computeStatus(
@@ -213,7 +243,7 @@ export async function computeStatus(
   checkRemote: boolean,
 ): Promise<StatusReport> {
   const roots = resolveMirrorRoots(s3Config, cacheDir, profile);
-  const manifest = loadManifestSnapshot(roots.manifestPath);
+  const { manifest, corrupt: manifestCorrupt } = loadManifestSnapshot(roots.manifestPath);
 
   const unsynced: string[] = [];
   const untracked: string[] = [];
@@ -250,7 +280,7 @@ export async function computeStatus(
     }
   }
 
-  return { unsynced, untracked, remoteNewer };
+  return { unsynced, untracked, remoteNewer, manifestCorrupt };
 }
 
 export async function runStatus(
@@ -261,17 +291,28 @@ export async function runStatus(
   checkRemote: boolean,
 ): Promise<CliResult> {
   const report = await computeStatus(store, s3Config, cacheDir, profile, checkRemote);
+  if (report.manifestCorrupt) {
+    console.error(`warning: manifest for "${profile}" is corrupt (invalid JSON) — treating it as empty; run "pull" to rebuild it.`);
+  }
   const lines = [`status "${profile}": ${report.unsynced.length} unsynced edit(s), ${report.untracked.length} untracked file(s)${checkRemote ? `, ${report.remoteNewer.length} remote-newer` : ""}.`];
   for (const item of report.unsynced) lines.push(`  unsynced   ${item}`);
   for (const item of report.untracked) lines.push(`  untracked  ${item}`);
   for (const item of report.remoteNewer) lines.push(`  remote>local ${item}`);
-  return { lines, exitCode: 0 };
+  return { lines, exitCode: report.manifestCorrupt ? 1 : 0 };
+}
+
+/** Single-quotes `value` for POSIX shell, escaping embedded single quotes (`'` -> `'\''`), so `eval "$(... env)"` stays safe with spaces or shell metacharacters in a path. */
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function runEnv(config: StorageConfig): CliResult {
   if (config.backend !== "s3" || !config.s3) {
+    // A leading "#" keeps `eval "$(profile-sync env)"` a no-op shell comment
+    // instead of a "command not found" on the fs backend — a skill can call
+    // this unconditionally without branching on STORAGE_BACKEND itself.
     return {
-      lines: ['storage backend is "fs" — no mirror env vars to export; BRAND_PROFILES_DIR/BRAND_OUTPUTS_ROOT keep their existing defaults.'],
+      lines: ['# storage backend is "fs" — no mirror env vars to export; BRAND_PROFILES_DIR/BRAND_OUTPUTS_ROOT keep their existing defaults.'],
       exitCode: 0,
     };
   }
@@ -280,7 +321,10 @@ export function runEnv(config: StorageConfig): CliResult {
   // `initStorageRuntime` does for the editor process.
   const roots = resolveMirrorRoots(config.s3, config.cacheDir, "_");
   return {
-    lines: [`export BRAND_PROFILES_DIR=${roots.profileMirrorRoot}`, `export BRAND_OUTPUTS_ROOT=${roots.outputsMirrorRoot}`],
+    lines: [
+      `export BRAND_PROFILES_DIR=${shQuote(roots.profileMirrorRoot)}`,
+      `export BRAND_OUTPUTS_ROOT=${shQuote(roots.outputsMirrorRoot)}`,
+    ],
     exitCode: 0,
   };
 }
@@ -288,7 +332,9 @@ export function runEnv(config: StorageConfig): CliResult {
 /** Full dispatch used by both `main()` and the fs-backend/`env` tests — s3-backend command tests call `runPull`/`runPush`/`runStatus`/`runFetch` directly against a `FakeObjectStore` instead, the same way `migrate-profile-to-bucket.test.ts` exercises `migrateProfile` without going through this function. */
 export async function runCli(argv: string[], env: NodeJS.ProcessEnv): Promise<CliResult> {
   const command = parseArgs(argv);
-  const config = loadStorageConfig(env);
+  // Override `loadStorageConfig`'s own (server) cache dir default with this
+  // CLI's own default — see `resolveCliCacheDir` and the header comment.
+  const config: StorageConfig = { ...loadStorageConfig(env), cacheDir: resolveCliCacheDir(env) };
 
   if (command.kind === "env") return runEnv(config);
   if (config.backend !== "s3" || !config.s3) return fsNoop(command.kind);
@@ -308,15 +354,30 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv): Promise<Cl
 }
 
 async function main(): Promise<void> {
+  // Loads the repo-root `.env` (same file `editor/server/src/index.ts` reads
+  // for the Express process) into `process.env`, shell env wins — only in
+  // this real-invocation entry path, so `runCli`/`parseArgs`/etc. stay
+  // hermetic for tests: without this, a bucket config that lives in `.env`
+  // rather than the shell is invisible here and the CLI silently reports
+  // itself as fs-mode no-op instead of syncing.
+  loadRepoRootEnv();
   const result = await runCli(process.argv.slice(2), process.env);
   for (const line of result.lines) console.log(line);
   process.exitCode = result.exitCode;
 }
 
-// Only run when invoked directly (not when imported by a test).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Only run when invoked directly (not when imported by a test). Compares
+// real filesystem paths (symlinks resolved) rather than building a "file://" URL by hand, so
+// a path with spaces or non-ASCII characters can't silently mismatch and
+// turn this into a no-op that exits 0 without doing anything.
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
+    if (error instanceof Error) {
+      console.error(error.stack ?? error.message);
+      if (error.cause !== undefined) console.error("Caused by:", error.cause);
+    } else {
+      console.error(error);
+    }
     process.exitCode = 1;
   });
 }

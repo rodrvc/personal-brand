@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { FakeObjectStore } from "../src/storage/fake-object-store.js";
 import type { S3StorageConfig } from "../src/storage/config.js";
 import { resolveMirrorRoots } from "../src/storage/mirror.js";
-import { computeStatus, parseArgs, runCli, runEnv, runFetch, runPull, runPush, runStatus } from "./profile-sync.js";
+import { computeStatus, parseArgs, resolveCliCacheDir, runCli, runEnv, runFetch, runPull, runPush, runStatus } from "./profile-sync.js";
 
 function s3Config(): S3StorageConfig {
   return {
@@ -56,6 +57,21 @@ const tests: Array<[string, () => Promise<void> | void]> = [
     },
   ],
   [
+    "parseArgs rejects an unknown flag and a flag missing its value, instead of silently swallowing it",
+    () => {
+      assert.throws(() => parseArgs(["pull", "--profile", "acme", "--bogus"]), /Unknown flag/);
+      assert.throws(() => parseArgs(["pull", "--profile"]), /missing a value/);
+      assert.throws(() => parseArgs(["pull", "acme"]), /Unexpected argument/);
+    },
+  ],
+  [
+    "parseArgs ignores a leading bare `--` (or several), the passthrough separator pnpm forwards through nested `run` scripts",
+    () => {
+      assert.deepEqual(parseArgs(["--", "pull", "--profile", "acme"]), { kind: "pull", profile: "acme" });
+      assert.deepEqual(parseArgs(["--", "--", "status", "--profile", "acme"]), { kind: "status", profile: "acme", remote: false });
+    },
+  ],
+  [
     "fs backend: every command is a no-op that exits 0",
     async () => {
       const env = { STORAGE_BACKEND: "fs" };
@@ -77,8 +93,22 @@ const tests: Array<[string, () => Promise<void> | void]> = [
       const config = s3Config();
       const s3Result = runEnv({ backend: "s3", cacheDir, s3: config });
       const roots = resolveMirrorRoots(config, cacheDir, "any-slug");
-      assert.equal(s3Result.lines[0], `export BRAND_PROFILES_DIR=${roots.profileMirrorRoot}`);
-      assert.equal(s3Result.lines[1], `export BRAND_OUTPUTS_ROOT=${roots.outputsMirrorRoot}`);
+      assert.equal(s3Result.lines[0], `export BRAND_PROFILES_DIR='${roots.profileMirrorRoot}'`);
+      assert.equal(s3Result.lines[1], `export BRAND_OUTPUTS_ROOT='${roots.outputsMirrorRoot}'`);
+    },
+  ],
+  [
+    "env: a cache dir containing a space and a single quote is quoted safely for eval",
+    () => {
+      const cacheDir = "/tmp/weird cache 'dir'";
+      const config = s3Config();
+      const s3Result = runEnv({ backend: "s3", cacheDir, s3: config });
+      const roots = resolveMirrorRoots(config, cacheDir, "any-slug");
+      assert.match(s3Result.lines[0], /^export BRAND_PROFILES_DIR='.*'$/);
+      // The quoted line must actually `eval` safely and yield the exact path,
+      // proving the space and embedded quote survived intact.
+      const output = execFileSync("sh", ["-c", `${s3Result.lines[0]} && printf '%s' "$BRAND_PROFILES_DIR"`]).toString();
+      assert.equal(output, roots.profileMirrorRoot);
     },
   ],
   [
@@ -164,6 +194,34 @@ const tests: Array<[string, () => Promise<void> | void]> = [
         assert.equal(result.exitCode, 0);
         assert.match(result.lines.join("\n"), /1 unsynced edit\(s\), 1 untracked file\(s\)\./);
       }),
+  ],
+  [
+    "status reports a corrupt manifest clearly instead of silently treating it as empty",
+    async () =>
+      withCache(async (cacheDir) => {
+        const config = s3Config();
+        const store = new FakeObjectStore();
+        await store.put("profiles/acme/brand.json", Buffer.from('{"name":"Acme"}'));
+        await runPull(store, config, cacheDir, "acme");
+
+        const roots = resolveMirrorRoots(config, cacheDir, "acme");
+        writeFileSync(roots.manifestPath, "{not valid json");
+
+        const report = await computeStatus(store, config, cacheDir, "acme", false);
+        assert.equal(report.manifestCorrupt, true);
+        assert.deepEqual(report.untracked, ["profile:brand.json"]);
+
+        const result = await runStatus(store, config, cacheDir, "acme", false);
+        assert.equal(result.exitCode, 1);
+      }),
+  ],
+  [
+    "resolveCliCacheDir defaults to a CLI-specific dir distinct from the server default, but honors PROFILE_CACHE_DIR when set",
+    () => {
+      const cliDefault = resolveCliCacheDir({});
+      assert.match(cliDefault, /personal-brand-profile-cache-terminal$/);
+      assert.equal(resolveCliCacheDir({ PROFILE_CACHE_DIR: "/tmp/explicit-dir" }), "/tmp/explicit-dir");
+    },
   ],
   [
     "pull never clobbers an unsynced local edit, even when the bucket also changed",
