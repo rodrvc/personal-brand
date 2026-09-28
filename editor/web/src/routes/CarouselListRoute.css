@@ -1,23 +1,17 @@
 .carousel-list-page {
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
   min-height: 100vh;
 }
 
+/*
+ * ACU-230's Assets/Templates side panel used to live here, next to the
+ * table. Removed (the owner never used it and the editor already has its
+ * own Bucket/Templates tabs — PropertiesPanel.tsx) — the list now uses the
+ * freed width itself instead of sharing it with a fixed 320px column.
+ */
 .carousel-list {
-  flex: 1;
-  max-width: 900px;
+  max-width: 1040px;
   margin: 0 auto;
   padding: 32px 24px;
-}
-
-.carousel-list-side-panel {
-  width: 320px;
-  flex-shrink: 0;
-  height: 100vh;
-  position: sticky;
-  top: 0;
 }
 
 .carousel-list-header {
@@ -110,4 +104,59 @@
 
 .carousel-open-link:hover {
   text-decoration: underline;
+}
+
+/*
+ * Loading state: skeleton rows shaped like the loaded table (same five
+ * columns), so nothing jumps once real rows arrive — replaces a plain
+ * "Cargando…" text that made a brand with many carousels look frozen.
+ * Same shimmer language as the profile picker's brand cards
+ * (ProfilePickerRoute.css's `brand-card-shimmer`), duplicated here rather
+ * than shared since there's no common chrome-utilities stylesheet today.
+ */
+.carousel-row-skeleton td {
+  padding: 12px 14px;
+}
+
+.carousel-skeleton-bar {
+  height: 11px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-g100);
+  width: 100%;
+}
+
+.carousel-skeleton-pill {
+  width: 64px;
+  border-radius: var(--ui-radius-pill);
+}
+
+.carousel-skeleton-shimmer {
+  background: linear-gradient(100deg, var(--ui-g100) 30%, var(--ui-g200) 50%, var(--ui-g100) 70%);
+  background-size: 200% 100%;
+  animation: carousel-skeleton-shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes carousel-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* "Creando…" spinner inside the primary button — a small ring, spins via border-color contrast so it works in both themes without a separate dark-mode override. */
+.carousel-create-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgb(255 255 255 / 0.35);
+  border-top-color: currentColor;
+  animation: carousel-create-spin 0.7s linear infinite;
+}
+
+@keyframes carousel-create-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

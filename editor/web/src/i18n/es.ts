@@ -37,7 +37,6 @@ export const es = {
   "carouselList.back": "← Perfiles",
   "carouselList.title": "{slug} · Carruseles",
   "carouselList.new": "Nuevo carrusel",
-  "carouselList.loading": "Cargando…",
   "carouselList.empty": "Este perfil aún no tiene carruseles.",
   "carouselList.columnTitle": "Título",
   "carouselList.columnStatus": "Estado",
@@ -47,23 +46,9 @@ export const es = {
   "carouselList.status.draft": "Borrador",
   "carouselList.status.exported": "Exportado",
   "carouselList.status.published": "Publicado",
-  "carouselList.sidePanel.assetsTab": "Assets",
-  "carouselList.sidePanel.templatesTab": "Templates",
-
-  // New carousel dialog (routes/NewCarouselDialog.tsx)
-  "newCarousel.dialogTitle": "Nuevo carrusel",
-  "newCarousel.cancel": "Cancelar",
-  "newCarousel.creating": "Creando…",
-  "newCarousel.create": "Crear",
-  "newCarousel.titleLabel": "Título",
-  "newCarousel.titlePlaceholder": "ej: Cómo armar tu primer carrusel",
-  "newCarousel.titleRequired": "El título es obligatorio.",
-  "newCarousel.brandLabel": "Marca",
-  "newCarousel.templateLabel": "Template (opcional)",
-  "newCarousel.templateLoading": "Cargando templates…",
-  "newCarousel.templateNone": "Sin template",
-  "newCarousel.hint":
-    "El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.",
+  "carouselList.creating": "Creando…",
+  /** Title a carousel gets when "Nuevo carrusel" creates it directly, with no dialog; the owner renames it from the editor. */
+  "carouselList.untitled": "Carrusel sin título",
 
   // Editor route (routes/EditorRoute.tsx)
   "editorRoute.loading": "Cargando carrusel…",

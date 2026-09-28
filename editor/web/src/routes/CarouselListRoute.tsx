@@ -1,18 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { listCarousels } from "../api/client";
+import { createCarousel, listCarousels } from "../api/client";
 import type { CarouselSummary } from "../api/types";
 import { Button } from "../components/Button";
-import { AssetsPane } from "../editor/panels/AssetsPane";
-import { TemplatesPane } from "../editor/panels/TemplatesPane";
-import { NewCarouselDialog } from "./NewCarouselDialog";
 import { t } from "../i18n";
 import type { LocaleKey } from "../i18n";
 import "./CarouselListRoute.css";
-import "../editor/panels/PropertiesPanel.css";
-
-type SidePanelTab = "assets" | "templates";
 
 /** Carousel status → its LocaleKey. `t()` is called lazily, in `statusLabel()`, never at module load. */
 const STATUS_LABEL_KEY: Record<CarouselSummary["status"], LocaleKey> = {
@@ -25,13 +19,51 @@ function statusLabel(status: CarouselSummary["status"]): string {
   return t(STATUS_LABEL_KEY[status]);
 }
 
+/** Skeleton rows while `carousels` is still `null` — mirrors the loaded table's five columns so nothing jumps once real rows arrive. `prefers-reduced-motion` silences the shimmer via `tokens.css`'s global rule. */
+function SkeletonRow({ index }: { index: number }) {
+  return (
+    <tr className="carousel-row-skeleton" aria-hidden="true">
+      <td>
+        <div
+          className="carousel-skeleton-bar carousel-skeleton-shimmer"
+          style={{ width: "70%", animationDelay: `${index * 60}ms` }}
+        />
+      </td>
+      <td>
+        <div
+          className="carousel-skeleton-bar carousel-skeleton-shimmer carousel-skeleton-pill"
+          style={{ animationDelay: `${index * 60}ms` }}
+        />
+      </td>
+      <td>
+        <div
+          className="carousel-skeleton-bar carousel-skeleton-shimmer"
+          style={{ width: "55%", animationDelay: `${index * 60}ms` }}
+        />
+      </td>
+      <td>
+        <div
+          className="carousel-skeleton-bar carousel-skeleton-shimmer"
+          style={{ width: "30%", animationDelay: `${index * 60}ms` }}
+        />
+      </td>
+      <td>
+        <div
+          className="carousel-skeleton-bar carousel-skeleton-shimmer"
+          style={{ width: "40%", animationDelay: `${index * 60}ms` }}
+        />
+      </td>
+    </tr>
+  );
+}
+
 export function CarouselListRoute() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const [carousels, setCarousels] = useState<CarouselSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showNew, setShowNew] = useState(false);
-  const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("assets");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -50,6 +82,28 @@ export function CarouselListRoute() {
 
   if (!slug) return null;
 
+  // Creates the carousel directly with its defaults (a placeholder title,
+  // since the server requires one, and the engine default template) and
+  // navigates straight into the editor — the "Nuevo carrusel" modal this
+  // replaced (title/brand/template fields) asked for nothing the owner
+  // actually wanted to fill in up front: brand was always fixed to this
+  // profile, and the template can be picked, changed or dropped from the
+  // editor's own Templates tab.
+  async function handleCreate() {
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const { document } = await createCarousel(slug!, { title: t("carouselList.untitled") });
+      // Router state carries the just-created (empty) document straight
+      // to EditorRoute so it can skip its own fetch-and-flash — see
+      // EditorRoute's own comment.
+      navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document } });
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="carousel-list-page">
       <div className="carousel-list">
@@ -60,13 +114,14 @@ export function CarouselListRoute() {
             </Link>
             <h1 className="carousel-list-title">{t("carouselList.title", { slug })}</h1>
           </div>
-          <Button variant="primary" onClick={() => setShowNew(true)}>
-            {t("carouselList.new")}
+          <Button variant="primary" onClick={handleCreate} disabled={creating}>
+            {creating && <span className="carousel-create-spinner" aria-hidden="true" />}
+            {creating ? t("carouselList.creating") : t("carouselList.new")}
           </Button>
         </header>
 
         {error && <p className="carousel-list-error">{error}</p>}
-        {!carousels && !error && <p className="carousel-list-hint">{t("carouselList.loading")}</p>}
+        {createError && <p className="carousel-list-error">{createError}</p>}
         {carousels && carousels.length === 0 && (
           <p className="carousel-list-hint">{t("carouselList.empty")}</p>
         )}
@@ -82,6 +137,7 @@ export function CarouselListRoute() {
             </tr>
           </thead>
           <tbody>
+            {!carousels && !error && Array.from({ length: 6 }, (_, i) => <SkeletonRow key={i} index={i} />)}
             {carousels?.map((c) => (
               <tr key={c.id}>
                 <td>{c.title || c.id}</td>
@@ -99,51 +155,7 @@ export function CarouselListRoute() {
             ))}
           </tbody>
         </table>
-
-        {showNew && (
-          <NewCarouselDialog
-            slug={slug}
-            onClose={() => setShowNew(false)}
-            onCreated={({ document }) =>
-              // Router state carries the just-created (empty) document
-              // straight to EditorRoute so it can skip its own
-              // fetch-and-flash — see EditorRoute's own comment.
-              navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document } })
-            }
-          />
-        )}
       </div>
-
-      {/*
-       * ACU-230: assets and templates used to be reachable only from the
-       * properties panel of an already-open document — a brand with no
-       * carousel yet had no way to see either. This panel exists
-       * independently of any open carousel, right on the listing.
-       */}
-      <aside className="props-panel carousel-list-side-panel">
-        <div className="props-tabs" role="tablist">
-          <button
-            className="props-tab"
-            role="tab"
-            aria-selected={sidePanelTab === "assets"}
-            onClick={() => setSidePanelTab("assets")}
-          >
-            {t("carouselList.sidePanel.assetsTab")}
-          </button>
-          <button
-            className="props-tab"
-            role="tab"
-            aria-selected={sidePanelTab === "templates"}
-            onClick={() => setSidePanelTab("templates")}
-          >
-            {t("carouselList.sidePanel.templatesTab")}
-          </button>
-        </div>
-        <div className="props-body">
-          {sidePanelTab === "assets" && <AssetsPane slug={slug} />}
-          {sidePanelTab === "templates" && <TemplatesPane slug={slug} />}
-        </div>
-      </aside>
     </div>
   );
 }
