@@ -54,10 +54,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
 
 import { createObjectStore, loadStorageConfig, type S3StorageConfig, type StorageConfig } from "../src/storage/config.js";
 import { loadRepoRootEnv } from "../src/env.js";
@@ -367,10 +367,10 @@ async function main(): Promise<void> {
 }
 
 // Only run when invoked directly (not when imported by a test). Compares
-// resolved filesystem paths rather than building a "file://" URL by hand, so
+// real filesystem paths (symlinks resolved) rather than building a "file://" URL by hand, so
 // a path with spaces or non-ASCII characters can't silently mismatch and
 // turn this into a no-op that exits 0 without doing anything.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   main().catch((error) => {
     if (error instanceof Error) {
       console.error(error.stack ?? error.message);

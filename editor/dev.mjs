@@ -5,6 +5,7 @@
 // (tasks.md 6's "prefer a tiny node script in editor/ if simpler").
 
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -47,6 +48,6 @@ export function startEditor() {
 }
 
 // Only run when invoked directly (not when imported by dev-bucket.mjs).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   startEditor();
 }

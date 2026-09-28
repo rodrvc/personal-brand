@@ -14,7 +14,7 @@
 //   STORAGE_BACKEND=s3 S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
 //   [S3_ENDPOINT=...] [EDITOR_PORT=4330] [EDITOR_WEB_PORT=5191] pnpm run editor:bucket
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,6 +75,6 @@ function main() {
   startEditor();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   main();
 }
