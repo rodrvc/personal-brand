@@ -77,6 +77,76 @@ const brokenDir = join(root, BROKEN_SLUG);
 mkdirSync(brokenDir, { recursive: true });
 writeFileSync(join(brokenDir, "brand.json"), JSON.stringify({ colors: {} }));
 
+/**
+ * A fourth profile isolating the cover-picking behavior: two carousels, the
+ * *newer* one still essentially empty (default color background, no
+ * objects — what `POST /carousels` actually creates) and an *older* one
+ * whose first slide has real text. Proves the card's cover skips the
+ * empty-but-newest carousel and falls through to the older one that
+ * actually has content, instead of a blank sheet.
+ */
+const COVER_SLUG = "cover-pick";
+const coverDir = join(root, COVER_SLUG);
+mkdirSync(coverDir, { recursive: true });
+writeFileSync(
+  join(coverDir, "brand.json"),
+  JSON.stringify({
+    locale: "es-CL",
+    colors: { ink: "#222222", paper: "#eeeeee" },
+    roles: {
+      accent: "ink",
+      wordmark: "ink",
+      surface: "paper",
+      onSurface: "ink",
+      onSurfaceMuted: "ink",
+      flourish: "ink",
+      highlight: "ink",
+    },
+    fonts: { logo: "Fraunces", body: "Inter", handwritten: "Caveat" },
+    radius: { card: "12px" },
+    copy: { wordmark: "Cover Pick", site: "coverpick.example" },
+  }),
+);
+
+function minimalCarouselDoc(id: string, updatedAt: string, slide0Objects: unknown[]): unknown {
+  return {
+    schemaVersion: 1,
+    id,
+    title: id,
+    status: "draft",
+    createdAt: updatedAt,
+    updatedAt,
+    canvas: { w: 1080, h: 1350 },
+    prompt: { text: "", createdAt: updatedAt },
+    template: { id: "explicativo" },
+    slides: [
+      {
+        id: "s1",
+        kind: "cover",
+        background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" },
+        objects: slide0Objects,
+      },
+    ],
+  };
+}
+
+const EMPTY_NEWEST_ID = "empty-newest";
+const CONTENT_OLDER_ID = "content-older";
+mkdirSync(join(coverDir, "carousels", EMPTY_NEWEST_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", EMPTY_NEWEST_ID, "carousel.json"),
+  JSON.stringify(minimalCarouselDoc(EMPTY_NEWEST_ID, "2026-09-28T00:00:00.000Z", [])),
+);
+mkdirSync(join(coverDir, "carousels", CONTENT_OLDER_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", CONTENT_OLDER_ID, "carousel.json"),
+  JSON.stringify(
+    minimalCarouselDoc(CONTENT_OLDER_ID, "2026-09-01T00:00:00.000Z", [
+      { id: "t1", kind: "text", text: "Hola mundo", pinned: false, locked: false, source: "manual" },
+    ]),
+  ),
+);
+
 const { default: express } = await import("express");
 const { profilesRouter } = await import("./profiles.js");
 const { ProfileStore } = await import("../profile-store.js");
@@ -85,6 +155,39 @@ const { buildEmptyDocument } = await import("../compose/planner.js");
 const { registerFile } = await import("../../../../system/assets/index.js");
 
 registerFile(brandedDir, ONE_PIXEL_PNG, { kind: "logo", origin: "manual", status: "approved" });
+
+/**
+ * A newest carousel whose only content is a `kind: "asset"` object
+ * pointing at an assetId that resolves to nothing — the two causes named
+ * for this are "not in the profile's asset index" and "in the index but
+ * its file is missing on disk"; this fixture exercises the first (a
+ * never-registered id), since the second is inherently self-healing in
+ * `loadIndex` (any stale index entry gets rescanned away the moment disk
+ * and index disagree, which is exactly what makes the profile's own asset
+ * index trustworthy in the first place). Either way the observable
+ * contract is the same: this carousel — despite being the newest, and
+ * despite carrying an `asset` object rather than an empty slide — must not
+ * win the cover race over an older carousel that has real, renderable
+ * content. Its `updatedAt` is newer than both `EMPTY_NEWEST_ID` and
+ * `CONTENT_OLDER_ID`.
+ */
+const ASSET_UNRESOLVABLE_ID = "asset-unresolvable";
+mkdirSync(join(coverDir, "carousels", ASSET_UNRESOLVABLE_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", ASSET_UNRESOLVABLE_ID, "carousel.json"),
+  JSON.stringify(
+    minimalCarouselDoc(ASSET_UNRESOLVABLE_ID, "2026-09-29T00:00:00.000Z", [
+      {
+        id: "a1",
+        kind: "asset",
+        assetId: "0000000000000000",
+        pinned: true,
+        locked: false,
+        source: "manual",
+      },
+    ]),
+  ),
+);
 
 const app = express();
 app.use(express.json());
@@ -304,6 +407,47 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.ok(noBrand);
       assert.equal(noBrand!.hasBrand, false);
       assert.equal(noBrand!.card, undefined);
+    },
+  ],
+
+  [
+    "GET /api/profiles picks the newest carousel that actually has content, skipping an empty newer one",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{ slug: string; card?: { coverImageUrl?: string; carouselCount: number } }>;
+      };
+      const coverPick = profiles.find((p) => p.slug === COVER_SLUG);
+      assert.ok(coverPick?.card, "cover-pick profile must carry a card summary");
+      assert.equal(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${CONTENT_OLDER_ID}/slides/0/png`,
+        "cover must point at the older carousel with content, not the empty newest one",
+      );
+    },
+  ],
+
+  [
+    "GET /api/profiles skips a newest carousel whose only content is an unresolvable assetId, in favor of an older carousel with real content",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{ slug: string; card?: { coverImageUrl?: string; carouselCount: number } }>;
+      };
+      const coverPick = profiles.find((p) => p.slug === COVER_SLUG);
+      assert.ok(coverPick?.card, "cover-pick profile must carry a card summary");
+      assert.notEqual(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${ASSET_UNRESOLVABLE_ID}/slides/0/png`,
+        "the newest carousel's unresolvable asset must never win the cover race",
+      );
+      assert.equal(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${CONTENT_OLDER_ID}/slides/0/png`,
+        "cover must still fall through to the older carousel with real content",
+      );
     },
   ],
 

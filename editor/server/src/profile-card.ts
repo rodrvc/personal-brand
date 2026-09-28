@@ -1,7 +1,8 @@
 import { loadBrand } from "../../../system/ig-carousel/brand-schema.js";
-import { loadIndex, type AssetEntry } from "../../../system/assets/index.js";
+import type { Slide } from "../../../system/ig-carousel/carousel-document.js";
+import { loadIndex, type AssetEntry, type AssetIndexFile } from "../../../system/assets/index.js";
 
-import { listCarousels } from "./document-store.js";
+import { listCarousels, readValidatedDocument } from "./document-store.js";
 import { ProfileStore } from "./profile-store.js";
 
 /**
@@ -43,6 +44,69 @@ function assetFileUrl(slug: string, entry: AssetEntry): string {
 }
 
 /**
+ * True when `assetId` resolves to a file the PNG route can actually serve:
+ * present in the asset index AND its file still exists on disk at
+ * `entry.path`. Mirrors what happens at render time — `assetExistsFactory`
+ * (render-context.ts) only checks the index, but `GET
+ * /assets/files/*splat` (routes/assets.ts) calls `ProfileStore.readFile`,
+ * which throws for an index entry whose file went missing (e.g. it was
+ * only ever uploaded to a remote bucket, or got deleted from disk without
+ * a rescan) — Chromium then paints nothing for that `<img>`. An index-only
+ * check would have picked exactly that carousel as the cover and rendered
+ * a blank sheet.
+ */
+function assetResolves(store: ProfileStore, index: AssetIndexFile, assetId: string): boolean {
+  const entry = index.entries.find((e) => e.id === assetId);
+  return entry !== undefined && store.exists(entry.path);
+}
+
+/**
+ * True when a slide carries something worth showing as a cover: a
+ * background resolved to an image that actually exists on disk (`mode:
+ * "asset"`), an asset object whose `assetId` resolves the same way, or a
+ * text object with non-empty text. A freshly created carousel's default
+ * slide (color background, no objects, or objects still `pending`/empty)
+ * fails every one of these, and so does a slide whose only object is an
+ * asset reference nothing can actually render — which is the point: a
+ * brand-new or unrenderable-content carousel must not win the "most
+ * recent" race against an older carousel with real, renderable content.
+ */
+function slideHasContent(slide: Slide, store: ProfileStore, index: AssetIndexFile): boolean {
+  if (slide.background.mode === "asset") return assetResolves(store, index, slide.background.assetId);
+  return slide.objects.some((object) => {
+    if (object.kind === "asset") return Boolean(object.assetId) && assetResolves(store, index, object.assetId!);
+    if (object.kind === "text") return object.text.trim().length > 0;
+    return false;
+  });
+}
+
+/**
+ * Picks the most recently updated carousel whose first slide actually has
+ * content, walking `carousels` (already sorted newest-first by
+ * `listCarousels`) until one qualifies. Returns `undefined` when none do
+ * (every carousel is still empty, has only unrenderable asset references,
+ * or the list itself is empty) — the caller falls back to an asset cover,
+ * then a gradient.
+ */
+function pickCoverCarouselId(
+  store: ProfileStore,
+  carousels: ReturnType<typeof listCarousels>,
+  index: AssetIndexFile,
+): string | undefined {
+  for (const summary of carousels) {
+    try {
+      const doc = readValidatedDocument(store, summary.id);
+      const firstSlide = doc.slides[0];
+      if (firstSlide && slideHasContent(firstSlide, store, index)) return summary.id;
+    } catch {
+      // A corrupt document is skipped, same as listCarousels already does.
+      continue;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Builds a card summary for one profile, or `undefined` when the profile
  * has no `brand.json` yet (the picker shows those disabled, with no card
  * data to compute). Never throws: a missing carousels dir or a corrupt
@@ -65,35 +129,47 @@ export function buildCardSummary(slug: string): ProfileCardSummary | undefined {
     // No carousels dir yet — an empty list is a valid, expected state.
   }
 
-  let coverImageUrl: string | undefined;
-  let lastEditedAt: string | undefined = carousels[0]?.updatedAt;
-  if (carousels.length > 0) {
-    coverImageUrl = `/api/profiles/${slug}/carousels/${carousels[0].id}/slides/0/png`;
-  }
-
-  let logoAssetUrl: string | undefined;
+  // Loaded once up front (rather than inside the asset-fallback block
+  // below) because `pickCoverCarouselId` needs it too, to tell an asset
+  // reference that actually resolves apart from one that doesn't.
+  let index: AssetIndexFile = { entries: [] };
   try {
-    const index = loadIndex(store.roots.profileDir);
-    const logoEntry = newestByCreatedAt(index.entries.filter((e) => e.kind === "logo" && e.status !== "hidden"));
-    if (logoEntry) {
-      logoAssetUrl = assetFileUrl(slug, logoEntry);
-      if (!lastEditedAt || logoEntry.createdAt > lastEditedAt) lastEditedAt = logoEntry.createdAt;
-    }
-
-    if (!coverImageUrl) {
-      const coverEntry = newestByCreatedAt(
-        index.entries.filter(
-          (e) => COVER_ASSET_KINDS.has(e.kind) && e.mime.startsWith("image/") && e.status !== "hidden",
-        ),
-      );
-      if (coverEntry) {
-        coverImageUrl = assetFileUrl(slug, coverEntry);
-        if (!lastEditedAt || coverEntry.createdAt > lastEditedAt) lastEditedAt = coverEntry.createdAt;
-      }
-    }
+    index = loadIndex(store.roots.profileDir);
   } catch {
     // No assets/index.json yet — a brand with no assets still gets a card,
-    // just without an asset-derived cover or logo.
+    // just without an asset-derived cover, logo, or resolvable slide asset.
+  }
+
+  let coverImageUrl: string | undefined;
+  let lastEditedAt: string | undefined = carousels[0]?.updatedAt;
+  const coverCarouselId = pickCoverCarouselId(store, carousels, index);
+  if (coverCarouselId) {
+    coverImageUrl = `/api/profiles/${slug}/carousels/${coverCarouselId}/slides/0/png`;
+  }
+
+  // Same reasoning as `assetResolves` above: an index entry whose file is
+  // gone from disk (remote-only upload, manual deletion without a rescan)
+  // must not be offered as a logo or cover either — `store.exists` is the
+  // same check the confined `assets/files/*` route effectively performs.
+  let logoAssetUrl: string | undefined;
+  const logoEntry = newestByCreatedAt(
+    index.entries.filter((e) => e.kind === "logo" && e.status !== "hidden" && store.exists(e.path)),
+  );
+  if (logoEntry) {
+    logoAssetUrl = assetFileUrl(slug, logoEntry);
+    if (!lastEditedAt || logoEntry.createdAt > lastEditedAt) lastEditedAt = logoEntry.createdAt;
+  }
+
+  if (!coverImageUrl) {
+    const coverEntry = newestByCreatedAt(
+      index.entries.filter(
+        (e) => COVER_ASSET_KINDS.has(e.kind) && e.mime.startsWith("image/") && e.status !== "hidden" && store.exists(e.path),
+      ),
+    );
+    if (coverEntry) {
+      coverImageUrl = assetFileUrl(slug, coverEntry);
+      if (!lastEditedAt || coverEntry.createdAt > lastEditedAt) lastEditedAt = coverEntry.createdAt;
+    }
   }
 
   const gradient = brand.gradients ? Object.values(brand.gradients)[0] : undefined;
