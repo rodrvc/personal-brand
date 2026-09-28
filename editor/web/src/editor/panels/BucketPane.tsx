@@ -142,7 +142,11 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
         📦 <b>{slug}/assets/</b>
       </div>
 
-      {stats && (
+      {/* Parked (owner decision, 2026-09-28): same library-ratio stat as
+          PromptHeader.tsx — unused, costly server-side (validates every
+          OTHER carousel in the profile). `stats` is always null now; kept
+          commented so it can be retaken with a cheap implementation. */}
+      {/* {stats && (
         <div className="savings-banner">
           <span className="big">{stats.libraryRatio}%</span>
           <span className="tx">
@@ -152,7 +156,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
               : t("bucketPane.savingsNoHistory")}
           </span>
         </div>
-      )}
+      )} */}
 
       {error && <p style={{ color: "var(--ui-danger)" }}>{error}</p>}
 

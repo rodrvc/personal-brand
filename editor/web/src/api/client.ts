@@ -16,7 +16,7 @@ import type {
   OutputVersion,
   ProfileCardSummary,
   ProfileListingEntry,
-  StatsResponse,
+  // StatsResponse — only used by the parked `getStats` below.
 } from "./types";
 
 export class ApiError extends Error {
@@ -198,9 +198,15 @@ export function getAiPricing(): Promise<{ imageModel: string; estimatedImageCost
   return request(`/ai/pricing`);
 }
 
-export function getStats(slug: string, carouselId: string): Promise<StatsResponse> {
-  return request(`/profiles/${slug}/carousels/${carouselId}/stats`);
-}
+// Parked (owner decision, 2026-09-28): the library-ratio stat this called
+// validates every OTHER carousel in the profile server-side, which took
+// ~20s on a profile with dozens of carousels — an unused feature that was
+// blocking the whole editor's load. The server route still exists and
+// still works; nothing in the web app calls it any more. Retake only with
+// a cheap server-side implementation and a real use for the number.
+// export function getStats(slug: string, carouselId: string): Promise<StatsResponse> {
+//   return request(`/profiles/${slug}/carousels/${carouselId}/stats`);
+// }
 
 export function slideHtmlUrl(slug: string, carouselId: string, index: number): string {
   return `/api/profiles/${slug}/carousels/${carouselId}/slides/${index}/html`;

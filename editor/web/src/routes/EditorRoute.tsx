@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 
-import { getBrand, getCarousel, getStats, getTemplate, listTemplates } from "../api/client";
+import { getBrand, getCarousel, getTemplate, listTemplates } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { useDelayedVisible } from "../hooks/useDelayedVisible";
@@ -46,7 +46,11 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
   const [brand, setBrand] = useState<BrandTokens | null>(null);
   const [doc, setDoc] = useState<CarouselDocument | null>(seededDoc ?? null);
   const [template, setTemplate] = useState<LayoutTemplate | null>(null);
-  const [stats, setStats] = useState<StatsResponse | null>(null);
+  // Parked (see the effect below): the library-ratio stat is never fetched
+  // any more, so this stays null for the lifetime of the route. Kept as a
+  // real prop (not deleted) so PromptHeader/PropertiesPanel/BucketPane's
+  // `stats`/`onStatsRefresh` plumbing keeps compiling unchanged.
+  const stats: StatsResponse | null = null;
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -56,13 +60,23 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
 
     // A freshly created carousel arrives with its document already in hand
     // (CarouselListRoute's create call) — skip the redundant GET and its
-    // flash, but still fetch brand/template/stats, which the create
-    // response doesn't carry.
+    // flash, but still fetch brand/template, which the create response
+    // doesn't carry.
     const docPromise = seededDoc ? Promise.resolve(seededDoc) : getCarousel(slug, id);
     if (!seededDoc) setDoc(null);
 
+    // The library-ratio stat used to be awaited here too (`getStats`,
+    // `Promise.all`'d with the template fetch) purely so its slower of the
+    // two settled before either state update landed — on a profile with
+    // many carousels that stat alone took ~20s (it validates every OTHER
+    // carousel in the profile), so the whole editor sat on the loading
+    // screen behind a number nobody was using. Parked: see PromptHeader.tsx
+    // and BucketPane.tsx for the commented-out display, and getStats in
+    // api/client.ts for the commented-out fetch. `stats` stays wired
+    // through as always-null so those components keep compiling and
+    // rendering their non-stats content unchanged.
     Promise.all([getBrand(slug), docPromise])
-      .then(async ([brandRes, docRes]) => {
+      .then(([brandRes, docRes]) => {
         if (!alive) return;
         setBrand(brandRes);
         setDoc(docRes);
@@ -73,16 +87,13 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
         // server serves under the sentinel id `listTemplates` reports. The
         // id is read from that response rather than hardcoded here, so the
         // web bundle never carries a copy of the engine's sentinel.
-        const templatePromise = docRes.template
+        return docRes.template
           ? getTemplate(slug, docRes.template.id, docRes.template.params)
           : listTemplates(slug).then((listed) => getTemplate(slug, listed.freeTemplateId));
-        const [templateRes, statsRes] = await Promise.all([
-          templatePromise,
-          getStats(slug, id).catch(() => null),
-        ]);
-        if (!alive) return;
+      })
+      .then((templateRes) => {
+        if (!alive || !templateRes) return;
         setTemplate(templateRes);
-        setStats(statsRes);
       })
       .catch((err: unknown) => {
         if (!alive) return;
