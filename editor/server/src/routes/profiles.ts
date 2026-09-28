@@ -21,6 +21,7 @@ import {
 } from "../document-store.js";
 import { messages } from "../messages.js";
 import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
+import { buildCardSummary } from "../profile-card.js";
 
 /**
  * Turns a rejected path or id into a 400, everything else into a 404/500 as
@@ -45,9 +46,25 @@ function handleStoreError(error: unknown, res: import("express").Response): void
 export function profilesRouter(): Router {
   const router = Router();
 
+  /**
+   * `card` is computed on top of `listProfilesAsync()`'s cheap slug/hasBrand
+   * pair (editor-ui restyle: the picker's "generic slop" feedback) — one
+   * `buildCardSummary` per profile, wrapped so a single broken profile
+   * (corrupt brand.json, unreadable asset index, no local mirror yet in `s3`
+   * mode) never 500s the whole listing: it just answers with
+   * `card: undefined`, same as a profile with no brand.json at all.
+   */
   router.get("/api/profiles", async (_req, res) => {
     try {
-      res.json({ profiles: await listProfilesAsync() });
+      const profiles = (await listProfilesAsync()).map((entry) => {
+        if (!entry.hasBrand) return entry;
+        try {
+          return { ...entry, card: buildCardSummary(entry.slug) };
+        } catch {
+          return entry;
+        }
+      });
+      res.json({ profiles });
     } catch (error) {
       handleStoreError(error, res);
     }
