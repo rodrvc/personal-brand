@@ -1,8 +1,6 @@
 import { loadBrand } from "../../../system/ig-carousel/brand-schema.js";
-import type { Slide } from "../../../system/ig-carousel/carousel-document.js";
 import { loadIndex, type AssetEntry, type AssetIndexFile } from "../../../system/assets/index.js";
 
-import { listCarousels, readValidatedDocument } from "./document-store.js";
 import { ProfileStore } from "./profile-store.js";
 
 /**
@@ -34,6 +32,9 @@ export interface ProfileCardSummary {
 }
 
 const COVER_ASSET_KINDS = new Set(["background", "photo", "decoration", "unclassified"]);
+
+/** Same slug-shaped rule `document-store.ts`'s `assertValidCarouselId` enforces, applied here to filter directory names without importing that module (see the perf note on `listCarouselIds` below). */
+const CAROUSEL_ID = /^[a-z0-9-]+$/;
 
 function newestByCreatedAt(entries: AssetEntry[]): AssetEntry | undefined {
   return [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -70,40 +71,89 @@ function assetResolves(store: ProfileStore, index: AssetIndexFile, assetId: stri
  * asset reference nothing can actually render — which is the point: a
  * brand-new or unrenderable-content carousel must not win the "most
  * recent" race against an older carousel with real, renderable content.
+ *
+ * Takes the slide as unparsed JSON (`unknown`), not the validated `Slide`
+ * type — see `listCarouselIds`'s doc comment for why: the listing route
+ * reads every carousel's file, and paying full schema validation on all of
+ * them per request is what made `GET /api/profiles` slow in the first
+ * place. Every field access here is defensive (`typeof` checks, optional
+ * chaining) precisely because nothing has validated this shape yet.
  */
-function slideHasContent(slide: Slide, store: ProfileStore, index: AssetIndexFile): boolean {
-  if (slide.background.mode === "asset") return assetResolves(store, index, slide.background.assetId);
-  return slide.objects.some((object) => {
-    if (object.kind === "asset") return Boolean(object.assetId) && assetResolves(store, index, object.assetId!);
-    if (object.kind === "text") return object.text.trim().length > 0;
+function rawSlideHasContent(slide: unknown, store: ProfileStore, index: AssetIndexFile): boolean {
+  if (!slide || typeof slide !== "object") return false;
+  const { background, objects } = slide as { background?: unknown; objects?: unknown };
+
+  if (background && typeof background === "object") {
+    const bg = background as { mode?: unknown; assetId?: unknown };
+    if (bg.mode === "asset" && typeof bg.assetId === "string") return assetResolves(store, index, bg.assetId);
+  }
+
+  if (!Array.isArray(objects)) return false;
+  return objects.some((object) => {
+    if (!object || typeof object !== "object") return false;
+    const obj = object as { kind?: unknown; assetId?: unknown; text?: unknown };
+    if (obj.kind === "asset") return typeof obj.assetId === "string" && assetResolves(store, index, obj.assetId);
+    if (obj.kind === "text") return typeof obj.text === "string" && obj.text.trim().length > 0;
     return false;
   });
 }
 
+interface RawCarouselMeta {
+  id: string;
+  updatedAt: string;
+  firstSlide: unknown;
+}
+
+/**
+ * Every carousel directory name under `carousels/`, filtered to the same
+ * slug shape `document-store.ts` requires — cheap: one `readdirSync`, no
+ * file content touched. `listCarousels` (document-store.ts) already does
+ * this same directory listing, but this file deliberately doesn't call it:
+ * `listCarousels` also fully schema-validates every document (which itself
+ * reloads the brand and the asset index — including a full disk walk —
+ * *per carousel*), which is what made `GET /api/profiles` take ~6s on a
+ * 69-carousel profile. The card summary only ever needs `updatedAt` and
+ * `slides[0]`, so reading the raw JSON directly, with no validation, is
+ * both correct for this purpose and the actual fix for that cost.
+ */
+function listCarouselIds(store: ProfileStore): string[] {
+  return store
+    .list("carousels")
+    .filter((entry) => entry.isDirectory() && CAROUSEL_ID.test(entry.name))
+    .map((entry) => entry.name);
+}
+
+/** Raw `carousel.json` parse, no schema validation — see `listCarouselIds`'s doc comment. `undefined` for a missing/corrupt file, same "skip it" treatment `listCarousels` gives a document that fails validation. */
+function readRawCarouselMeta(store: ProfileStore, id: string): RawCarouselMeta | undefined {
+  try {
+    const raw = store.readJson<{ updatedAt?: unknown; slides?: unknown }>(`carousels/${id}/carousel.json`);
+    if (typeof raw.updatedAt !== "string") return undefined;
+    const firstSlide = Array.isArray(raw.slides) ? raw.slides[0] : undefined;
+    return { id, updatedAt: raw.updatedAt, firstSlide };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every carousel's cheap metadata, newest-first — the same ordering `listCarousels` produces, at a fraction of the cost (see `listCarouselIds`). */
+function listCarouselMetas(store: ProfileStore): RawCarouselMeta[] {
+  const metas: RawCarouselMeta[] = [];
+  for (const id of listCarouselIds(store)) {
+    const meta = readRawCarouselMeta(store, id);
+    if (meta) metas.push(meta);
+  }
+  return metas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 /**
  * Picks the most recently updated carousel whose first slide actually has
- * content, walking `carousels` (already sorted newest-first by
- * `listCarousels`) until one qualifies. Returns `undefined` when none do
- * (every carousel is still empty, has only unrenderable asset references,
- * or the list itself is empty) — the caller falls back to an asset cover,
- * then a gradient.
+ * content, walking `carousels` (already sorted newest-first) until one
+ * qualifies. Returns `undefined` when none do (every carousel is still
+ * empty, has only unrenderable asset references, or the list itself is
+ * empty) — the caller falls back to an asset cover, then a gradient.
  */
-function pickCoverCarouselId(
-  store: ProfileStore,
-  carousels: ReturnType<typeof listCarousels>,
-  index: AssetIndexFile,
-): string | undefined {
-  for (const summary of carousels) {
-    try {
-      const doc = readValidatedDocument(store, summary.id);
-      const firstSlide = doc.slides[0];
-      if (firstSlide && slideHasContent(firstSlide, store, index)) return summary.id;
-    } catch {
-      // A corrupt document is skipped, same as listCarousels already does.
-      continue;
-    }
-  }
-  return undefined;
+function pickCoverCarouselId(store: ProfileStore, carousels: RawCarouselMeta[], index: AssetIndexFile): string | undefined {
+  return carousels.find((c) => rawSlideHasContent(c.firstSlide, store, index))?.id;
 }
 
 /**
@@ -122,9 +172,9 @@ export function buildCardSummary(slug: string): ProfileCardSummary | undefined {
     return undefined;
   }
 
-  let carousels: ReturnType<typeof listCarousels> = [];
+  let carousels: RawCarouselMeta[] = [];
   try {
-    carousels = listCarousels(store);
+    carousels = listCarouselMetas(store);
   } catch {
     // No carousels dir yet — an empty list is a valid, expected state.
   }
