@@ -21,6 +21,7 @@ import {
   assertValidCarouselId,
   documentExists,
   DocumentStoreError,
+  readCarouselHeader,
   readValidatedDocument,
   readValidatedDocumentRevision,
   snapshotDocument,
@@ -533,11 +534,40 @@ function isVisualObject(object: SlideObject): object is Extract<SlideObject, { k
 }
 
 /** Percentage of the carousel's visual pieces (backgrounds + asset objects) whose `source` is `"library"` (piece-generation spec's "Library ratio with history"). */
-function libraryRatio(doc: CarouselDocument): number {
+export function libraryRatio(doc: CarouselDocument): number {
   const visualPieces = doc.slides.flatMap((s) => [s.background, ...s.objects.filter(isVisualObject)]);
   if (visualPieces.length === 0) return 0;
   const fromLibrary = visualPieces.filter((p) => p.source === "library").length;
   return Math.round((fromLibrary / visualPieces.length) * 100);
+}
+
+/**
+ * `libraryRatio`, but over an unvalidated raw document — same idea as
+ * `listCarousels` in document-store.ts: this stat only ever reads each
+ * piece's `source` field, so there's no reason to pay for
+ * `readValidatedDocument`'s brand reload + full asset-index rescan on
+ * every one of the profile's other carousels just to compute it. Counts
+ * the same visual pieces `libraryRatio` does (every background, plus only
+ * `kind: "asset"` objects — text never counts). A document that doesn't
+ * shape-check the way this expects contributes 0 rather than throwing.
+ */
+export function libraryRatioRaw(raw: unknown): number {
+  const slides = (raw as { slides?: unknown })?.slides;
+  if (!Array.isArray(slides)) return 0;
+  const sources: unknown[] = [];
+  for (const slide of slides) {
+    const s = slide as { background?: { source?: unknown }; objects?: unknown };
+    if (s?.background && "source" in s.background) sources.push(s.background.source);
+    if (Array.isArray(s?.objects)) {
+      for (const object of s.objects) {
+        const o = object as { kind?: unknown; source?: unknown } | null;
+        if (o?.kind === "asset") sources.push(o.source);
+      }
+    }
+  }
+  if (sources.length === 0) return 0;
+  const fromLibrary = sources.filter((s) => s === "library").length;
+  return Math.round((fromLibrary / sources.length) * 100);
 }
 
 /** Every carousel of the same profile, excluding the current one, most recently updated first — used for the reuse-trend comparison (piece-generation spec's "Library ratio with history"). */
@@ -545,17 +575,14 @@ function previousCarouselsLibraryRatio(
   store: ProfileStore,
   currentCarouselId: string,
 ): Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> {
-  const entries = store.list("carousels");
   const out: Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> = [];
-  for (const entry of entries) {
+  for (const entry of store.list("carousels")) {
     if (!entry.isDirectory() || entry.name === currentCarouselId) continue;
-    if (!documentExists(store, entry.name)) continue;
-    try {
-      const doc = readValidatedDocument(store, entry.name);
-      out.push({ carouselId: doc.id, updatedAt: doc.updatedAt, libraryRatio: libraryRatio(doc) });
-    } catch {
-      continue;
-    }
+    // Same raw reader and skip rules as the carousel listing, so the
+    // history covers exactly the carousels the listing shows.
+    const header = readCarouselHeader(store, entry.name);
+    if (!header) continue;
+    out.push({ carouselId: header.id, updatedAt: header.updatedAt, libraryRatio: libraryRatioRaw(header) });
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
