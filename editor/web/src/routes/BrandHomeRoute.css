@@ -1,0 +1,124 @@
+.brand-home-page {
+  min-height: 100vh;
+}
+
+.brand-home {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+.brand-home-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.brand-home-back {
+  color: var(--ui-ink-3);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.brand-home-back:hover {
+  color: var(--ui-head);
+}
+
+/* The brand's own wordmark, in its logo font — the one place on this route where the brand's identity, not the chrome's, carries the heading. */
+.brand-home-wordmark {
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--ui-head);
+  line-height: 1.15;
+  margin: 4px 0 0;
+}
+
+.brand-home-error {
+  color: var(--ui-danger);
+}
+
+.brand-home-hint {
+  color: var(--ui-ink-3);
+}
+
+.brand-home-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+.brand-home-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface);
+  text-decoration: none;
+  transition: var(--ui-transition);
+}
+
+.brand-home-figure:hover,
+.brand-home-figure:focus-visible {
+  border-color: var(--ui-accent);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.brand-home-figure-value {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  font-size: 34px;
+  color: var(--ui-accent-ink);
+}
+
+.brand-home-figure-label {
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.brand-home-section {
+  margin-bottom: 32px;
+}
+
+/* A section title is a display heading: size and negative tracking carry it, not weight — same register as a route title, one step down. */
+.brand-home-section-title {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--ui-head);
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.brand-home-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.brand-home-recent-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.brand-home-all-link {
+  display: inline-block;
+  font-size: 12.5px;
+  color: var(--ui-accent-ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.brand-home-all-link:hover {
+  text-decoration: underline;
+}

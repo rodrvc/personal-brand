@@ -14,7 +14,7 @@ export const es = {
   "common.pinnedNoRegenerate": "Fijado: no se puede regenerar hasta que lo liberes.",
   "common.newTextPlaceholder": "Texto",
 
-  // Relative time (routes/ProfilePickerRoute.tsx's brand cards)
+  // Relative time (utils/relativeTime.ts)
   "time.justNow": "hace un momento",
   "time.minutes": "hace {count} min",
   "time.hours": "hace {count} h",
@@ -27,6 +27,20 @@ export const es = {
   // Loader (components/SheetLoader.tsx)
   "sheetLoader.fallback": "Cargando",
 
+  // Carousel cover card (components/CarouselCoverCard.tsx)
+  "coverCard.untitled": "Sin título · {time}",
+  "coverCard.oneSlide": "1 lámina",
+  "coverCard.slides": "{count} láminas",
+
+  // Brand home dashboard (routes/BrandHomeRoute.tsx)
+  "brandHome.back": "← Perfiles",
+  "brandHome.loadingCaption": "Cargando panel",
+  "brandHome.continueEditing": "Seguir editando",
+  "brandHome.noDrafts": "No hay borradores en curso.",
+  "brandHome.recentTitle": "Últimos exportados/publicados",
+  "brandHome.noRecent": "Todavía no hay carruseles exportados ni publicados.",
+  "brandHome.allCarousels": "Ver todos los carruseles →",
+
   // Profile picker (routes/ProfilePickerRoute.tsx)
   "profilePicker.title": "Perfiles",
   "profilePicker.loading": "Cargando perfiles",
@@ -37,10 +51,15 @@ export const es = {
   "profilePicker.carousels": "{count} carruseles",
 
   // Carousel list (routes/CarouselListRoute.tsx)
-  "carouselList.back": "← Perfiles",
   "carouselList.title": "{slug} · Carruseles",
   "carouselList.new": "Nuevo carrusel",
   "carouselList.empty": "Este perfil aún no tiene carruseles.",
+  "carouselList.emptyFiltered": "Ningún carrusel tiene este estado.",
+  "carouselList.filterLabel": "Filtrar por estado",
+  "carouselList.filter.all": "Todos",
+  "carouselList.filter.draft": "Borradores",
+  "carouselList.filter.exported": "Exportados",
+  "carouselList.filter.published": "Publicados",
   "carouselList.columnTitle": "Título",
   "carouselList.columnStatus": "Estado",
   "carouselList.columnUpdated": "Actualizado",

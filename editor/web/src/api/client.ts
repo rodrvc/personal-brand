@@ -14,6 +14,7 @@ import type {
   LayoutTemplate,
   LayoutTemplateSummary,
   OutputVersion,
+  ProfileCardSummary,
   ProfileListingEntry,
   StatsResponse,
 } from "./types";
@@ -54,6 +55,11 @@ export function listProfiles(): Promise<{ profiles: ProfileListingEntry[] }> {
 
 export function getBrand(slug: string): Promise<BrandTokens> {
   return request(`/profiles/${slug}/brand`);
+}
+
+/** Slug-scoped brand card summary (wordmark, logo font, cover, counts) — same shape as `ProfileListingEntry.card`, for a route that only needs one profile's own card (the brand home dashboard) rather than the whole picker listing. `card` is `undefined` for a profile with no/broken brand.json. */
+export function getProfileCard(slug: string): Promise<{ card?: ProfileCardSummary }> {
+  return request(`/profiles/${slug}/card`);
 }
 
 /** The brand's optional style guide (palette/fonts/keywords/tone/positioning/image direction/logo rules) — always returns a (possibly all-empty) style, never 404s for a profile with no style files. */

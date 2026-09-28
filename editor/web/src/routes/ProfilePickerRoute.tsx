@@ -4,52 +4,11 @@ import { Link } from "react-router-dom";
 import { listProfiles } from "../api/client";
 import type { ProfileListingEntry } from "../api/types";
 import { SheetLoader } from "../components/SheetLoader";
+import { useBrandFonts } from "../hooks/useBrandFonts";
 import { useDelayedVisible } from "../hooks/useDelayedVisible";
 import { t } from "../i18n";
+import { relativeTime } from "../utils/relativeTime";
 import "./ProfilePickerRoute.css";
-
-/** Relative "hace X" label for `lastEditedAt`, coarse enough to not need a library; the copy lives in the locale resource (`time.*`). */
-function relativeTime(iso: string): string {
-  const deltaMs = Date.now() - new Date(iso).getTime();
-  const minutes = Math.round(deltaMs / 60_000);
-  if (minutes < 1) return t("time.justNow");
-  if (minutes < 60) return t("time.minutes", { count: minutes });
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t("time.hours", { count: hours });
-  const days = Math.round(hours / 24);
-  if (days < 30) return t("time.days", { count: days });
-  const months = Math.round(days / 30);
-  if (months < 12) return months === 1 ? t("time.oneMonth") : t("time.months", { count: months });
-  const years = Math.round(months / 12);
-  return years === 1 ? t("time.oneYear") : t("time.years", { count: years });
-}
-
-/**
- * Loads every unique `googleFontsHref` present in the current listing as a
- * `<link>` in `<head>`, once each, so a card's wordmark can render in the
- * brand's actual logo font. Scoped in effect, not just in name: nothing but
- * `.brand-card-wordmark` (via inline `fontFamily`) ever references those
- * font families, so the chrome's own `--ui-display`/`--ui-font` never pick
- * them up even though the stylesheet itself loads globally — a `<link>` has
- * no shadow-DOM equivalent to actually scope to.
- */
-function useBrandFonts(hrefs: string[]): void {
-  useEffect(() => {
-    const added: HTMLLinkElement[] = [];
-    for (const href of hrefs) {
-      if (document.querySelector(`link[data-brand-font="${href}"]`)) continue;
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = href;
-      link.dataset.brandFont = href;
-      document.head.appendChild(link);
-      added.push(link);
-    }
-    return () => {
-      for (const link of added) link.remove();
-    };
-  }, [hrefs.join("|")]);
-}
 
 function BrandCardCover({ profile }: { profile: ProfileListingEntry }) {
   const card = profile.card;
@@ -68,7 +27,7 @@ function BrandCard({ profile }: { profile: ProfileListingEntry }) {
   const wordmark = card?.wordmark || profile.slug;
 
   return (
-    <Link key={profile.slug} to={`/${profile.slug}/carousels`} className="brand-card">
+    <Link key={profile.slug} to={`/${profile.slug}`} className="brand-card">
       <BrandCardCover profile={profile} />
       <div className="brand-card-body">
         <span className="brand-card-wordmark" style={card?.logoFont ? { fontFamily: card.logoFont } : undefined}>

@@ -398,6 +398,29 @@ const tests: Array<[string, () => Promise<void>]> = [
   ],
 
   [
+    "GET /api/profiles/:slug/card returns the same card summary as the listing, scoped to one profile",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${BRANDED_SLUG}/card`);
+      assert.equal(status, 200);
+      const { card } = body as { card?: { wordmark?: string; logoFont?: string; carouselCount: number } };
+      assert.ok(card, "a profile with brand.json must carry a card summary");
+      assert.equal(card!.wordmark, "Marca Ficticia");
+      assert.equal(card!.logoFont, "Fraunces");
+      assert.equal(card!.carouselCount, 0);
+    },
+  ],
+
+  [
+    "GET /api/profiles/:slug/card answers card: undefined for a profile with a broken brand.json",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${BROKEN_SLUG}/card`);
+      assert.equal(status, 200);
+      const { card } = body as { card?: unknown };
+      assert.equal(card, undefined);
+    },
+  ],
+
+  [
     "GET /api/profiles omits card for a profile with no brand.json, without failing the listing",
     async () => {
       const { status, body } = await get("/api/profiles");
