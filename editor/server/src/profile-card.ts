@@ -1,6 +1,7 @@
 import { loadBrand } from "../../../system/ig-carousel/brand-schema.js";
 import { loadIndex, type AssetEntry, type AssetIndexFile } from "../../../system/assets/index.js";
 
+import { CAROUSEL_ID, readCarouselHeader } from "./document-store.js";
 import { ProfileStore } from "./profile-store.js";
 
 /**
@@ -32,9 +33,6 @@ export interface ProfileCardSummary {
 }
 
 const COVER_ASSET_KINDS = new Set(["background", "photo", "decoration", "unclassified"]);
-
-/** Same slug-shaped rule `document-store.ts`'s `assertValidCarouselId` enforces, applied here to filter directory names without importing that module (see the perf note on `listCarouselIds` below). */
-const CAROUSEL_ID = /^[a-z0-9-]+$/;
 
 function newestByCreatedAt(entries: AssetEntry[]): AssetEntry | undefined {
   return [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -107,14 +105,13 @@ interface RawCarouselMeta {
 /**
  * Every carousel directory name under `carousels/`, filtered to the same
  * slug shape `document-store.ts` requires — cheap: one `readdirSync`, no
- * file content touched. `listCarousels` (document-store.ts) already does
- * this same directory listing, but this file deliberately doesn't call it:
- * `listCarousels` also fully schema-validates every document (which itself
- * reloads the brand and the asset index — including a full disk walk —
- * *per carousel*), which is what made `GET /api/profiles` take ~6s on a
- * 69-carousel profile. The card summary only ever needs `updatedAt` and
- * `slides[0]`, so reading the raw JSON directly, with no validation, is
- * both correct for this purpose and the actual fix for that cost.
+ * file content touched. `listCarousels` (document-store.ts) does the same
+ * listing but returns only the display fields; the card also needs
+ * `slides[0]`, so it walks the ids itself and reads each document through
+ * the same `readCarouselHeader` — raw, no schema validation (which reloads
+ * the brand and the asset index per carousel and made `GET /api/profiles`
+ * take ~6s on a 69-carousel profile), and with the same skip rules, so the
+ * card's carousel count always matches the listing.
  */
 function listCarouselIds(store: ProfileStore): string[] {
   return store
@@ -123,16 +120,11 @@ function listCarouselIds(store: ProfileStore): string[] {
     .map((entry) => entry.name);
 }
 
-/** Raw `carousel.json` parse, no schema validation — see `listCarouselIds`'s doc comment. `undefined` for a missing/corrupt file, same "skip it" treatment `listCarousels` gives a document that fails validation. */
+/** `readCarouselHeader` reduced to what the card uses; `undefined` for anything the listing would skip too. */
 function readRawCarouselMeta(store: ProfileStore, id: string): RawCarouselMeta | undefined {
-  try {
-    const raw = store.readJson<{ updatedAt?: unknown; slides?: unknown }>(`carousels/${id}/carousel.json`);
-    if (typeof raw.updatedAt !== "string") return undefined;
-    const firstSlide = Array.isArray(raw.slides) ? raw.slides[0] : undefined;
-    return { id, updatedAt: raw.updatedAt, firstSlide };
-  } catch {
-    return undefined;
-  }
+  const header = readCarouselHeader(store, id);
+  if (!header) return undefined;
+  return { id: header.id, updatedAt: header.updatedAt, firstSlide: header.slides[0] };
 }
 
 /** Every carousel's cheap metadata, newest-first — the same ordering `listCarousels` produces, at a fraction of the cost (see `listCarouselIds`). */
