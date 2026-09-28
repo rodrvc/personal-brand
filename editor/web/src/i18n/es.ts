@@ -24,9 +24,12 @@ export const es = {
   "time.oneYear": "hace 1 año",
   "time.years": "hace {count} años",
 
+  // Loader (components/SheetLoader.tsx)
+  "sheetLoader.fallback": "Cargando",
+
   // Profile picker (routes/ProfilePickerRoute.tsx)
   "profilePicker.title": "Perfiles",
-  "profilePicker.loading": "Cargando perfiles…",
+  "profilePicker.loading": "Cargando perfiles",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
   "profilePicker.noBrandHint": "Sin brand.json configurado",
@@ -47,11 +50,13 @@ export const es = {
   "carouselList.status.exported": "Exportado",
   "carouselList.status.published": "Publicado",
   "carouselList.creating": "Creando…",
+  "carouselList.creatingCaption": "Creando carrusel",
+  "carouselList.loadingCaption": "Cargando carruseles",
   /** Title a carousel gets when "Nuevo carrusel" creates it directly, with no dialog; the owner renames it from the editor. */
   "carouselList.untitled": "Carrusel sin título",
 
   // Editor route (routes/EditorRoute.tsx)
-  "editorRoute.loading": "Cargando carrusel…",
+  "editorRoute.loading": "Abriendo carrusel",
 
   // Top bar (editor/TopBar.tsx)
   "topbar.back": "← Carruseles",

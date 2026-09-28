@@ -4,7 +4,9 @@ import { useLocation, useParams } from "react-router-dom";
 import { getBrand, getCarousel, getStats, getTemplate, listTemplates } from "../api/client";
 import type { BrandTokens, CarouselDocument, LayoutTemplate, StatsResponse } from "../api/types";
 import { useDocumentEditor } from "../hooks/useDocumentEditor";
+import { useDelayedVisible } from "../hooks/useDelayedVisible";
 import { Editor } from "../editor/Editor";
+import { SheetLoader } from "../components/SheetLoader";
 import { t } from "../i18n";
 import "./EditorRoute.css";
 
@@ -28,6 +30,8 @@ interface EditorRouteProps {
 /** Router state CarouselListRoute hands off on navigate after creating a carousel — see that route's comment. Optional: a direct URL visit or a page reload has none, and the effect below falls back to fetching. */
 interface EditorRouteLocationState {
   doc?: CarouselDocument;
+  /** The brand accent CarouselListRoute's own loader was already showing — carried over so this route's continuation loader is the same colour, not a flash back to the chrome default. */
+  accentColor?: string;
 }
 
 export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
@@ -90,9 +94,23 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seededDoc is only meant to apply once, on the navigation that created it; re-running this effect off it would refetch on every re-render.
   }, [slug, id]);
 
+  // A continuation of CarouselListRoute's create flow (seededDoc present)
+  // wants the loader right away — that click was already the request for
+  // feedback, and CarouselListRoute's own loader was already showing.
+  // Opening an existing carousel (link click or direct URL) is a passive
+  // load: the usual entry delay/minimum-show anti-flicker applies.
+  const notReady = !doc || !brand || !template;
+  const showLoader = useDelayedVisible(notReady, { immediate: Boolean(seededDoc) });
+
   if (!slug || !id) return null;
   if (error) return <div className="editor-route-error">{error}</div>;
-  if (!doc || !brand || !template) return <div className="editor-route-loading">{t("editorRoute.loading")}</div>;
+  if (notReady) {
+    return showLoader ? (
+      <div className="editor-route-loading">
+        <SheetLoader caption={t("editorRoute.loading")} accentColor={locationState?.accentColor} />
+      </div>
+    ) : null;
+  }
 
   return (
     <EditorLoaded

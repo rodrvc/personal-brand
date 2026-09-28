@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 
 import { listProfiles } from "../api/client";
 import type { ProfileListingEntry } from "../api/types";
+import { SheetLoader } from "../components/SheetLoader";
+import { useDelayedVisible } from "../hooks/useDelayedVisible";
 import { t } from "../i18n";
 import "./ProfilePickerRoute.css";
 
@@ -110,18 +112,6 @@ function DisabledBrandCard({ profile }: { profile: ProfileListingEntry }) {
   );
 }
 
-function SkeletonCard({ index }: { index: number }) {
-  return (
-    <div className="brand-card brand-card-skeleton" aria-hidden="true" style={{ animationDelay: `${index * 60}ms` }}>
-      <div className="brand-card-cover brand-card-skeleton-shimmer" />
-      <div className="brand-card-body">
-        <div className="brand-card-skeleton-line brand-card-skeleton-shimmer" style={{ width: "60%" }} />
-        <div className="brand-card-skeleton-line brand-card-skeleton-shimmer" style={{ width: "40%", height: 8 }} />
-      </div>
-    </div>
-  );
-}
-
 export function ProfilePickerRoute() {
   const [profiles, setProfiles] = useState<ProfileListingEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -137,23 +127,31 @@ export function ProfilePickerRoute() {
   );
   useBrandFonts(fontHrefs);
 
+  // Passive load: no brand in context yet at all, so the loader uses the
+  // chrome's own colours (no `accentColor`) — only once a profile's own
+  // card has loaded does anything on this route know a brand's palette.
+  const showLoader = useDelayedVisible(!profiles && !error);
+
   return (
     <div className="picker">
       <h1 className="picker-title">{t("profilePicker.title")}</h1>
       {error && <p className="picker-error">{error}</p>}
-      {profiles && profiles.length === 0 && (
+      {showLoader && <SheetLoader caption={t("profilePicker.loading")} />}
+      {/* Loaded content waits for the loader's minimum-show tail, so the two never paint together. */}
+      {!showLoader && profiles && profiles.length === 0 && (
         <p className="picker-hint">{t("profilePicker.empty")}</p>
       )}
-      <div className="brand-card-grid">
-        {!profiles && !error && Array.from({ length: 4 }, (_, i) => <SkeletonCard key={i} index={i} />)}
-        {profiles?.map((profile) =>
-          profile.hasBrand ? (
-            <BrandCard key={profile.slug} profile={profile} />
-          ) : (
-            <DisabledBrandCard key={profile.slug} profile={profile} />
-          ),
-        )}
-      </div>
+      {!showLoader && profiles && profiles.length > 0 && (
+        <div className="brand-card-grid">
+          {profiles.map((profile) =>
+            profile.hasBrand ? (
+              <BrandCard key={profile.slug} profile={profile} />
+            ) : (
+              <DisabledBrandCard key={profile.slug} profile={profile} />
+            ),
+          )}
+        </div>
+      )}
     </div>
   );
 }
