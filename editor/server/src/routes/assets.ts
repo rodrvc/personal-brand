@@ -4,7 +4,6 @@ import { Router } from "express";
 
 import { computeUsage } from "../../../../system/assets/usage.js";
 import {
-  loadIndex,
   registerFile,
   updateEntry,
   ASSET_KINDS,
@@ -13,6 +12,7 @@ import {
   type AssetStatus,
 } from "../../../../system/assets/index.js";
 
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
 
 /**
@@ -44,7 +44,7 @@ export function assetsRouter(): Router {
   router.get("/api/profiles/:slug/assets", (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
-      const index = loadIndex(store.roots.profileDir);
+      const index = loadIndexCached(store.roots.profileDir);
       const usage = computeUsage(store.roots.profileDir);
       const entries = index.entries.map((entry) => ({
         ...entry,
@@ -115,6 +115,7 @@ export function assetsRouter(): Router {
           status: "approved",
           destRelPath,
         });
+        invalidateAssetIndex(store.roots.profileDir);
         res.status(201).json(entry);
       } catch (error) {
         res.status(500).json({ error: (error as Error).message });
@@ -153,6 +154,7 @@ export function assetsRouter(): Router {
       }
 
       const entry = updateEntry(store.roots.profileDir, req.params.assetId, changes);
+      invalidateAssetIndex(store.roots.profileDir);
       res.json(entry);
     } catch (error) {
       const message = (error as Error).message;

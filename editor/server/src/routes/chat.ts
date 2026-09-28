@@ -5,7 +5,8 @@ import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-d
 
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
-import { detectImage, loadIndex } from "../../../../system/assets/index.js";
+import { detectImage } from "../../../../system/assets/index.js";
+import { loadIndexCached } from "../asset-index-cache.js";
 import { generateForSlot, storeImage } from "../compose/planner.js";
 import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
@@ -265,7 +266,7 @@ function notPlaced(store: ProfileStore, doc: CarouselDocument, results: EventRes
 }
 
 function assetName(store: ProfileStore, assetId: string): string {
-  const entry = loadIndex(store.roots.profileDir).entries.find((e) => e.id === assetId);
+  const entry = loadIndexCached(store.roots.profileDir).entries.find((e) => e.id === assetId);
   return entry?.path.split("/").pop() ?? assetId;
 }
 
@@ -635,7 +636,7 @@ export function chatRouter(
       if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
       const normalized = normalizeReference(Buffer.from(dataBase64, "base64"), mime);
       const id = saveReference(store, normalized.mime, normalized.bytes);
-      const entry = loadIndex(store.roots.profileDir).entries.find((e) => e.id === id);
+      const entry = loadIndexCached(store.roots.profileDir).entries.find((e) => e.id === id);
       res.json({ reference: { id, name, mime: normalized.mime, w: entry?.w, h: entry?.h } });
     } catch (error) {
       if (error instanceof ChatReferenceError) return void res.status(400).json({ error: error.message });

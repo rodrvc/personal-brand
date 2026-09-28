@@ -4,8 +4,7 @@ import {
   type CarouselDocument,
   type ValidateDocumentResult,
 } from "../../../system/ig-carousel/carousel-document.js";
-import { loadIndex } from "../../../system/assets/index.js";
-
+import { loadIndexCached } from "./asset-index-cache.js";
 import { assetExistsFactory } from "./render-context.js";
 import type { ProfileStore } from "./profile-store.js";
 
@@ -38,7 +37,7 @@ export function readDocumentRaw(store: ProfileStore, carouselId: string): unknow
 
 export function validateAgainstProfile(store: ProfileStore, doc: unknown): ValidateDocumentResult {
   const brand = loadBrand(store.roots.profileDir);
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   return validateDocument(doc, { brand, assetExists: assetExistsFactory(index) });
 }
 

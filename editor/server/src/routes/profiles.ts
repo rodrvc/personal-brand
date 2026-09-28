@@ -8,6 +8,7 @@ import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-d
 import { updateEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
+import { invalidateAssetIndex } from "../asset-index-cache.js";
 import {
   documentExists,
   DocumentStoreError,
@@ -350,6 +351,7 @@ function approveNewlyPinnedAssets(
     const wasPinned = previousSlide?.background?.pinned ?? false;
     if (background.mode === "asset" && background.pinned && !wasPinned) {
       updateEntry(store.roots.profileDir, background.assetId, { status: "approved" });
+      invalidateAssetIndex(store.roots.profileDir);
     }
 
     for (const object of slide.objects) {
@@ -361,6 +363,7 @@ function approveNewlyPinnedAssets(
       const objectWasPinned = previousObject?.pinned ?? false;
       if (!objectWasPinned) {
         updateEntry(store.roots.profileDir, object.assetId, { status: "approved" });
+        invalidateAssetIndex(store.roots.profileDir);
       }
     }
   });

@@ -7,10 +7,11 @@ import type { Browser } from "playwright";
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import type { LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
 import { resolveOutputSubfolder } from "../../../../system/ig-carousel/profile.js";
-import { hashContent, loadIndex, updateEntry } from "../../../../system/assets/index.js";
+import { hashContent, updateEntry } from "../../../../system/assets/index.js";
 
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
 import { buildExportRenderContext } from "../render-context.js";
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { readValidatedDocumentRevision, writeDocumentThroughRevision } from "../document-store.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
 import { ProfileStore } from "../profile-store.js";
@@ -214,7 +215,7 @@ async function runExportBody(store: ProfileStore, doc: CarouselDocument, revisio
   try {
     const brand = loadBrand(store.roots.profileDir);
     const template = resolveDocumentTemplate(store, brand, doc);
-    const index = loadIndex(store.roots.profileDir);
+    const index = loadIndexCached(store.roots.profileDir);
     const assetExists = (assetId: string) => index.entries.some((e) => e.id === assetId);
 
     const { version, relDir } = await reserveVersionDir(store, doc.id);
@@ -271,6 +272,7 @@ async function runExportBody(store: ProfileStore, doc: CarouselDocument, revisio
       const entry = index.entries.find((e) => e.id === assetId);
       if (entry && entry.status === "candidate") {
         updateEntry(store.roots.profileDir, assetId, { status: "approved" });
+        invalidateAssetIndex(store.roots.profileDir);
       }
     }
     if (doc.status === "draft") {

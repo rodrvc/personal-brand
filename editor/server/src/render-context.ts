@@ -3,9 +3,10 @@ import { extname } from "node:path";
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import type { FontFace } from "../../../system/ig-carousel/document.js";
 import type { FreeLayoutRenderContext } from "../../../system/ig-carousel/templates/free-layout.js";
-import { loadIndex, type AssetIndexFile } from "../../../system/assets/index.js";
+import type { AssetIndexFile } from "../../../system/assets/index.js";
 import { pickLogo } from "../../../system/assets/logo.js";
 
+import { loadIndexCached } from "./asset-index-cache.js";
 import type { ProfileStore } from "./profile-store.js";
 
 /**
@@ -66,7 +67,7 @@ export function buildRenderContext(
   brand: BrandTokens,
   background: { mode: "color"; colorKey: string } | { mode: "asset"; assetId: string },
 ): FreeLayoutRenderContext {
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   const bgHex = backgroundColorHexFor(brand, background);
   const picked = pickLogo(index, bgHex);
 
@@ -95,7 +96,7 @@ export function buildExportRenderContext(
   brand: BrandTokens,
   background: { mode: "color"; colorKey: string } | { mode: "asset"; assetId: string },
 ): FreeLayoutRenderContext {
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   const bgHex = backgroundColorHexFor(brand, background);
   const picked = pickLogo(index, bgHex);
 
