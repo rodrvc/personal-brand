@@ -1,17 +1,14 @@
 .picker {
-  max-width: 1040px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 48px 24px;
+  padding: clamp(48px, 7vw, 96px) clamp(24px, 5vw, 64px) 72px;
 }
 
-/* A route title is a display heading: size and negative tracking carry it, not weight. */
-.picker-title {
-  font-family: var(--ui-display);
-  font-weight: 400;
-  letter-spacing: -0.04em;
-  color: var(--ui-head);
-  font-size: 22px;
-  margin: 0 0 18px;
+/* Kicker + display title, closed by a hairline rule like the reference's section intros. */
+.picker-header {
+  padding-bottom: 32px;
+  margin-bottom: 36px;
+  border-bottom: 1px solid var(--ui-line);
 }
 
 .picker-error {
@@ -19,40 +16,64 @@
 }
 
 .picker-hint {
-  color: var(--ui-ink-3);
+  color: var(--ui-ink-2);
 }
 
 .brand-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
+  gap: 20px;
   /* Default `stretch` would pad every card up to its row's tallest neighbor — exactly what makes a cover-less disabled card read as a big empty box. Each card keeps its own intrinsic height instead; the columns still line up. */
   align-items: start;
 }
 
 /*
- * The chrome stays neutral here — hairline border, paper surface, 3px
- * radius, --ui-transition. Whatever color a brand's card carries lives
+ * The chrome stays neutral here — translucent paper, hairline border, 12px
+ * radius and the chrome's own short accent bar on the top edge (it grows
+ * to full width on hover). Whatever color a brand's card carries lives
  * entirely inside the cover/swatches/wordmark, never on the card shell
  * itself.
  */
 .brand-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
   color: var(--ui-ink);
   text-decoration: none;
   overflow: hidden;
   transition: var(--ui-transition);
 }
 
+.brand-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  z-index: 1;
+  background: var(--ui-card-bar);
+  transform: scaleX(0.28);
+  transform-origin: left;
+  transition: transform 220ms var(--ui-ease);
+}
+
 .brand-card:hover,
 .brand-card:focus-visible {
-  border-color: var(--ui-accent);
-  transform: translateY(-2px);
+  border-color: var(--ui-accent-line);
+  transform: translateY(-3px);
   box-shadow: var(--ui-shadow-md);
+}
+
+.brand-card:hover::after,
+.brand-card:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.brand-card:focus-visible {
+  outline-offset: 4px;
+  border-radius: var(--ui-radius-card);
 }
 
 .brand-card:hover .brand-card-cover-img {
@@ -71,7 +92,7 @@
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: var(--ui-transition);
+  transition: transform 480ms var(--ui-ease);
 }
 
 /* A logo asset floats over the cover instead of replacing it, so the cover still shows the brand's actual work. */
@@ -88,14 +109,14 @@
 .brand-card-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px 14px;
+  gap: 10px;
+  padding: 16px 18px 18px;
 }
 
 .brand-card-wordmark {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 400;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--ui-head);
   line-height: 1.2;
   /* A brand font can push its own line height/metrics; clamp to two lines rather than let a display font blow out card height. */
@@ -111,10 +132,11 @@
 }
 
 .brand-card-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: var(--ui-radius-sm);
-  border: 1px solid rgb(0 0 0 / 0.08);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  /* An outer hairline in the chrome's own line colour, so a swatch that matches the card (dark on dark, white on paper) still shows its edge. */
+  box-shadow: 0 0 0 1px var(--ui-line);
   flex-shrink: 0;
 }
 
@@ -124,9 +146,11 @@
   gap: 10px;
   font-family: var(--ui-mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ui-ink-3);
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .brand-card-disabled {
@@ -142,6 +166,10 @@
   transform: none;
   box-shadow: none;
   border-color: var(--ui-line);
+}
+
+.brand-card-disabled::after {
+  display: none;
 }
 
 .brand-card-hint {

@@ -98,7 +98,10 @@ export function CarouselListRoute() {
             <Link to={`/${slug}`} className="carousel-list-back">
               ← {slug}
             </Link>
-            <h1 className="carousel-list-title">{t("carouselList.title", { slug })}</h1>
+            <p className="ui-kicker">{t("carouselList.kicker")}</p>
+            <h1 className="ui-display-title carousel-list-title">
+              {t("carouselList.title")} <em>{t("carouselList.titleAccent")}</em>
+            </h1>
           </div>
           {/*
            * No inline spinner here while `creating`: the full-area

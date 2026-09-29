@@ -101,6 +101,7 @@ export function BrandHomeRoute() {
             <Link to="/" className="brand-home-back">
               {t("brandHome.back")}
             </Link>
+            <p className="ui-kicker">{t("brandHome.kicker")}</p>
             <h1 className="brand-home-wordmark" style={card?.logoFont ? { fontFamily: card.logoFont } : undefined}>
               {wordmark}
             </h1>
@@ -120,7 +121,7 @@ export function BrandHomeRoute() {
             {showListLoader && <SheetLoader caption={t("brandHome.loadingCaption")} accentColor={accentColor} />}
 
             {counts && (
-              <div className="brand-home-summary">
+              <div className="brand-home-summary ui-reveal">
                 <Link to={`/${slug}/carousels?status=draft`} className="brand-home-figure">
                   <span className="brand-home-figure-value">{counts.draft}</span>
                   <span className="brand-home-figure-label">{t("carouselList.filter.draft")}</span>
@@ -142,7 +143,7 @@ export function BrandHomeRoute() {
                 {recentDrafts.length === 0 ? (
                   <p className="brand-home-hint">{t("brandHome.noDrafts")}</p>
                 ) : (
-                  <div className="brand-home-draft-grid">
+                  <div className="brand-home-draft-grid ui-reveal">
                     {recentDrafts.map((c) => (
                       <CarouselCoverCard key={c.id} slug={slug} carousel={c} accentColor={accentColor} size="large" />
                     ))}

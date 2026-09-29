@@ -93,7 +93,12 @@ export function ProfilePickerRoute() {
 
   return (
     <div className="picker">
-      <h1 className="picker-title">{t("profilePicker.title")}</h1>
+      <header className="picker-header ui-reveal">
+        <p className="ui-kicker">{t("profilePicker.kicker")}</p>
+        <h1 className="ui-display-title picker-title">
+          {t("profilePicker.title")} <em>{t("profilePicker.titleAccent")}</em>
+        </h1>
+      </header>
       {error && <p className="picker-error">{error}</p>}
       {showLoader && <SheetLoader caption={t("profilePicker.loading")} />}
       {/* Loaded content waits for the loader's minimum-show tail, so the two never paint together. */}
@@ -101,7 +106,7 @@ export function ProfilePickerRoute() {
         <p className="picker-hint">{t("profilePicker.empty")}</p>
       )}
       {!showLoader && profiles && profiles.length > 0 && (
-        <div className="brand-card-grid">
+        <div className="brand-card-grid ui-reveal">
           {profiles.map((profile) =>
             profile.hasBrand ? (
               <BrandCard key={profile.slug} profile={profile} />

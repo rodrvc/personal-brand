@@ -34,6 +34,7 @@ export const es = {
 
   // Brand home dashboard (routes/BrandHomeRoute.tsx)
   "brandHome.back": "← Perfiles",
+  "brandHome.kicker": "Panel de marca",
   "brandHome.loadingCaption": "Cargando panel",
   "brandHome.continueEditing": "Seguir editando",
   "brandHome.noDrafts": "No hay borradores en curso.",
@@ -42,7 +43,9 @@ export const es = {
   "brandHome.allCarousels": "Ver todos los carruseles →",
 
   // Profile picker (routes/ProfilePickerRoute.tsx)
-  "profilePicker.title": "Perfiles",
+  "profilePicker.kicker": "Editor de carruseles",
+  "profilePicker.title": "Elige una",
+  "profilePicker.titleAccent": "marca",
   "profilePicker.loading": "Cargando perfiles",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
@@ -51,7 +54,9 @@ export const es = {
   "profilePicker.carousels": "{count} carruseles",
 
   // Carousel list (routes/CarouselListRoute.tsx)
-  "carouselList.title": "{slug} · Carruseles",
+  "carouselList.kicker": "Archivo de la marca",
+  "carouselList.title": "Todos los",
+  "carouselList.titleAccent": "carruseles",
   "carouselList.new": "Nuevo carrusel",
   "carouselList.empty": "Este perfil aún no tiene carruseles.",
   "carouselList.emptyFiltered": "Ningún carrusel tiene este estado.",
