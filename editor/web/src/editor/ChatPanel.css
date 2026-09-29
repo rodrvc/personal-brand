@@ -2,7 +2,9 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--ui-surface);
+  background: var(--ui-glass);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   border-right: 1px solid var(--ui-line);
   font-size: 13px;
 }
@@ -13,14 +15,32 @@
   align-items: center;
   gap: 10px;
   height: 100%;
-  padding: 14px 0;
+  padding: 16px 0;
   color: var(--ui-ink-2);
+  transition: var(--ui-transition);
+}
+
+.chat-rail:hover {
+  color: var(--ui-accent-ink);
+}
+
+/* A small accent dot above the rail label, like a kicker turned sideways. */
+.chat-rail::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  flex: none;
 }
 
 .chat-rail-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-weight: 600;
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .chat-rail-badge {
@@ -34,61 +54,123 @@
   font-weight: 600;
 }
 
+/* The panel title is a kicker: mono micro-label led by an accent dot. */
 .chat-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--ui-line);
-  font-weight: 600;
-  color: var(--ui-head);
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ui-ink-2);
+}
+
+.chat-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-head > span:first-child::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+}
+
+.chat-collapse {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--ui-radius-sm);
+  font-family: var(--ui-font);
+  font-size: 16px;
+  letter-spacing: 0;
+  color: var(--ui-ink-2);
+  transition: var(--ui-transition);
+}
+
+.chat-collapse:hover {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-ink);
 }
 
 .chat-log {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
+/* Bubbles: rounded 12px with one tucked corner on the speaker's side. */
 .chat-msg {
-  padding: 8px 10px;
-  border-radius: var(--ui-radius-sm);
+  padding: 9px 12px;
+  border-radius: 12px;
   white-space: pre-wrap;
   margin: 0;
+  max-width: 88%;
+  line-height: 1.45;
 }
 
 .chat-msg--user {
   align-self: flex-end;
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-ink);
+  background: var(--ui-bubble-out);
+  color: var(--ui-bubble-out-fg);
+  border-bottom-right-radius: 4px;
+}
+
+.chat-msg--user .chat-ref {
+  color: inherit;
+  opacity: 0.85;
 }
 
 .chat-msg--assistant {
-  background: var(--ui-line-soft);
+  align-self: flex-start;
+  background: var(--ui-bubble-in);
   color: var(--ui-ink);
+  border-bottom-left-radius: 4px;
 }
 
-.chat-hint,
-.chat-event {
-  color: var(--ui-ink-3);
-  font-size: 12px;
+.chat-hint {
+  color: var(--ui-ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
   margin: 0;
 }
 
+/* Run events are log lines: micro-label register, centred between bubbles. */
+.chat-event {
+  color: var(--ui-ink-3);
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  margin: 2px 0;
+}
+
 .chat-proposal {
-  margin: 0 10px 10px;
-  padding: 10px 12px;
+  margin: 0 12px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--ui-warn-line);
-  border-radius: var(--ui-radius-sm);
+  border-radius: var(--ui-radius-panel);
   background: var(--ui-warn-soft);
 }
 
 .chat-proposal h3 {
-  margin: 0 0 6px;
-  font-size: 12px;
+  margin: 0 0 8px;
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--ui-warn);
 }
 
@@ -125,17 +207,27 @@
 
 .chat-proposal-buttons button,
 .chat-compose button {
-  padding: 6px 12px;
+  padding: 7px 14px;
   border-radius: var(--ui-radius-btn);
   border: 1px solid var(--ui-line);
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
+  font-weight: 500;
+  transition: var(--ui-transition);
 }
 
+/* The chat's commit actions are the one filled control in the panel: ink
+   fill, the reference's hero button. */
 .chat-proposal-buttons .chat-apply,
 .chat-compose button {
-  background: var(--ui-accent);
-  border-color: var(--ui-accent);
-  color: var(--ui-white);
+  background: var(--ui-btn-bg);
+  border-color: var(--ui-btn-bg);
+  color: var(--ui-btn-fg);
+}
+
+.chat-proposal-buttons .chat-apply:hover:not(:disabled),
+.chat-compose button:hover:not(:disabled) {
+  background: var(--ui-btn-bg-hover);
+  border-color: var(--ui-btn-bg-hover);
 }
 
 .chat-proposal-buttons button:disabled,
@@ -151,21 +243,30 @@
 
 .chat-compose {
   display: flex;
+  align-items: flex-end;
   gap: 8px;
-  padding: 10px;
+  padding: 12px;
   border-top: 1px solid var(--ui-line);
 }
 
 .chat-compose textarea {
   flex: 1;
-  min-height: 56px;
+  min-height: 64px;
   resize: vertical;
   font: inherit;
-  padding: 6px 8px;
+  line-height: 1.5;
+  padding: 9px 11px;
   border: 1px solid var(--ui-line);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface);
+  border-radius: var(--ui-radius-panel);
+  background: var(--ui-glass-card);
   color: var(--ui-ink);
+  transition: var(--ui-transition);
+}
+
+.chat-compose textarea:focus {
+  outline: none;
+  border-color: var(--ui-p400);
+  box-shadow: 0 0 0 3px var(--ui-accent-soft);
 }
 
 .chat-refs {
