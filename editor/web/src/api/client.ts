@@ -109,15 +109,18 @@ export function putCarousel(
 }
 
 /**
- * Creates a new, empty carousel (editor-ui spec's "New carousel opens
- * empty"): inert — no AI call, no cost, no job id. `title` is optional;
- * the server falls back to the carousel id when omitted. `templateId: null`
- * is the explicit "sin template" choice — distinct from omitting the field,
- * which the server reads as its default template.
+ * Creates a new carousel. Inert — no AI call, no cost, no job id. `title`
+ * is optional; the server falls back to the carousel id when omitted.
+ * `templateId: null` is the explicit "sin template" choice — distinct from
+ * omitting the field, which the server reads as its default template.
+ * `blank: true` (what the editor's own "Nuevo carrusel" button sends) is a
+ * stronger request that overrides `templateId`: the free template (no
+ * footer, no pagination) plus one blank slide, instead of the historical
+ * zero-slide `explicativo` default.
  */
 export function createCarousel(
   slug: string,
-  body: { title?: string; templateId?: string | null; id?: string },
+  body: { title?: string; templateId?: string | null; id?: string; blank?: boolean },
 ): Promise<CreateCarouselResponse> {
   return request(`/profiles/${slug}/carousels`, {
     method: "POST",
