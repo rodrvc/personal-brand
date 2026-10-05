@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { assetFileUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
+import { assetThumbUrl, listAssets, listOutputs, patchAsset, uploadAsset } from "../../api/client";
 import type { AssetEntry, AssetKind, CarouselDocument, OutputVersion, StatsResponse } from "../../api/types";
 import { addLibraryAssetObject, setBackgroundAsset } from "../mutations";
 import { ASSET_KIND_LABEL_KEY, assetKindLabel, groupAssetsByKind, isRenderableImage } from "./asset-grouping";
@@ -26,6 +26,23 @@ function usedAssetIds(doc: CarouselDocument): Set<string> {
   return ids;
 }
 
+/** The file glyph a tile shows for a non-image asset — and for an image whose thumbnail failed to load. */
+function AssetTileFile({ fileName }: { fileName?: string }) {
+  return (
+    <span className="asset-tile-file">
+      <span className="asset-tile-file-glyph">📄</span>
+      {fileName}
+    </span>
+  );
+}
+
+/** A lazy thumbnail tile image that falls back to the file glyph if the thumbnail can't be served. */
+function AssetTileImage({ src, fileName }: { src: string; fileName?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <AssetTileFile fileName={fileName} />;
+  return <img className="asset-tile-img" src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+}
+
 /** Chat references feed the chat only; they are never library material. */
 function isLibraryEntry(entry: AssetEntry): boolean {
   return entry.origin !== "reference";
@@ -36,6 +53,11 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
   const [outputs, setOutputs] = useState<OutputVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Collapsed by default: candidates are generated, never-placed pieces
+  // (the owner's "reclassify or ignore" queue), not material someone is
+  // about to drag into a slide — opening the tab must not download every
+  // one of them (often the bulk of a profile's assets) unless asked.
+  const [candidatesExpanded, setCandidatesExpanded] = useState(false);
 
   const reloadAssets = useCallback(() => {
     listAssets(slug)
@@ -176,19 +198,13 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
                 <div
                   key={entry.id}
                   className={`asset-tile ${used.has(entry.id) ? "used" : ""}`}
-                  style={
-                    renderable
-                      ? { backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }
-                      : undefined
-                  }
                   title={entry.tags?.join(", ") ?? entry.id}
                   onClick={() => handleAddToSlide(entry)}
                 >
-                  {!renderable && (
-                    <span className="asset-tile-file">
-                      <span className="asset-tile-file-glyph">📄</span>
-                      {fileName}
-                    </span>
+                  {renderable ? (
+                    <AssetTileImage src={assetThumbUrl(slug, entry.path.replace(/^assets\//, ""))} fileName={fileName} />
+                  ) : (
+                    <AssetTileFile fileName={fileName} />
                   )}
                   {entry.origin === "ai" && <span className="origin-tag">{t("common.originAi")}</span>}
                   {used.has(entry.id) && <span className="usage-count">↻{entry.usageCount ?? 1}</span>}
@@ -213,40 +229,51 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
 
       {candidates.length > 0 && (
         <div className="props-card">
-          <div className="props-card-heading">{t("bucketPane.candidatesHeading")}</div>
-          <div className="asset-grid">
-            {candidates.map((entry) => (
-              <div
-                key={entry.id}
-                className="asset-tile"
-                style={{ backgroundImage: `url(${assetFileUrl(slug, entry.path.replace(/^assets\//, ""))})` }}
-              >
-                <span className="origin-tag">{t("common.originAi")}</span>
+          <button
+            type="button"
+            className="props-card-heading bucket-candidates-toggle"
+            onClick={() => setCandidatesExpanded((prev) => !prev)}
+            aria-expanded={candidatesExpanded}
+          >
+            {t("bucketPane.candidatesHeading", { count: candidates.length })}
+            <span className="bucket-candidates-chevron" aria-hidden="true">
+              {candidatesExpanded ? "▾" : "▸"}
+            </span>
+          </button>
+          {candidatesExpanded && (
+            <>
+              <div className="asset-grid">
+                {candidates.map((entry) => (
+                  <div key={entry.id} className="asset-tile">
+                    <AssetTileImage src={assetThumbUrl(slug, entry.path.replace(/^assets\//, ""))} />
+                    <span className="origin-tag">{t("common.originAi")}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <p className="props-hint">{t("bucketPane.candidatesHint")}</p>
-          <div className="props-row">
-            <select
-              className="ui-input"
-              onChange={(e) => {
-                const [id, kind] = e.target.value.split("::");
-                if (id && kind) void handleReclassify(candidates.find((c) => c.id === id)!, kind as AssetKind);
-                e.target.selectedIndex = 0;
-              }}
-            >
-              <option value="">{t("bucketPane.reclassifyPlaceholder")}</option>
-              {candidates.flatMap((c) =>
-                (Object.keys(ASSET_KIND_LABEL_KEY) as AssetKind[])
-                  .filter((k) => k !== "unclassified")
-                  .map((k) => (
-                    <option key={`${c.id}::${k}`} value={`${c.id}::${k}`}>
-                      {c.id.slice(0, 8)} → {assetKindLabel(k)}
-                    </option>
-                  )),
-              )}
-            </select>
-          </div>
+              <p className="props-hint">{t("bucketPane.candidatesHint")}</p>
+              <div className="props-row">
+                <select
+                  className="ui-input"
+                  onChange={(e) => {
+                    const [id, kind] = e.target.value.split("::");
+                    if (id && kind) void handleReclassify(candidates.find((c) => c.id === id)!, kind as AssetKind);
+                    e.target.selectedIndex = 0;
+                  }}
+                >
+                  <option value="">{t("bucketPane.reclassifyPlaceholder")}</option>
+                  {candidates.flatMap((c) =>
+                    (Object.keys(ASSET_KIND_LABEL_KEY) as AssetKind[])
+                      .filter((k) => k !== "unclassified")
+                      .map((k) => (
+                        <option key={`${c.id}::${k}`} value={`${c.id}::${k}`}>
+                          {c.id.slice(0, 8)} → {assetKindLabel(k)}
+                        </option>
+                      )),
+                  )}
+                </select>
+              </div>
+            </>
+          )}
         </div>
       )}
 
