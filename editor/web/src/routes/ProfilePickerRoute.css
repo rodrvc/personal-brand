@@ -149,28 +149,3 @@
   font-weight: 500;
   color: var(--ui-ink-3);
 }
-
-.brand-card-skeleton {
-  pointer-events: none;
-}
-
-.brand-card-skeleton-line {
-  height: 12px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-g100);
-}
-
-.brand-card-skeleton-shimmer {
-  background: linear-gradient(100deg, var(--ui-g100) 30%, var(--ui-g200) 50%, var(--ui-g100) 70%);
-  background-size: 200% 100%;
-  animation: brand-card-shimmer 1.3s ease-in-out infinite;
-}
-
-@keyframes brand-card-shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
-}
