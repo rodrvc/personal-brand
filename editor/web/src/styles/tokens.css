@@ -217,6 +217,29 @@ button {
   border-radius: var(--ui-radius-sm);
 }
 
+/*
+ * Base text input, shared across editor panels (SelectionPane, SlidePane,
+ * BucketPane, GenerateImageField) — lives here rather than in any one
+ * component's CSS file so it stays available regardless of which route or
+ * panel happens to be mounted first.
+ */
+.ui-input {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--ui-ink);
+  font-family: inherit;
+  width: 100%;
+}
+
+.ui-input:focus {
+  outline: none;
+  border-color: var(--ui-p400);
+  box-shadow: 0 0 0 3px var(--ui-accent-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

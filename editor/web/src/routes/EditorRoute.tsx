@@ -25,7 +25,7 @@ interface EditorRouteProps {
   onToggleTheme: () => void;
 }
 
-/** Router state NewCarouselDialog/CarouselListRoute hand off on navigate — see that route's comment. Optional: a direct URL visit or a page reload has none, and the effect below falls back to fetching. */
+/** Router state CarouselListRoute hands off on navigate after creating a carousel — see that route's comment. Optional: a direct URL visit or a page reload has none, and the effect below falls back to fetching. */
 interface EditorRouteLocationState {
   doc?: CarouselDocument;
 }
@@ -51,7 +51,7 @@ export function EditorRoute({ theme, onToggleTheme }: EditorRouteProps) {
     setError(null);
 
     // A freshly created carousel arrives with its document already in hand
-    // (NewCarouselDialog's create call) — skip the redundant GET and its
+    // (CarouselListRoute's create call) — skip the redundant GET and its
     // flash, but still fetch brand/template/stats, which the create
     // response doesn't carry.
     const docPromise = seededDoc ? Promise.resolve(seededDoc) : getCarousel(slug, id);
