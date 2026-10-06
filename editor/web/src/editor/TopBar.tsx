@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { BrandTokens, CarouselDocument } from "../api/types";
 import { t } from "../i18n";
 import type { LocaleKey } from "../i18n";
+import type { Tool } from "./Editor";
 import "./TopBar.css";
 
 interface TopBarProps {
@@ -15,6 +16,9 @@ interface TopBarProps {
   onDeleteSelection: () => void;
   onOpenAssets: () => void;
   onAddText: () => void;
+  /** Active editing tool: "brush" paints a mask over an image (issue #85), "select" is the default. */
+  tool: Tool;
+  onToolChange: (tool: Tool) => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -44,6 +48,8 @@ export function TopBar({
   onDeleteSelection,
   onOpenAssets,
   onAddText,
+  tool,
+  onToolChange,
   canUndo,
   canRedo,
   onUndo,
@@ -92,6 +98,15 @@ export function TopBar({
       </button>
       <button className="topbar-tool" title={t("topbar.tool.addAsset")} aria-label={t("topbar.tool.addAsset")} onClick={onOpenAssets}>
         ▧
+      </button>
+      <button
+        className={`topbar-tool ${tool === "brush" ? "on" : ""}`}
+        title={t("topbar.tool.brush")}
+        aria-label={t("topbar.tool.brush")}
+        aria-pressed={tool === "brush"}
+        onClick={() => onToolChange(tool === "brush" ? "select" : "brush")}
+      >
+        🖌
       </button>
       <div className="topbar-sep" />
       <button className="topbar-tool" title={t("topbar.tool.undo")} aria-label={t("topbar.tool.undo")} onClick={onUndo} disabled={!canUndo}>

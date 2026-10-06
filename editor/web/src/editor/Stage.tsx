@@ -7,6 +7,9 @@ import type { CarouselDocument as Doc } from "../api/types";
 import type { Selection } from "./geometry";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { t } from "../i18n";
+import { BrushOverlay } from "./BrushOverlay";
+import type { useBrushMask } from "./brush/useBrushMask";
+import type { Tool } from "./Editor";
 import "./Stage.css";
 
 const THUMB_WIDTH = 84;
@@ -28,6 +31,8 @@ interface StageProps {
   onAddSlide: (colorKey: string) => void;
   /** Removes the active slide. Undefined active slide → the strip hides the control rather than disabling it. */
   onDeleteSlide: () => void;
+  tool: Tool;
+  brush: ReturnType<typeof useBrushMask>;
 }
 
 /** One thumbnail in the filmstrip. A real PNG render, with a number/kind fallback badge if the image fails to load (e.g. a slide whose render errors). */
@@ -104,6 +109,8 @@ export function Stage({
   fallbackColorKey,
   onAddSlide,
   onDeleteSlide,
+  tool,
+  brush,
 }: StageProps) {
   const activeSlide = doc.slides[activeIndex];
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -201,18 +208,31 @@ export function Stage({
                   }}
                   onLoad={() => setIframeLoadTick((t) => t + 1)}
                 />
-                <SelectionOverlay
-                  template={template}
-                  brand={brand}
-                  slide={activeSlide}
-                  canvas={doc.canvas}
-                  scale={scale}
-                  selection={selection}
-                  onSelectionChange={onSelectionChange}
-                  onDocUpdate={onDocUpdate}
-                  iframeRef={iframeRef}
-                  iframeLoadTick={iframeLoadTick}
-                />
+                {tool === "brush" ? (
+                  <BrushOverlay
+                    slide={activeSlide}
+                    template={template}
+                    scale={scale}
+                    width={displayWidth}
+                    height={displayHeight}
+                    iframeRef={iframeRef}
+                    iframeLoadTick={iframeLoadTick}
+                    brush={brush}
+                  />
+                ) : (
+                  <SelectionOverlay
+                    template={template}
+                    brand={brand}
+                    slide={activeSlide}
+                    canvas={doc.canvas}
+                    scale={scale}
+                    selection={selection}
+                    onSelectionChange={onSelectionChange}
+                    onDocUpdate={onDocUpdate}
+                    iframeRef={iframeRef}
+                    iframeLoadTick={iframeLoadTick}
+                  />
+                )}
               </div>
             </div>
           </div>

@@ -334,6 +334,23 @@ system/assets/    biblioteca de piezas de marca (compartida con el motor de reel
 `editor/server` importa directo — ya no hay copia sincronizada tipo
 `sync-core.mjs` para este módulo (eso sigue existiendo solo dentro de `app/`).
 
+## Brush mask (issue #85, slice 1) — 2026-09-27
+
+Modo pincel (`editor/web/src/editor/brush/`) para marcar una región sobre una
+imagen de la lámina activa. Solo UI: no hay OCR ni llamada a modelo todavía;
+slice 2 consume el resultado.
+
+- **La máscara vive solo en estado del editor**, nunca en el documento del
+  carrusel ni en disco (`useBrushMask`, expuesta vía `confirmedMask`). Igual
+  que `pinned`/`source`, esto es intencional: no es una pieza del carrusel.
+- **Trazos guardados en el espacio de píxeles naturales de la imagen**
+  (`mask.ts`), no en px de canvas ni de pantalla — así la máscara sobrevive
+  a un cambio de zoom/fit sin recalcular nada, solo se reproyecta al pintar.
+- **El pincel tiene su propio undo (Ctrl/Cmd+Z deshace el último trazo)**
+  mientras está activo, en vez de compartir el undo del documento: la
+  máscara no es parte del documento, así que no tiene sentido que comparta
+  su pila (`useDocumentEditor.ts`'s `setUndoSuppressed`).
+
 ## Qué funciona hoy
 
 - Prompt → plan de IA por lámina y por hueco, biblioteca primero

@@ -1,0 +1,30 @@
+.brush-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-line);
+  font-size: 12px;
+}
+
+.brush-controls-label {
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ui-ink-3);
+  flex: none;
+}
+
+.brush-controls-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-ink-2);
+  flex: none;
+}
+
+.brush-controls-spacer {
+  flex: 1;
+}

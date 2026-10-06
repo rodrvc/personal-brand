@@ -1,0 +1,18 @@
+.brush-overlay {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
+
+.brush-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /*
+   * Read back via `getComputedStyle` in BrushOverlay.tsx (never a hex
+   * literal in TS): a semi-transparent tint of the chrome's own accent, not
+   * a brand color — this paints on top of the canvas iframe but is chrome,
+   * same reasoning as `--ui-overlay-mark` in SelectionOverlay.css.
+   */
+  --brush-fill: color-mix(in srgb, var(--ui-accent) 45%, transparent);
+}
