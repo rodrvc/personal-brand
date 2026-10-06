@@ -452,6 +452,66 @@ const tests: Array<[string, () => Promise<void>]> = [
   ],
 
   [
+    "GET /api/profiles/:slug/carousels lists every carousel newest-first without paying full document validation",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${COVER_SLUG}/carousels`);
+      assert.equal(status, 200);
+      const { carousels } = body as { carousels: Array<{ id: string; status: string; updatedAt: string }> };
+      // All three fixture carousels, including ASSET_UNRESOLVABLE_ID — its
+      // assetId doesn't resolve to anything, which the old
+      // readValidatedDocument-based listing would have rejected outright
+      // ("unknown asset id") and silently dropped from this list. The
+      // lightweight raw listing this route now uses only checks the five
+      // fields it actually displays, so a document with an unrelated bad
+      // reference still shows up (its own carousel page still 400s if
+      // opened, unaffected by this listing).
+      assert.deepEqual(
+        carousels.map((c) => c.id),
+        [ASSET_UNRESOLVABLE_ID, EMPTY_NEWEST_ID, CONTENT_OLDER_ID],
+        "newest-first by updatedAt, all three present",
+      );
+      assert.ok(
+        carousels.every((c) => c.status === "draft"),
+        "status must be read correctly for every entry",
+      );
+    },
+  ],
+
+  [
+    "the carousel listing and the brand card skip a document whose id is not its directory name or whose updatedAt does not parse, and agree on the count",
+    async () => {
+      const slug = "header-rules";
+      const dir = join(root, slug);
+      mkdirSync(dir, { recursive: true });
+      cpSync(join(coverDir, "brand.json"), join(dir, "brand.json"));
+      const writeCarousel = (dirName: string, doc: unknown) => {
+        mkdirSync(join(dir, "carousels", dirName), { recursive: true });
+        writeFileSync(join(dir, "carousels", dirName, "carousel.json"), JSON.stringify(doc));
+      };
+      writeCarousel("valid-one", minimalCarouselDoc("valid-one", "2026-09-10T00:00:00.000Z", []));
+      // Copied folder: its document still carries the original's id, so a
+      // listing that trusted `raw.id` would link to (and count) the wrong carousel.
+      writeCarousel("copied-folder", minimalCarouselDoc("valid-one", "2026-09-11T00:00:00.000Z", []));
+      writeCarousel("bad-date", minimalCarouselDoc("bad-date", "not a date", []));
+
+      const list = await get(`/api/profiles/${slug}/carousels`);
+      assert.equal(list.status, 200);
+      const { carousels } = list.body as { carousels: Array<{ id: string }> };
+      assert.deepEqual(
+        carousels.map((c) => c.id),
+        ["valid-one"],
+        "only the carousel whose id matches its folder and whose updatedAt parses is listed",
+      );
+
+      const listing = await get("/api/profiles");
+      const { profiles } = listing.body as { profiles: Array<{ slug: string; card?: { carouselCount: number } }> };
+      const card = profiles.find((p) => p.slug === slug)?.card;
+      assert.ok(card, "header-rules profile must carry a card summary");
+      assert.equal(card!.carouselCount, carousels.length, "card count must agree with the listing");
+    },
+  ],
+
+  [
     "GET /api/profiles degrades a broken brand.json to a missing card instead of 500ing",
     async () => {
       const { status, body } = await get("/api/profiles");
