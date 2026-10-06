@@ -41,6 +41,37 @@
   margin: 4px 0 0;
 }
 
+.carousel-list-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.carousel-filter-chip {
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 5px 11px;
+  border-radius: var(--ui-radius-pill);
+  border: 1px solid var(--ui-line);
+  background: var(--ui-surface);
+  color: var(--ui-ink-3);
+  transition: var(--ui-transition);
+}
+
+.carousel-filter-chip:hover {
+  border-color: var(--ui-accent-line);
+  color: var(--ui-ink);
+}
+
+.carousel-filter-chip.active {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-ink);
+}
+
 .carousel-list-error {
   color: var(--ui-danger);
 }

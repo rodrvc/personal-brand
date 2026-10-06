@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { createCarousel, getBrand, listCarousels } from "../api/client";
+import { getBrand, listCarousels } from "../api/client";
 import type { CarouselSummary } from "../api/types";
 import { Button } from "../components/Button";
 import { SheetLoader } from "../components/SheetLoader";
+import { useCreateCarousel } from "../hooks/useCreateCarousel";
 import { useDelayedVisible } from "../hooks/useDelayedVisible";
 import { t } from "../i18n";
 import type { LocaleKey } from "../i18n";
@@ -21,18 +22,33 @@ function statusLabel(status: CarouselSummary["status"]): string {
   return t(STATUS_LABEL_KEY[status]);
 }
 
+type StatusFilter = "all" | CarouselSummary["status"];
+
+const FILTER_CHIPS: Array<{ value: StatusFilter; label: LocaleKey }> = [
+  { value: "all", label: "carouselList.filter.all" },
+  { value: "draft", label: "carouselList.filter.draft" },
+  { value: "exported", label: "carouselList.filter.exported" },
+  { value: "published", label: "carouselList.filter.published" },
+];
+
+function isStatusFilter(value: string | null): value is CarouselSummary["status"] {
+  return value === "draft" || value === "exported" || value === "published";
+}
+
 export function CarouselListRoute() {
   const { slug } = useParams<{ slug: string }>();
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [carousels, setCarousels] = useState<CarouselSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
   // Best-effort only, for the loader's colour — a profile reaches this
   // route only once the picker already knows it has a brand.json, but a
   // failed fetch here still just falls back to the chrome's own accent
   // rather than breaking the list.
   const [accentColor, setAccentColor] = useState<string | undefined>(undefined);
+  const { creating, createError, handleCreate } = useCreateCarousel(slug, accentColor);
+
+  const rawStatus = searchParams.get("status");
+  const statusFilter: StatusFilter = isStatusFilter(rawStatus) ? rawStatus : "all";
 
   useEffect(() => {
     if (!slug) return;
@@ -65,40 +81,22 @@ export function CarouselListRoute() {
 
   if (!slug) return null;
 
-  // Creates the carousel directly with its defaults (a placeholder title,
-  // since the server requires one, and the engine default template) and
-  // navigates straight into the editor — the "Nuevo carrusel" modal this
-  // replaced (title/brand/template fields) asked for nothing the owner
-  // actually wanted to fill in up front: brand was always fixed to this
-  // profile, and the template can be picked, changed or dropped from the
-  // editor's own Templates tab.
-  async function handleCreate() {
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const { document } = await createCarousel(slug!, { title: t("carouselList.untitled") });
-      // Router state carries the just-created (empty) document straight
-      // to EditorRoute so it can skip its own fetch-and-flash — see
-      // EditorRoute's own comment. `creating` deliberately stays true
-      // across this navigation (never reset on the success path): the
-      // full-area loader below keeps showing right up to the moment this
-      // route unmounts, and EditorRoute picks up the exact same-looking
-      // loader immediately (its own `immediate` case) — one continuous
-      // load, not a flash of the table before the page changes.
-      navigate(`/${slug}/carousels/${document.id}`, { state: { doc: document, accentColor } });
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err));
-      setCreating(false);
-    }
+  function setStatusFilter(next: StatusFilter) {
+    const params = new URLSearchParams(searchParams);
+    if (next === "all") params.delete("status");
+    else params.set("status", next);
+    setSearchParams(params, { replace: true });
   }
+
+  const visibleCarousels = carousels?.filter((c) => statusFilter === "all" || c.status === statusFilter) ?? null;
 
   return (
     <div className="carousel-list-page">
       <div className="carousel-list">
         <header className="carousel-list-header">
           <div>
-            <Link to="/" className="carousel-list-back">
-              {t("carouselList.back")}
+            <Link to={`/${slug}`} className="carousel-list-back">
+              ← {slug}
             </Link>
             <h1 className="carousel-list-title">{t("carouselList.title", { slug })}</h1>
           </div>
@@ -113,6 +111,19 @@ export function CarouselListRoute() {
           </Button>
         </header>
 
+        <div className="carousel-list-filters" role="group" aria-label={t("carouselList.filterLabel")}>
+          {FILTER_CHIPS.map((chip) => (
+            <button
+              key={chip.value}
+              type="button"
+              className={`carousel-filter-chip${statusFilter === chip.value ? " active" : ""}`}
+              onClick={() => setStatusFilter(chip.value)}
+            >
+              {t(chip.label)}
+            </button>
+          ))}
+        </div>
+
         {error && <p className="carousel-list-error">{error}</p>}
         {createError && <p className="carousel-list-error">{createError}</p>}
 
@@ -122,10 +133,12 @@ export function CarouselListRoute() {
           <>
             {showListLoader && <SheetLoader caption={t("carouselList.loadingCaption")} accentColor={accentColor} />}
             {/* Loaded content waits for the loader's minimum-show tail, so the two never paint together. */}
-            {!showListLoader && carousels && carousels.length === 0 && (
-              <p className="carousel-list-hint">{t("carouselList.empty")}</p>
+            {!showListLoader && visibleCarousels && visibleCarousels.length === 0 && (
+              <p className="carousel-list-hint">
+                {statusFilter === "all" ? t("carouselList.empty") : t("carouselList.emptyFiltered")}
+              </p>
             )}
-            {!showListLoader && carousels && carousels.length > 0 && (
+            {!showListLoader && visibleCarousels && visibleCarousels.length > 0 && (
               <table className="carousel-table">
                 <thead>
                   <tr>
@@ -137,7 +150,7 @@ export function CarouselListRoute() {
                   </tr>
                 </thead>
                 <tbody>
-                  {carousels.map((c) => (
+                  {visibleCarousels.map((c) => (
                     <tr key={c.id}>
                       <td>{c.title || c.id}</td>
                       <td>

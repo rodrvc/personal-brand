@@ -70,6 +70,22 @@ export function profilesRouter(): Router {
     }
   });
 
+  /**
+   * Slug-scoped card summary (brand home dashboard) — same data as the
+   * `card` field `GET /api/profiles` attaches to each listing entry, but
+   * without paying for every other profile's cover/asset-index work just
+   * to read one brand's wordmark and font. Never 500s: `buildCardSummary`
+   * degrades to `card: undefined` for a profile with no/broken brand.json,
+   * same as the listing does.
+   */
+  router.get("/api/profiles/:slug/card", (req, res) => {
+    try {
+      res.json({ card: buildCardSummary(req.params.slug) });
+    } catch (error) {
+      handleStoreError(error, res);
+    }
+  });
+
   router.get("/api/profiles/:slug/brand", (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);

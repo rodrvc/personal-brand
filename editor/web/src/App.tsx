@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 
 import { ProfilePickerRoute } from "./routes/ProfilePickerRoute";
+import { BrandHomeRoute } from "./routes/BrandHomeRoute";
 import { CarouselListRoute } from "./routes/CarouselListRoute";
 import { EditorRoute } from "./routes/EditorRoute";
 import { useTheme } from "./hooks/useTheme";
@@ -23,6 +24,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/" element={<ProfilePickerRoute />} />
+      <Route path="/:slug" element={<BrandHomeRoute />} />
       <Route path="/:slug/carousels" element={<CarouselListRoute />} />
       <Route path="/:slug/carousels/:id" element={<EditorRoute theme={theme} onToggleTheme={toggleTheme} />} />
     </Routes>
