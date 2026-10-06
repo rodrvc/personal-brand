@@ -4,7 +4,11 @@
   padding: 48px 24px;
 }
 
+/* A route title is a display heading: size and negative tracking carry it, not weight. */
 .picker-title {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.04em;
   color: var(--ui-head);
   font-size: 22px;
   margin: 0 0 18px;
@@ -32,14 +36,13 @@
   background: var(--ui-surface);
   color: var(--ui-ink);
   text-decoration: none;
-  font-weight: 600;
+  font-weight: 400;
   transition: var(--ui-transition);
 }
 
 .picker-card:hover {
-  border-color: var(--ui-p400);
+  border-color: var(--ui-accent);
   color: var(--ui-head);
-  box-shadow: var(--ui-shadow-sm);
 }
 
 .picker-card-disabled {

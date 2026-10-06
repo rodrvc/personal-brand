@@ -8,7 +8,7 @@
   pointer-events: none;
   outline: 1.5px dashed var(--ui-lock);
   outline-offset: -2px;
-  border-radius: 3px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .overlay-zone-label {
@@ -20,7 +20,7 @@
   color: var(--ui-lock);
   background: rgb(0 0 0 / 0.5);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--ui-radius-sm);
   letter-spacing: 0.06em;
 }
 
@@ -32,13 +32,13 @@
 .overlay-object:hover {
   outline: 1.5px solid rgb(100 161 206 / 0.6);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .overlay-object.selected {
   outline: 2px solid var(--ui-p400);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .overlay-object.pinned {
@@ -76,7 +76,7 @@
   animation: pending-shimmer 1.3s ease-in-out infinite;
   outline: 1.5px dashed var(--ui-p400);
   outline-offset: -2px;
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
 @keyframes pending-shimmer {
@@ -99,7 +99,7 @@
 .overlay-zone.awaiting-image {
   outline: 1.5px dashed var(--ui-ink-3);
   outline-offset: -2px;
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .overlay-lock-badge {
@@ -122,7 +122,10 @@
   display: grid;
   place-items: center;
   font-size: 9px;
-  box-shadow: var(--ui-shadow-sm);
+  /* This badge floats over arbitrary rendered brand colors, not over paper,
+     so it keeps real elevation rather than a hairline that could vanish
+     against a dark slide background. */
+  box-shadow: var(--ui-shadow-md);
 }
 
 /*
@@ -149,7 +152,8 @@
   font-size: 10.5px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: var(--ui-shadow-sm);
+  /* Same reasoning as .overlay-pin-badge: this sits over the canvas art, not paper. */
+  box-shadow: var(--ui-shadow-md);
 }
 
 .overlay-handle {
@@ -159,7 +163,7 @@
   height: 8px;
   background: var(--ui-overlay-mark);
   border: 2px solid var(--ui-p500);
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
   cursor: nwse-resize;
 }
 
@@ -204,7 +208,7 @@
   resize: none;
   background: var(--ui-overlay-mark-soft);
   border: 1px solid var(--ui-p400);
-  border-radius: 2px;
+  border-radius: var(--ui-radius-sm);
   font-family: inherit;
   font-size: inherit;
   line-height: normal;

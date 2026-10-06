@@ -1,7 +1,7 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgb(15 23 42 / 0.45);
+  background: rgb(21 60 81 / 0.45);
   display: grid;
   place-items: center;
   z-index: 50;
@@ -18,8 +18,11 @@
   gap: 14px;
 }
 
+/* A dialog title is a display heading: size and negative tracking carry it, not weight. */
 .modal-title {
-  font-weight: 600;
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.04em;
   font-size: 15px;
   color: var(--ui-head);
 }

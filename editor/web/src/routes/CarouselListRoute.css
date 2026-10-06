@@ -37,7 +37,11 @@
   color: var(--ui-head);
 }
 
+/* A route title is a display heading: size and negative tracking carry it, not weight. */
 .carousel-list-title {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.04em;
   color: var(--ui-head);
   font-size: 20px;
   margin: 4px 0 0;
@@ -51,20 +55,23 @@
   color: var(--ui-ink-3);
 }
 
+/* A hairline border replaces the retired card-lift shadow. */
 .carousel-table {
   width: 100%;
   border-collapse: collapse;
   background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-card);
   overflow: hidden;
-  box-shadow: var(--ui-shadow-sm);
 }
 
 .carousel-table th {
   text-align: left;
+  font-family: var(--ui-mono);
   font-size: 10.5px;
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   color: var(--ui-ink-3);
   padding: 10px 14px;
   border-bottom: 1px solid var(--ui-line);
@@ -76,9 +83,13 @@
   font-size: 12.5px;
 }
 
+/* A status pill is a micro-label, the same register as the reference's level chips. */
 .carousel-status {
+  font-family: var(--ui-mono);
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   padding: 2px 8px;
   border-radius: var(--ui-radius-pill);
   background: var(--ui-g100);
@@ -93,7 +104,7 @@
 
 .carousel-open-link {
   color: var(--ui-accent-ink);
-  font-weight: 600;
+  font-weight: 500;
   text-decoration: none;
 }
 

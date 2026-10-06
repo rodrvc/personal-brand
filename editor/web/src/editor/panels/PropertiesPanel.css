@@ -32,7 +32,6 @@
 
 .props-tab[aria-selected="true"] {
   color: var(--ui-head);
-  font-weight: 600;
 }
 
 .props-tab[aria-selected="true"]::after {
@@ -43,7 +42,7 @@
   bottom: -1px;
   height: 2.5px;
   background: var(--ui-accent);
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--ui-radius-sm) var(--ui-radius-sm) 0 0;
 }
 
 .props-body {
@@ -63,12 +62,14 @@
   gap: 9px;
 }
 
+/* A section heading is a micro-label: tracked uppercase monospace, not bold. */
 .props-card-heading {
+  font-family: var(--ui-mono);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.12em;
   color: var(--ui-ink-3);
-  font-weight: 700;
+  font-weight: 400;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -80,7 +81,7 @@
   text-transform: none;
   letter-spacing: 0;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .props-row {
@@ -137,7 +138,8 @@
   height: 28px;
   border-radius: var(--ui-radius-sm);
   position: relative;
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.12), var(--ui-shadow-sm);
+  /* A resting hairline in place of the retired card-lift shadow. */
+  box-shadow: inset 0 0 0 1px rgb(21 60 81 / 0.12);
 }
 
 .color-swatch.on::after {
@@ -145,7 +147,7 @@
   position: absolute;
   inset: -3px;
   border: 2px solid var(--ui-accent);
-  border-radius: 11px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .layer-row {
@@ -167,7 +169,7 @@
 .layer-row.on {
   background: var(--ui-accent-soft);
   color: var(--ui-accent-ink);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .layer-row .layer-name {
@@ -198,7 +200,7 @@
 .regen-btn {
   width: 21px;
   height: 21px;
-  border-radius: 5px;
+  border-radius: var(--ui-radius-sm);
   display: grid;
   place-items: center;
   color: var(--ui-ink-3);
@@ -221,9 +223,13 @@
   cursor: not-allowed;
 }
 
+/* The origin badge is a micro-label pill, the same register as the reference's level chips. */
 .origin-badge {
+  font-family: var(--ui-mono);
   font-size: 9.5px;
-  font-weight: 600;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   padding: 1px 6px;
   border-radius: var(--ui-radius-pill);
   flex: none;
@@ -275,7 +281,7 @@
 
 .savings-banner .big {
   font-size: 21px;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--ui-ok);
   line-height: 1;
 }
@@ -301,7 +307,8 @@
   cursor: pointer;
   display: grid;
   place-items: center;
-  box-shadow: var(--ui-shadow-sm);
+  /* A resting hairline in place of the retired card-lift shadow. */
+  box-shadow: inset 0 0 0 1px var(--ui-line);
   transition: var(--ui-transition);
   background: var(--ui-g200);
   background-size: cover;
@@ -320,24 +327,27 @@
   position: absolute;
   bottom: 3px;
   left: 3px;
+  font-family: var(--ui-mono);
   font-size: 8px;
   font-weight: 600;
   background: var(--ui-overlay-badge-soft);
   color: var(--ui-g700);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .asset-tile .origin-tag {
   position: absolute;
   top: 3px;
   right: 3px;
+  font-family: var(--ui-mono);
   font-size: 7.5px;
-  font-weight: 700;
+  font-weight: 600;
+  text-transform: uppercase;
   background: var(--ui-overlay-badge-soft);
   color: var(--ui-p600);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
 
 /* Non-image asset (a file the server cannot paint as `image/*`, e.g. .html/.txt/.json): a neutral placeholder instead of a broken `background-image`. */
@@ -362,12 +372,13 @@
   position: absolute;
   bottom: 3px;
   right: 3px;
+  font-family: var(--ui-mono);
   font-size: 7.5px;
-  font-weight: 700;
+  font-weight: 600;
   background: var(--ui-overlay-badge-soft);
   color: var(--ui-p600);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
   border: none;
   cursor: pointer;
   opacity: 0;
@@ -398,8 +409,7 @@
 }
 
 .output-row:hover {
-  border-color: var(--ui-p400);
-  box-shadow: var(--ui-shadow-sm);
+  border-color: var(--ui-accent);
 }
 
 .output-row .output-name {
@@ -445,7 +455,7 @@
   margin-left: auto;
   font-family: var(--ui-mono);
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .seg-control {
@@ -462,13 +472,15 @@
   font-size: 11.5px;
   font-weight: 500;
   color: var(--ui-ink-2);
-  border-radius: 6px;
+  border-radius: var(--ui-radius-sm);
   transition: var(--ui-transition);
 }
 
+/* A resting hairline in place of the retired card-lift shadow keeps the
+   active segment readable against the track. */
 .seg-control button.on {
   background: var(--ui-surface);
   color: var(--ui-head);
-  font-weight: 600;
-  box-shadow: var(--ui-shadow-sm);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--ui-line);
 }
