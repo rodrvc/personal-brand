@@ -1,9 +1,12 @@
+/* Frosted paper over the atmosphere, like the reference's sticky header. */
 .topbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
-  background: var(--ui-surface);
+  padding: 0 16px;
+  background: var(--ui-glass-strong);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   border-bottom: 1px solid var(--ui-line);
   z-index: 5;
 }
@@ -23,8 +26,7 @@
 }
 
 .topbar-back:hover {
-  background: var(--ui-g100);
-  color: var(--ui-head);
+  color: var(--ui-accent-ink);
 }
 
 .topbar-brand-pill {
@@ -34,7 +36,7 @@
   gap: 7px;
   padding: 4px 12px 4px 5px;
   border-radius: var(--ui-radius-pill);
-  background: var(--ui-accent-soft);
+  background: var(--ui-glass-card);
   border: 1px solid var(--ui-accent-line);
 }
 
@@ -42,14 +44,14 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--ui-p500);
+  background: radial-gradient(circle at 35% 30%, var(--ui-p400), var(--ui-accent) 70%);
   display: inline-block;
 }
 
 .topbar-brand-name {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--ui-accent-ink);
+  font-weight: 500;
+  color: var(--ui-head);
 }
 
 .topbar-meta {
@@ -65,9 +67,10 @@
   min-width: 0;
   font-family: var(--ui-display);
   font-weight: 400;
-  font-size: 13.5px;
+  font-size: 15px;
+  line-height: 1.2;
   color: var(--ui-head);
-  letter-spacing: -0.04em;
+  letter-spacing: -0.03em;
 }
 
 .topbar-title-text {
@@ -127,8 +130,8 @@
 }
 
 .topbar-tool:hover:not(:disabled) {
-  background: var(--ui-g100);
-  color: var(--ui-head);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-ink);
 }
 
 .topbar-tool:disabled {

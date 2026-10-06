@@ -1,12 +1,14 @@
 /* Status readouts are the reference's micro-label register: tracked uppercase monospace. */
 .status-bar {
   height: 26px;
-  background: var(--ui-surface);
+  background: var(--ui-glass-strong);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   border-top: 1px solid var(--ui-line);
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 14px;
+  padding: 0 16px;
   font-family: var(--ui-mono);
   font-size: 10.5px;
   text-transform: uppercase;

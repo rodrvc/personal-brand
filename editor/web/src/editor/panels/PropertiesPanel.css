@@ -1,5 +1,8 @@
+/* Frosted paper, like every panel over the atmosphere. */
 .props-panel {
-  background: var(--ui-surface);
+  background: var(--ui-glass);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   border-left: 1px solid var(--ui-line);
   overflow-y: auto;
   display: flex;
@@ -11,68 +14,82 @@
   border-bottom: 1px solid var(--ui-line);
   position: sticky;
   top: 0;
-  background: var(--ui-surface);
+  background: var(--ui-glass-strong);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   z-index: 3;
-  padding: 0 6px;
+  padding: 0 8px;
 }
 
+/* Tabs read like the reference's nav links: plain Inter, ink when current. */
 .props-tab {
-  flex: 1;
-  padding: 12px 0;
+  flex: 1 1 auto;
+  padding: 14px 2px 13px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--ui-ink-3);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  color: var(--ui-ink-2);
   position: relative;
   transition: var(--ui-transition);
 }
 
 .props-tab:hover {
-  color: var(--ui-ink-2);
+  color: var(--ui-accent-ink);
 }
 
 .props-tab[aria-selected="true"] {
   color: var(--ui-head);
+  font-weight: 500;
 }
 
 .props-tab[aria-selected="true"]::after {
   content: "";
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 4px;
+  right: 4px;
   bottom: -1px;
-  height: 2.5px;
-  background: var(--ui-accent);
-  border-radius: var(--ui-radius-sm) var(--ui-radius-sm) 0 0;
+  height: 2px;
+  background: var(--ui-card-bar);
 }
 
 .props-body {
-  padding: 14px;
+  padding: 16px 14px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
 .props-card {
-  background: var(--ui-g50);
-  border: 1px solid var(--ui-line-soft);
-  border-radius: var(--ui-radius-card);
-  padding: 12px;
+  background: var(--ui-glass-card);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-panel);
+  padding: 14px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 9px;
 }
 
-/* A section heading is a micro-label: tracked uppercase monospace, not bold. */
+/* A section heading is a kicker: tracked uppercase monospace led by an accent dot. */
 .props-card-heading {
   font-family: var(--ui-mono);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ui-ink-3);
-  font-weight: 400;
+  letter-spacing: 0.14em;
+  color: var(--ui-ink-2);
+  font-weight: 500;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.props-card-heading::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  flex: none;
 }
 
 .props-card-heading .lock-hint {
@@ -120,7 +137,7 @@
   padding: 9px 11px;
   background: var(--ui-warn-soft);
   border: 1px solid var(--ui-warn-line);
-  border-left: 3px solid var(--ui-warn);
+  border-left: 2px solid var(--ui-warn);
   border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm) 0;
   font-size: 11px;
   color: var(--ui-ink-2);
@@ -139,7 +156,7 @@
   border-radius: var(--ui-radius-sm);
   position: relative;
   /* A resting hairline in place of the retired card-lift shadow. */
-  box-shadow: inset 0 0 0 1px rgb(21 60 81 / 0.12);
+  box-shadow: inset 0 0 0 1px var(--ui-line);
 }
 
 .color-swatch.on::after {
@@ -163,7 +180,7 @@
 }
 
 .layer-row:hover {
-  background: var(--ui-g100);
+  background: var(--ui-accent-soft);
 }
 
 .layer-row.on {
@@ -276,7 +293,7 @@
   padding: 10px 12px;
   background: var(--ui-ok-soft);
   border: 1px solid var(--ui-ok);
-  border-radius: var(--ui-radius-card);
+  border-radius: var(--ui-radius-panel);
 }
 
 .savings-banner .big {
@@ -331,7 +348,7 @@
   font-size: 8px;
   font-weight: 600;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-g700);
+  color: var(--ui-overlay-ink-2);
   padding: 1px 4px;
   border-radius: var(--ui-radius-sm);
 }
@@ -345,7 +362,7 @@
   font-weight: 600;
   text-transform: uppercase;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-p600);
+  color: var(--ui-overlay-ink);
   padding: 1px 4px;
   border-radius: var(--ui-radius-sm);
 }
@@ -376,7 +393,7 @@
   font-size: 7.5px;
   font-weight: 600;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-p600);
+  color: var(--ui-overlay-ink);
   padding: 1px 4px;
   border-radius: var(--ui-radius-sm);
   border: none;
@@ -404,7 +421,7 @@
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-sm);
   font-size: 12px;
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
   transition: var(--ui-transition);
 }
 
@@ -427,8 +444,8 @@
 }
 
 .upload-dropzone {
-  border: 1.5px dashed var(--ui-g300);
-  border-radius: var(--ui-radius-sm);
+  border: 1px dashed var(--ui-line-strong);
+  border-radius: var(--ui-radius-panel);
   padding: 16px;
   text-align: center;
   font-size: 11.5px;
