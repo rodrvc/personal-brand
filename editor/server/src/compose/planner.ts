@@ -6,7 +6,7 @@ import type {
   SlideObject,
 } from "../../../../system/ig-carousel/carousel-document.js";
 import type { LayoutTemplate, LayoutSlot } from "../../../../system/ig-carousel/layout-template.js";
-import { hashContent, loadIndex, registerFile, type AssetEntry } from "../../../../system/assets/index.js";
+import { hashContent, registerFile, type AssetEntry } from "../../../../system/assets/index.js";
 import { contrast, passesAA, describePaletteInWords } from "@personal-brand/core/color";
 import { loadBrandStyle, type BrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
@@ -18,6 +18,7 @@ import type {
   GenerateImageBrandContext,
   GenerateImageSpec,
 } from "../ai/piece-generator.js";
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import type { ProfileStore } from "../profile-store.js";
 
 /** Absolute fallback step count when a template declares no `defaultSlideCount` at all. */
@@ -195,7 +196,7 @@ export function buildCompositionPlan(
   preferredAssetIds?: string[],
 ): CompositionPlan {
   const slideKinds = planSlideKinds(promptText, template, slideCountOverride);
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   const approvedByKind = new Map<AssetEntry["kind"], AssetEntry[]>();
   for (const entry of index.entries) {
     if (entry.status !== "approved") continue;
@@ -576,6 +577,7 @@ export function storeImage(
     status: "candidate",
     destRelPath: `assets/generated/${contentHash}.${ext}`,
   });
+  invalidateAssetIndex(store.roots.profileDir);
   store.writeJson(`assets/generated/${entry.id}.json`, {
     prompt: spec.prompt,
     model: image.model,

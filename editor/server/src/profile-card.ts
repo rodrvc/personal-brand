@@ -1,6 +1,7 @@
 import { loadBrand } from "../../../system/ig-carousel/brand-schema.js";
-import { loadIndex, type AssetEntry, type AssetIndexFile } from "../../../system/assets/index.js";
+import type { AssetEntry, AssetIndexFile } from "../../../system/assets/index.js";
 
+import { loadIndexCached } from "./asset-index-cache.js";
 import { CAROUSEL_ID, readCarouselHeader } from "./document-store.js";
 import { ProfileStore } from "./profile-store.js";
 
@@ -176,7 +177,7 @@ export function buildCardSummary(slug: string): ProfileCardSummary | undefined {
   // reference that actually resolves apart from one that doesn't.
   let index: AssetIndexFile = { entries: [] };
   try {
-    index = loadIndex(store.roots.profileDir);
+    index = loadIndexCached(store.roots.profileDir);
   } catch {
     // No assets/index.json yet — a brand with no assets still gets a card,
     // just without an asset-derived cover, logo, or resolvable slide asset.
