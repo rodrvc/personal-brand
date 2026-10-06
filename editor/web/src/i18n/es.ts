@@ -275,7 +275,7 @@ export const es = {
   "bucketPane.savingsNoHistory": " Sin historial previo aún.",
   "bucketPane.noSlideHint": "Agrega una lámina para poder usar estos assets en el carrusel.",
   "bucketPane.usedHint": "Borde verde = ya está en este carrusel. ↻ = veces reutilizado.",
-  "bucketPane.candidatesHeading": "Candidatos generados",
+  "bucketPane.candidatesHeading": "{count} candidatos",
   "bucketPane.candidatesHint": "Al fijar una pieza, entra a la biblioteca clasificada.",
   "bucketPane.reclassifyPlaceholder": "Reclasificar candidato…",
   "bucketPane.uploadHeading": "Subir asset",

@@ -259,6 +259,20 @@ export function assetFileUrl(slug: string, relPathUnderAssets: string): string {
   return `/api/profiles/${slug}/assets/files/${relPathUnderAssets}`;
 }
 
+/**
+ * A ~256px WebP derivative (`?w=` overrides the default, snapped server-side
+ * to 128, 256 or 512), for a library tile that only needs to be recognizable — never
+ * the full original. Reduces what opening the Bucket tab downloads on a
+ * profile with many large assets; the full `assetFileUrl` stays reserved
+ * for the few places that actually need the original (drag/insert
+ * resolves the real asset by id regardless of which URL painted the tile,
+ * and slide rendering never reads from this endpoint at all).
+ */
+export function assetThumbUrl(slug: string, relPathUnderAssets: string, width?: number): string {
+  const query = width ? `?w=${width}` : "";
+  return `/api/profiles/${slug}/assets/thumbs/${relPathUnderAssets}${query}`;
+}
+
 /** The generation sidecar's `prompt` for an AI-origin asset — used to prefill the "Regenerar" field with what was actually asked for last time. 404s for a manual/library asset. */
 export function getAssetGeneration(slug: string, assetId: string): Promise<{ prompt?: string; model?: string; costCents?: number }> {
   return request(`/profiles/${slug}/assets/${assetId}/generation`);
