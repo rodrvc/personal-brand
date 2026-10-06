@@ -15,11 +15,12 @@ export interface UseCreateCarouselResult {
  * Direct carousel creation, shared by every entry point that offers a
  * "Nuevo carrusel" button (the carousel list and the brand home
  * dashboard): creates the carousel with its defaults (a placeholder
- * title, since the server requires one, and the engine default template)
- * and navigates straight into the editor — no modal asking for fields the
- * owner never wanted to fill in up front (brand is always fixed to the
- * current profile, and the template can be picked, changed or dropped from
- * the editor's own Templates tab).
+ * title, since the server requires one, and `blank: true` — the free
+ * template with one blank slide, not `explicativo`'s footer/pagination on
+ * every slide, per owner feedback) and navigates straight into the editor
+ * — no modal asking for fields the owner never wanted to fill in up front
+ * (brand is always fixed to the current profile, and the template can be
+ * picked, changed or dropped from the editor's own Templates tab).
  *
  * `creating` deliberately stays true across the navigation (never reset on
  * the success path): the caller's full-area loader keeps showing right up
@@ -38,7 +39,7 @@ export function useCreateCarousel(slug: string | undefined, accentColor: string 
     setCreating(true);
     setCreateError(null);
     try {
-      const { document } = await createCarousel(slug, { title: t("carouselList.untitled") });
+      const { document } = await createCarousel(slug, { title: t("carouselList.untitled"), blank: true });
       // Router state carries the just-created (empty) document straight
       // to EditorRoute so it can skip its own fetch-and-flash — see
       // EditorRoute's own comment.

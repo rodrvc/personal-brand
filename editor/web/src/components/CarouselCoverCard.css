@@ -1,20 +1,39 @@
+/* Same shell as a brand card: translucent paper, 12px radius, accent bar on top. */
 .cover-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
   color: var(--ui-ink);
   text-decoration: none;
   overflow: hidden;
   transition: var(--ui-transition);
 }
 
+.cover-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  z-index: 1;
+  background: var(--ui-card-bar);
+  transform: scaleX(0.28);
+  transform-origin: left;
+  transition: transform 220ms var(--ui-ease);
+}
+
 .cover-card:hover,
 .cover-card:focus-visible {
-  border-color: var(--ui-accent);
-  transform: translateY(-2px);
+  border-color: var(--ui-accent-line);
+  transform: translateY(-3px);
   box-shadow: var(--ui-shadow-md);
+}
+
+.cover-card:hover::after,
+.cover-card:focus-visible::after {
+  transform: scaleX(1);
 }
 
 .cover-card:hover .cover-card-thumb-img {
@@ -35,7 +54,7 @@
   object-fit: cover;
   display: block;
   opacity: 0;
-  transition: opacity 220ms var(--ui-ease), transform var(--ui-transition);
+  transition: opacity 220ms var(--ui-ease), transform 480ms var(--ui-ease);
 }
 
 .cover-card-thumb.loaded .cover-card-thumb-img {
@@ -45,15 +64,17 @@
 .cover-card-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 12px;
+  gap: 8px;
+  padding: 12px 14px 14px;
 }
 
 .cover-card-title {
-  font-size: 13px;
-  font-weight: 500;
+  font-family: var(--ui-display);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
   color: var(--ui-head);
-  line-height: 1.3;
+  line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -67,7 +88,7 @@
   min-width: 0;
   font-family: var(--ui-mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ui-ink-3);
 }
@@ -107,5 +128,5 @@
 }
 
 .cover-card-small .cover-card-title {
-  font-size: 11.5px;
+  font-size: 13px;
 }

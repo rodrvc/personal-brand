@@ -59,14 +59,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
   /**
    * Creates a new carousel. This handler is INERT — it returns a document
-   * with no slides at all (`buildEmptyDocument`): no AI provider call, no
-   * library lookup, no cost, and no job id.
+   * with no AI provider call, no library lookup, no cost, and no job id.
    *
    * `?mode=plan` (or `{ preview: true }` in the body) is kept for
    * API/script callers that still want the OLD prompt-driven
    * plan/apply flow — building a plan from a prompt and applying it in a
    * second step. Nothing in editor/web calls either path; the web UI only
-   * ever sends `{ title, templateId }`.
+   * ever sends `{ title, blank: true }`.
    */
   router.post("/api/profiles/:slug/carousels", async (req, res) => {
     try {
@@ -74,18 +73,34 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const body = req.body as {
         title?: string;
         prompt?: string;
-        /** `null` means "no template": the document is created with no `template` key and renders free (carousel-document spec). Omitting the field keeps the historical default instead. */
+        /** `null` means "no template": the document is created with no `template` key and renders free (carousel-document spec). Omitting the field keeps the historical default instead. Not allowed together with `blank` (400) — see below. */
         templateId?: string | null;
         id?: string;
         assetIds?: string[];
         /** API-client-only override — the web UI never sends this; slide count comes from the prompt or the template default instead (see planner.ts's `resolveStepCount`). */
         slideCount?: number;
         preview?: boolean;
+        /**
+         * The editor's own "Nuevo carrusel" entry point (owner feedback: a
+         * brand-new carousel must not open already stamped with
+         * `explicativo`'s footer/pagination on every slide). Forces the
+         * free template (every zone inert, no footer — same one
+         * `EditorRoute` already falls back to for a template-less
+         * document) and seeds one blank slide. Sending `templateId` as
+         * well is a 400, not a silent override. Omitted (or `false`)
+         * keeps the historical default for any other caller.
+         */
+        blank?: boolean;
       };
+      const blank = body.blank === true;
+      if (blank && body.templateId !== undefined) {
+        res.status(400).json({ error: `"blank" and "templateId" cannot be sent together` });
+        return;
+      }
       // `undefined` (field absent) -> the historical default; explicit
       // `null` -> no template at all. `??` cannot tell those apart, so the
-      // check is on `undefined` specifically.
-      const templateId = body.templateId === undefined ? "explicativo" : body.templateId;
+      // check is on `undefined` specifically. `blank` means no template.
+      const templateId = blank ? null : body.templateId === undefined ? "explicativo" : body.templateId;
       const carouselId = body.id ?? `carousel-${Date.now()}`;
       assertValidCarouselId(carouselId);
       if (documentExists(store, carouselId)) {
@@ -134,7 +149,12 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       // `brand.json` or an unknown template id, so the result is discarded.
       const brand = loadBrand(store.roots.profileDir);
       if (templateId !== null) void loadLayoutTemplate(store.roots.profileDir, templateId, brand);
-      const document = buildEmptyDocument(templateId ?? undefined, carouselId, body.title);
+      const document = buildEmptyDocument(
+        templateId ?? undefined,
+        carouselId,
+        body.title,
+        blank ? { blank: true, brand } : undefined,
+      );
       await writeDocumentThroughRevision(store, document, { create: true });
 
       res.status(201).json({ document });
