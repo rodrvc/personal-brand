@@ -14,19 +14,57 @@ export const es = {
   "common.pinnedNoRegenerate": "Fijado: no se puede regenerar hasta que lo liberes.",
   "common.newTextPlaceholder": "Texto",
 
+  // Relative time (utils/relativeTime.ts)
+  "time.justNow": "hace un momento",
+  "time.minutes": "hace {count} min",
+  "time.hours": "hace {count} h",
+  "time.days": "hace {count} d",
+  "time.oneMonth": "hace 1 mes",
+  "time.months": "hace {count} meses",
+  "time.oneYear": "hace 1 año",
+  "time.years": "hace {count} años",
+
+  // Loader (components/SheetLoader.tsx)
+  "sheetLoader.fallback": "Cargando",
+
+  // Carousel cover card (components/CarouselCoverCard.tsx)
+  "coverCard.untitled": "Sin título · {time}",
+  "coverCard.oneSlide": "1 lámina",
+  "coverCard.slides": "{count} láminas",
+
+  // Brand home dashboard (routes/BrandHomeRoute.tsx)
+  "brandHome.back": "← Perfiles",
+  "brandHome.kicker": "Panel de marca",
+  "brandHome.loadingCaption": "Cargando panel",
+  "brandHome.continueEditing": "Seguir editando",
+  "brandHome.noDrafts": "No hay borradores en curso.",
+  "brandHome.recentTitle": "Últimos exportados/publicados",
+  "brandHome.noRecent": "Todavía no hay carruseles exportados ni publicados.",
+  "brandHome.allCarousels": "Ver todos los carruseles →",
+
   // Profile picker (routes/ProfilePickerRoute.tsx)
-  "profilePicker.title": "Perfiles",
-  "profilePicker.loading": "Cargando perfiles…",
+  "profilePicker.kicker": "Editor de carruseles",
+  "profilePicker.title": "Elige una",
+  "profilePicker.titleAccent": "marca",
+  "profilePicker.loading": "Cargando perfiles",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
   "profilePicker.noBrandHint": "Sin brand.json configurado",
+  "profilePicker.oneCarousel": "1 carrusel",
+  "profilePicker.carousels": "{count} carruseles",
 
   // Carousel list (routes/CarouselListRoute.tsx)
-  "carouselList.back": "← Perfiles",
-  "carouselList.title": "{slug} · Carruseles",
+  "carouselList.kicker": "Archivo de la marca",
+  "carouselList.title": "Todos los",
+  "carouselList.titleAccent": "carruseles",
   "carouselList.new": "Nuevo carrusel",
-  "carouselList.loading": "Cargando…",
   "carouselList.empty": "Este perfil aún no tiene carruseles.",
+  "carouselList.emptyFiltered": "Ningún carrusel tiene este estado.",
+  "carouselList.filterLabel": "Filtrar por estado",
+  "carouselList.filter.all": "Todos",
+  "carouselList.filter.draft": "Borradores",
+  "carouselList.filter.exported": "Exportados",
+  "carouselList.filter.published": "Publicados",
   "carouselList.columnTitle": "Título",
   "carouselList.columnStatus": "Estado",
   "carouselList.columnUpdated": "Actualizado",
@@ -35,26 +73,14 @@ export const es = {
   "carouselList.status.draft": "Borrador",
   "carouselList.status.exported": "Exportado",
   "carouselList.status.published": "Publicado",
-  "carouselList.sidePanel.assetsTab": "Assets",
-  "carouselList.sidePanel.templatesTab": "Templates",
-
-  // New carousel dialog (routes/NewCarouselDialog.tsx)
-  "newCarousel.dialogTitle": "Nuevo carrusel",
-  "newCarousel.cancel": "Cancelar",
-  "newCarousel.creating": "Creando…",
-  "newCarousel.create": "Crear",
-  "newCarousel.titleLabel": "Título",
-  "newCarousel.titlePlaceholder": "ej: Cómo armar tu primer carrusel",
-  "newCarousel.titleRequired": "El título es obligatorio.",
-  "newCarousel.brandLabel": "Marca",
-  "newCarousel.templateLabel": "Template (opcional)",
-  "newCarousel.templateLoading": "Cargando templates…",
-  "newCarousel.templateNone": "Sin template",
-  "newCarousel.hint":
-    "El carrusel se crea vacío: entra directo al editor y cada pieza se compone desde ahí, cuando vos lo pidas.",
+  "carouselList.creating": "Creando…",
+  "carouselList.creatingCaption": "Creando carrusel",
+  "carouselList.loadingCaption": "Cargando carruseles",
+  /** Title a carousel gets when "Nuevo carrusel" creates it directly, with no dialog; the owner renames it from the editor. */
+  "carouselList.untitled": "Carrusel sin título",
 
   // Editor route (routes/EditorRoute.tsx)
-  "editorRoute.loading": "Cargando carrusel…",
+  "editorRoute.loading": "Abriendo carrusel",
 
   // Top bar (editor/TopBar.tsx)
   "topbar.back": "← Carruseles",
@@ -249,7 +275,7 @@ export const es = {
   "bucketPane.savingsNoHistory": " Sin historial previo aún.",
   "bucketPane.noSlideHint": "Agrega una lámina para poder usar estos assets en el carrusel.",
   "bucketPane.usedHint": "Borde verde = ya está en este carrusel. ↻ = veces reutilizado.",
-  "bucketPane.candidatesHeading": "Candidatos generados",
+  "bucketPane.candidatesHeading": "{count} candidatos",
   "bucketPane.candidatesHint": "Al fijar una pieza, entra a la biblioteca clasificada.",
   "bucketPane.reclassifyPlaceholder": "Reclasificar candidato…",
   "bucketPane.uploadHeading": "Subir asset",

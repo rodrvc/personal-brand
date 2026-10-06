@@ -52,6 +52,21 @@ export interface ProfileListingEntry {
   slug: string;
   /** False when the profile has no `brand.json` yet — the picker shows it disabled with a hint instead of letting it fail once opened. */
   hasBrand: boolean;
+  /** Present only when `hasBrand` is true. Absent (rather than a 500) when the profile's brand.json or asset index is broken. */
+  card?: ProfileCardSummary;
+}
+
+/** Mirrors `editor/server/src/profile-card.ts`'s `ProfileCardSummary` — everything a brand card in the profile picker needs to render its identity. */
+export interface ProfileCardSummary {
+  colors: string[];
+  logoFont?: string;
+  googleFontsHref?: string;
+  wordmark?: string;
+  gradient?: string;
+  coverImageUrl?: string;
+  logoAssetUrl?: string;
+  carouselCount: number;
+  lastEditedAt?: string;
 }
 
 export type AssetStatus = "candidate" | "approved" | "hidden";

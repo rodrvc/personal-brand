@@ -4,13 +4,12 @@ import {
   type CarouselDocument,
   type ValidateDocumentResult,
 } from "../../../system/ig-carousel/carousel-document.js";
-import { loadIndex } from "../../../system/assets/index.js";
-
+import { loadIndexCached } from "./asset-index-cache.js";
 import { assetExistsFactory } from "./render-context.js";
 import type { ProfileStore } from "./profile-store.js";
 
 /** Slug rule shared with `carousel-document.ts`'s own `id` regex, applied to the URL param before it ever reaches disk (editor-api spec: "Any carousel-id that isn't a slug is rejected"). */
-const CAROUSEL_ID = /^[a-z0-9-]+$/;
+export const CAROUSEL_ID = /^[a-z0-9-]+$/;
 
 export function assertValidCarouselId(id: string): void {
   if (!CAROUSEL_ID.test(id)) {
@@ -38,7 +37,7 @@ export function readDocumentRaw(store: ProfileStore, carouselId: string): unknow
 
 export function validateAgainstProfile(store: ProfileStore, doc: unknown): ValidateDocumentResult {
   const brand = loadBrand(store.roots.profileDir);
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   return validateDocument(doc, { brand, assetExists: assetExistsFactory(index) });
 }
 
@@ -184,28 +183,90 @@ export interface CarouselListingEntry {
   slideCount: number;
 }
 
-/** Listing per specs/carousel-document's "Listing for a future gallery": id, title, status, updatedAt, slide count. */
-export function listCarousels(store: ProfileStore): CarouselListingEntry[] {
-  const entries = store.list("carousels");
-  const out: CarouselListingEntry[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !CAROUSEL_ID.test(entry.name)) continue;
-    if (!documentExists(store, entry.name)) continue;
-    try {
-      const doc = readValidatedDocument(store, entry.name);
-      out.push({
-        id: doc.id,
-        title: doc.title,
-        status: doc.status,
-        updatedAt: doc.updatedAt,
-        slideCount: doc.slides.length,
-      });
-    } catch {
-      // A corrupt document is skipped from the listing rather than
-      // breaking the whole list — the per-carousel GET route will still
-      // surface the real validation error if someone opens it directly.
-      continue;
+const KNOWN_STATUSES: readonly CarouselDocument["status"][] = ["draft", "exported", "published"];
+
+/**
+ * The few fields every cheap, display-only reader needs from a
+ * `carousel.json`, read raw — no `readValidatedDocument`, which also
+ * reloads the brand and rescans the whole asset index per document (to
+ * check every color/asset reference). On a 72-carousel profile that full
+ * validation took the listing route from single-digit milliseconds to ~5s.
+ * `slides` is the raw, unvalidated array: callers only count it or read
+ * defensively from it.
+ */
+export interface CarouselHeader {
+  id: string;
+  title: string;
+  status: CarouselDocument["status"];
+  updatedAt: string;
+  slides: unknown[];
+}
+
+/**
+ * The one raw reader behind the carousel listing, the profile picker's
+ * brand card and the library-ratio history, so all three agree on which
+ * carousels exist. `undefined` (the caller skips it) for a directory name
+ * that isn't a carousel id, a missing or unreadable file, a document whose
+ * own `id` is not its directory name (the id the listing links to must be
+ * the one the per-carousel routes resolve), an `updatedAt` that doesn't
+ * parse as a date (it orders every listing), or any of the five shown
+ * fields missing or mistyped.
+ */
+export function readCarouselHeader(store: ProfileStore, id: string): CarouselHeader | undefined {
+  if (!CAROUSEL_ID.test(id)) return undefined;
+  try {
+    if (!store.exists(docRelPath(id))) return undefined;
+    const raw = store.readJson<{
+      id?: unknown;
+      title?: unknown;
+      status?: unknown;
+      updatedAt?: unknown;
+      slides?: unknown;
+    }>(docRelPath(id));
+    if (
+      !raw ||
+      raw.id !== id ||
+      typeof raw.title !== "string" ||
+      typeof raw.updatedAt !== "string" ||
+      Number.isNaN(Date.parse(raw.updatedAt)) ||
+      !Array.isArray(raw.slides) ||
+      !KNOWN_STATUSES.includes(raw.status as CarouselDocument["status"])
+    ) {
+      return undefined;
     }
+    return {
+      id,
+      title: raw.title,
+      status: raw.status as CarouselDocument["status"],
+      updatedAt: raw.updatedAt,
+      slides: raw.slides,
+    };
+  } catch {
+    // A corrupt document is skipped rather than breaking the whole list —
+    // the per-carousel GET route still surfaces the real validation error
+    // if someone opens it directly.
+    return undefined;
+  }
+}
+
+/**
+ * Listing per specs/carousel-document's "Listing for a future gallery": id,
+ * title, status, updatedAt, slide count — read through `readCarouselHeader`
+ * (raw, shape-checked only), keyed by the directory name.
+ */
+export function listCarousels(store: ProfileStore): CarouselListingEntry[] {
+  const out: CarouselListingEntry[] = [];
+  for (const entry of store.list("carousels")) {
+    if (!entry.isDirectory()) continue;
+    const header = readCarouselHeader(store, entry.name);
+    if (!header) continue;
+    out.push({
+      id: header.id,
+      title: header.title,
+      status: header.status,
+      updatedAt: header.updatedAt,
+      slideCount: header.slides.length,
+    });
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

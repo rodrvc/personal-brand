@@ -4,57 +4,117 @@
  * from the rendered HTML (brand.colors), never from this file
  * (design.md D1, specs/editor-ui "Light and dark theme").
  *
- * Single-hue blue ramp at 205.7°, cool greys, Inter. Light is the default
- * theme; dark is opted into via `data-theme="dark"` on <html>, toggled by
- * the top-bar button and persisted in localStorage.
+ * The language here is paper and atmosphere: a near-white paper ground with
+ * a few very soft, misty blue/aqua blobs drifting behind everything
+ * (`body::before` below), frosted translucent panels over it, structure
+ * drawn with hairlines, and cards that float as translucent paper with a
+ * 12px radius and a short accent bar on their top edge. Headings are a
+ * grotesque at weight 400 with tight negative tracking — size carries the
+ * hierarchy, not boldness — and micro-labels (counts, states, badges) are
+ * tracked uppercase monospace, often led by a small accent dot. Controls
+ * stay square (3px): the primary action is outlined in ink and fills with
+ * ink on hover.
+ *
+ * Light is the default theme; dark is opted into via `data-theme="dark"` on
+ * <html>, toggled by the top-bar button and persisted in localStorage. Dark
+ * is not an automatic inversion: it takes the reference's own deep-ink
+ * sections (a night-water ground, lighter ink, a pale-blue accent and a
+ * pale filled button) and re-anchors the same roles on them.
  */
 
 :root {
-  --ui-hue: 205.7;
+  /*
+   * The blue ramp is one named accent plus explicit tints/shades around it,
+   * not a generated hue scale: this system's ink and accent are two
+   * distinct, deliberately chosen colors (not the same hue at different
+   * lightness), so an hsl() ramp keyed to one hue can't honestly produce
+   * both. --ui-p600 is the accent; --ui-p900 is the ink.
+   */
+  --ui-p900: #153c51;
+  --ui-p800: #1a4560;
+  --ui-p700: #204f6e;
+  --ui-p600: #296f98;
+  --ui-p500: #3c85ae;
+  --ui-p400: #64a1ce;
+  --ui-p300: #94c6e7;
+  --ui-p200: #b9d3e2;
+  --ui-p100: #d8ecf7;
+  --ui-p50: #eaf4f9;
 
-  --ui-p900: hsl(var(--ui-hue) 62% 16%);
-  --ui-p800: hsl(var(--ui-hue) 58% 21%);
-  --ui-p700: hsl(var(--ui-hue) 55% 28%);
-  --ui-p600: hsl(var(--ui-hue) 52% 38%);
-  --ui-p500: hsl(var(--ui-hue) 48% 48%);
-  --ui-p400: hsl(var(--ui-hue) 52% 60%);
-  --ui-p300: hsl(var(--ui-hue) 60% 72%);
-  --ui-p200: hsl(var(--ui-hue) 62% 84%);
-  --ui-p100: hsl(var(--ui-hue) 65% 92%);
-  --ui-p50: hsl(var(--ui-hue) 68% 96%);
-
-  --ui-g50: #f8fafc;
-  --ui-g100: #f1f5f9;
-  --ui-g200: #e2e8f0;
-  --ui-g300: #cbd5e1;
-  --ui-g400: #94a3b8;
-  --ui-g500: #64748b;
-  --ui-g600: #475569;
-  --ui-g700: #334155;
-  --ui-g900: #0f172a;
-  --ui-white: #ffffff;
+  /* Neutrals re-anchored on the paper/ink pair instead of a slate ramp. */
+  --ui-g50: #fcfdfd;
+  --ui-g100: #eef3f6;
+  --ui-g200: #ccdee8;
+  --ui-g300: #b9d3e2;
+  --ui-g400: #8aa4b3;
+  --ui-g500: #4f6878;
+  --ui-g600: #3c5567;
+  --ui-g700: #2a4353;
+  --ui-g900: #153c51;
+  --ui-white: #fcfdfd;
 
   --ui-bg: var(--ui-g50);
   --ui-surface: var(--ui-white);
   --ui-line: var(--ui-g200);
-  --ui-line-soft: var(--ui-g100);
-  --ui-ink: var(--ui-g700);
+  --ui-line-soft: #e3eef3;
+  /* The rail colour: one step stronger than a hairline, for the rules that
+     have to be seen (active tab track, section rules). */
+  --ui-line-strong: #b9d3e2;
+  --ui-ink: var(--ui-g900);
   --ui-ink-2: var(--ui-g500);
-  --ui-ink-3: var(--ui-g400);
-  --ui-head: var(--ui-p700);
+  /* Darkened from the reference's decorative grey so micro-labels still
+     clear 4.5:1 on paper and on the densest part of the atmosphere. */
+  --ui-ink-3: #56707f;
+  --ui-head: var(--ui-ink);
   --ui-accent: var(--ui-p600);
   --ui-accent-soft: var(--ui-p50);
   --ui-accent-ink: var(--ui-p600);
   --ui-accent-line: var(--ui-p200);
 
-  --ui-ok: #1c6b4c;
-  --ui-ok-soft: #e6f4ee;
-  --ui-ok-strong: #1f7057;
-  --ui-warn: #c2792a;
-  --ui-warn-soft: #fdf6ec;
-  --ui-warn-line: #f2ddbe;
-  --ui-danger: #c8463f;
-  --ui-lock: #c2792a;
+  /*
+   * Frosted paper: panels are translucent over the atmosphere and blur it,
+   * so the ground reads through as colour, never as shapes. Cards on the
+   * entry screens sit one step more opaque than the chrome panels.
+   */
+  --ui-glass: rgb(252 253 253 / 0.62);
+  --ui-glass-strong: rgb(252 253 253 / 0.8);
+  --ui-glass-card: rgb(255 255 255 / 0.88);
+  --ui-glass-blur: blur(18px) saturate(145%);
+
+  /*
+   * The atmosphere: two pastel tints (celeste where a blob is thin, aqua
+   * where two overlap) at the same peak strengths the reference's water
+   * background reaches where two blobs meet, painted as fixed soft blobs behind the whole
+   * app. --ui-halo is the quieter single glow placed behind a hero object
+   * (here: the active slide).
+   */
+  --ui-atmo-a: rgb(205 229 241 / 0.64);
+  --ui-atmo-b: rgb(202 236 228 / 0.5);
+  --ui-halo: rgb(100 161 206 / 0.14);
+
+  /* The short accent bar on a card's top edge: accent fading into mist. */
+  --ui-card-bar: linear-gradient(90deg, var(--ui-accent), rgb(100 161 206 / 0.15));
+
+  /* Primary action: outlined in ink at rest, filled with ink on hover.
+     --ui-btn-bg is the fill colour, --ui-btn-fg the text on that fill. */
+  --ui-btn-line: var(--ui-ink);
+  --ui-btn-bg: var(--ui-ink);
+  --ui-btn-fg: var(--ui-g50);
+  --ui-btn-bg-hover: var(--ui-accent);
+
+  /* Chat bubbles: the incoming one is a cool grey card, the outgoing one the accent. */
+  --ui-bubble-in: #eef3f6;
+  --ui-bubble-out: var(--ui-accent);
+  --ui-bubble-out-fg: #fff;
+
+  --ui-ok: #0f6249;
+  --ui-ok-soft: #e8f5f0;
+  --ui-ok-strong: #0c4f3b;
+  --ui-warn: #8a5d06;
+  --ui-warn-soft: #fbf3e2;
+  --ui-warn-line: #ecd9ab;
+  --ui-danger: #a3271b;
+  --ui-lock: #8a5d06;
 
   /*
    * Marks painted on the SelectionOverlay, on top of the canvas <iframe>
@@ -62,62 +122,117 @@
    * resize/rotate handle or a badge stays legible against whatever
    * brand.colors background the rendered slide happens to have; unlike
    * --ui-surface/--ui-white, these never swap to the dark theme's navy
-   * (which would make a handle invisible against a light slide).
+   * (which would make a handle invisible against a light slide). The ink
+   * pair is what gets written on those white badges, so it never swaps
+   * either.
    */
   --ui-overlay-mark: #fff;
   --ui-overlay-mark-soft: rgb(255 255 255 / 0.92);
   --ui-overlay-badge-soft: rgb(255 255 255 / 0.94);
+  --ui-overlay-ink: #296f98;
+  --ui-overlay-ink-2: #2a4353;
 
-  --ui-shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
-  --ui-shadow-md: 0 6px 16px -6px rgb(15 23 42 / 0.14), 0 2px 4px -2px rgb(15 23 42 / 0.08);
-  --ui-shadow-lg: 0 16px 32px -10px rgb(15 23 42 / 0.18), 0 4px 8px -4px rgb(15 23 42 / 0.1);
+  /*
+   * The reference draws almost no shadows — structure is hairlines. This
+   * tool genuinely needs elevation in a few places (modal, dropdown, drag
+   * overlay, the active slide, a hovered card), so shadow-md/lg survive,
+   * wide and quiet, tinted with the ink instead of a generic black.
+   */
+  --ui-shadow-sm: none;
+  --ui-shadow-md: 0 12px 28px -14px rgb(21 60 81 / 0.22), 0 2px 6px -3px rgb(21 60 81 / 0.08);
+  --ui-shadow-lg: 0 28px 60px -24px rgb(21 60 81 / 0.28), 0 6px 14px -8px rgb(21 60 81 / 0.12);
 
-  --ui-radius-btn: 10px;
-  --ui-radius-card: 16px;
+  --ui-radius-btn: 3px;
+  --ui-radius-card: 12px;
+  /* Cards inside the narrow editor panels: the reference's small node radius. */
+  --ui-radius-panel: 6px;
   --ui-radius-pill: 999px;
-  --ui-radius-sm: 8px;
+  --ui-radius-sm: 3px;
 
   --ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Headings: a grotesque at weight 400, tight negative tracking. */
+  --ui-display: Arial, Helvetica, sans-serif;
+  --ui-display-tracking: -0.045em;
   --ui-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  --ui-transition: 150ms ease;
+  --ui-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-transition: 180ms var(--ui-ease);
 
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
-  --ui-g50: #16222c;
-  --ui-g100: #1b2933;
-  --ui-g200: #223140;
-  --ui-g300: #2c3d4d;
-  --ui-g400: #4b6478;
-  --ui-g500: #6b8598;
-  --ui-g600: #8fa7ba;
-  --ui-g700: #b8cbd8;
-  --ui-g900: #eef4f8;
-  --ui-white: #132330;
+  /* The ramp keeps its selection-overlay steps (p400/p500 outline handles
+     on the canvas) close to what they were; only the semantic ends move. */
+  --ui-p900: #edf6fb;
+  --ui-p800: #dbe8f0;
+  --ui-p700: #b7dbf2;
+  --ui-p600: #94c6e7;
+  --ui-p500: #4c86b3;
+  --ui-p400: #527b94;
+  --ui-p300: #45677c;
+  --ui-p200: #36586d;
+  --ui-p100: #1e465f;
+  --ui-p50: #1e465f;
 
-  --ui-bg: #0d1720;
-  --ui-surface: #132330;
-  --ui-line: #1e3444;
-  --ui-line-soft: #182b39;
-  --ui-ink: #dce8f2;
-  --ui-ink-2: #8fa7ba;
-  --ui-ink-3: #647f94;
-  --ui-head: #a8cde8;
-  --ui-accent: var(--ui-p400);
-  --ui-accent-soft: #16303f;
-  --ui-accent-ink: var(--ui-head);
-  --ui-accent-line: #204862;
-  --ui-ok: #5cc296;
-  --ui-ok-soft: #123024;
-  --ui-ok-strong: #6fd6ab;
-  --ui-warn: #e0a458;
-  --ui-warn-soft: #2c2113;
-  --ui-warn-line: #4a3a1e;
-  --ui-danger: #e37b73;
-  --ui-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --ui-shadow-md: 0 6px 16px -6px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.3);
-  --ui-shadow-lg: 0 16px 32px -10px rgb(0 0 0 / 0.5), 0 4px 8px -4px rgb(0 0 0 / 0.3);
+  --ui-g50: #102e42;
+  --ui-g100: #1a4057;
+  --ui-g200: #36586d;
+  --ui-g300: #42647a;
+  --ui-g400: #527b94;
+  --ui-g500: #b4cbd9;
+  --ui-g600: #c8dae5;
+  --ui-g700: #dbe8f0;
+  --ui-g900: #edf6fb;
+  --ui-white: #16394f;
+
+  --ui-bg: var(--ui-g50);
+  --ui-surface: var(--ui-white);
+  --ui-line: #2d4f64;
+  --ui-line-soft: #214459;
+  --ui-line-strong: #45677c;
+  --ui-ink: var(--ui-g900);
+  --ui-ink-2: var(--ui-g500);
+  --ui-ink-3: #9db6c6;
+  --ui-head: var(--ui-ink);
+  --ui-accent: var(--ui-p600);
+  --ui-accent-soft: var(--ui-p50);
+  --ui-accent-ink: var(--ui-p700);
+  --ui-accent-line: #45677c;
+
+  --ui-glass: rgb(20 52 72 / 0.72);
+  --ui-glass-strong: rgb(20 52 72 / 0.84);
+  --ui-glass-card: rgb(22 57 79 / 0.82);
+
+  --ui-atmo-a: rgb(32 73 97 / 0.7);
+  --ui-atmo-b: rgb(148 198 231 / 0.08);
+  --ui-halo: rgb(148 198 231 / 0.1);
+
+  --ui-card-bar: linear-gradient(90deg, var(--ui-accent), rgb(148 198 231 / 0.12));
+
+  /* The reference's buttons inside its deep-ink sections: a pale fill with
+     ink text. Outlined at rest here too, in the light ink. */
+  --ui-btn-line: var(--ui-ink);
+  --ui-btn-bg: #e6f3fb;
+  --ui-btn-fg: #16394f;
+  --ui-btn-bg-hover: #c6e4f6;
+
+  --ui-bubble-in: #1e465f;
+  --ui-bubble-out: #94c6e7;
+  --ui-bubble-out-fg: #102e42;
+
+  --ui-ok: #5fd3ab;
+  --ui-ok-soft: #123a33;
+  --ui-ok-strong: #7fe0bd;
+  --ui-warn: #d8b158;
+  --ui-warn-soft: #2c2a1f;
+  --ui-warn-line: #4a3f22;
+  --ui-danger: #ff9d95;
+  --ui-lock: #d8b158;
+
+  --ui-shadow-sm: none;
+  --ui-shadow-md: 0 12px 28px -14px rgb(0 0 0 / 0.5), 0 2px 6px -3px rgb(0 0 0 / 0.3);
+  --ui-shadow-lg: 0 28px 60px -24px rgb(0 0 0 / 0.6), 0 6px 14px -8px rgb(0 0 0 / 0.35);
+
   color-scheme: dark;
 }
 
@@ -140,6 +255,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * The atmosphere: a handful of very soft celeste/aqua blobs fixed behind
+ * the whole app, the static counterpart of the reference's drifting water
+ * background. It sits at z-index -1 (above the body's paper, below every
+ * element), is purely decorative and never receives pointer events. It
+ * does not move: the chrome's panels blur it through backdrop-filter, and
+ * re-blurring an animated full-viewport layer every frame is not worth the
+ * cost in an editing tool. The canvas <iframe> paints its own opaque slide,
+ * so none of this can ever tint a slide.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vw 44vh at 10% 18%, var(--ui-atmo-a), transparent 70%),
+    radial-gradient(46vw 52vh at 48% 88%, var(--ui-atmo-a), transparent 70%),
+    radial-gradient(36vw 46vh at 88% 30%, var(--ui-atmo-a), transparent 70%),
+    radial-gradient(28vw 34vh at 62% 58%, var(--ui-atmo-b), transparent 70%),
+    radial-gradient(24vw 30vh at 22% 70%, var(--ui-atmo-b), transparent 70%);
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -148,11 +287,111 @@ button {
   cursor: pointer;
 }
 
+/*
+ * The ring widens to the reference's 3px in the accent, but keeps this
+ * tool's existing 2px offset rather than the reference's 4px: the topbar
+ * tools are 32x30px on an 8px gap, so a 4px offset would put the ring on
+ * top of the neighbouring control.
+ */
 :focus-visible {
-  outline: 2px solid var(--ui-accent);
+  outline: 3px solid var(--ui-accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
+
+/*
+ * Base text input, shared across editor panels (SelectionPane, SlidePane,
+ * BucketPane, GenerateImageField) — lives here rather than in any one
+ * component's CSS file so it stays available regardless of which route or
+ * panel happens to be mounted first.
+ */
+.ui-input {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--ui-ink);
+  font-family: inherit;
+  width: 100%;
+}
+
+.ui-input:focus {
+  outline: none;
+  border-color: var(--ui-p400);
+  box-shadow: 0 0 0 3px var(--ui-accent-soft);
+}
+
+/*
+ * Micro-label kicker: tracked uppercase monospace led by a small accent
+ * dot — the line that sits above a display title and names the screen.
+ */
+.ui-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 18px;
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ui-ink-2);
+}
+
+.ui-kicker::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  flex: none;
+}
+
+/*
+ * The display title of an entry screen: very large grotesque, weight 400,
+ * tight negative tracking. An <em> inside it is the accent word.
+ */
+.ui-display-title {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  font-size: clamp(2.4rem, 4.2vw, 3.6rem);
+  line-height: 1.02;
+  letter-spacing: var(--ui-display-tracking);
+  color: var(--ui-head);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.ui-display-title em {
+  font-style: normal;
+  color: var(--ui-accent);
+}
+
+/*
+ * Reveal: content fades up 14px once, on mount, with a short stagger
+ * between siblings. `backwards` (not `both`) so that once it has played it
+ * leaves no transform behind for a hover lift to fight with. The global
+ * reduced-motion rule below turns it off, and since the hidden state only
+ * exists inside the keyframes, nothing is ever left invisible.
+ */
+@keyframes ui-reveal-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+}
+
+.ui-reveal > * {
+  animation: ui-reveal-in 640ms var(--ui-ease) backwards;
+}
+
+.ui-reveal > :nth-child(2) { animation-delay: 70ms; }
+.ui-reveal > :nth-child(3) { animation-delay: 140ms; }
+.ui-reveal > :nth-child(4) { animation-delay: 210ms; }
+.ui-reveal > :nth-child(5) { animation-delay: 280ms; }
+.ui-reveal > :nth-child(6) { animation-delay: 350ms; }
+.ui-reveal > :nth-child(n + 7) { animation-delay: 420ms; }
 
 @media (prefers-reduced-motion: reduce) {
   * {

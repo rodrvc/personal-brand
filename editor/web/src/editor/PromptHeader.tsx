@@ -75,13 +75,18 @@ export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpin
             </span>
           )}
           <span className="prompt-updated">{relativeTime(doc.updatedAt || doc.createdAt)}</span>
-          {stats && (
+          {/* Parked (owner decision, 2026-09-28): the library-ratio stat is
+              unused and costly to compute — see api/client.ts's commented-out
+              getStats. `stats` is always null now, so this never rendered
+              anyway; kept commented rather than deleted so it can be
+              retaken with a cheap implementation and a real use. */}
+          {/* {stats && (
             <span className="prompt-savings">
               {t("promptHeader.savings", { ratio: stats.libraryRatio })}
               {stats.history.length > 0 &&
                 t("promptHeader.savingsHistory", { ratio: stats.history[0]!.libraryRatio })}
             </span>
-          )}
+          )} */}
         </div>
         {regenerateUnpinnedError && <p className="prompt-error">{regenerateUnpinnedError}</p>}
       </div>

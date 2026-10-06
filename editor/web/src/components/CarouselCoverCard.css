@@ -1,0 +1,132 @@
+/* Same shell as a brand card: translucent paper, 12px radius, accent bar on top. */
+.cover-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-glass-card);
+  color: var(--ui-ink);
+  text-decoration: none;
+  overflow: hidden;
+  transition: var(--ui-transition);
+}
+
+.cover-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  z-index: 1;
+  background: var(--ui-card-bar);
+  transform: scaleX(0.28);
+  transform-origin: left;
+  transition: transform 220ms var(--ui-ease);
+}
+
+.cover-card:hover,
+.cover-card:focus-visible {
+  border-color: var(--ui-accent-line);
+  transform: translateY(-3px);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.cover-card:hover::after,
+.cover-card:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.cover-card:hover .cover-card-thumb-img {
+  transform: scale(1.04);
+}
+
+.cover-card-thumb {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  /* Quiet accent-tinted placeholder — never a plain grey box — visible until the thumbnail itself has painted, same `color-mix` approach as `SheetLoader`'s blocks. */
+  background: color-mix(in srgb, var(--cover-card-accent, var(--ui-accent)) 14%, var(--ui-g100));
+}
+
+.cover-card-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 220ms var(--ui-ease), transform 480ms var(--ui-ease);
+}
+
+.cover-card-thumb.loaded .cover-card-thumb-img {
+  opacity: 1;
+}
+
+.cover-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.cover-card-title {
+  font-family: var(--ui-display);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--ui-head);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cover-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.cover-card-status {
+  flex-shrink: 0;
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-g100);
+  color: var(--ui-ink-2);
+}
+
+/* The one flexible piece of the meta row — truncates with an ellipsis rather than wrapping, so the chip and the count/date always stay on one line even in the 132px small card. */
+.cover-card-meta-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-card-status.exported,
+.cover-card-status.published {
+  background: var(--ui-ok-soft);
+  color: var(--ui-ok);
+}
+
+/* The smaller "Últimos exportados/publicados" row: same card, a narrower fixed width instead of the grid's full column, and a slightly quieter title. */
+.cover-card-small {
+  width: 132px;
+  flex-shrink: 0;
+}
+
+.cover-card-small .cover-card-body {
+  padding: 8px 10px 10px;
+}
+
+.cover-card-small .cover-card-title {
+  font-size: 13px;
+}

@@ -1,5 +1,8 @@
+/* Frosted paper, like every panel over the atmosphere. */
 .props-panel {
-  background: var(--ui-surface);
+  background: var(--ui-glass);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   border-left: 1px solid var(--ui-line);
   overflow-y: auto;
   display: flex;
@@ -11,67 +14,99 @@
   border-bottom: 1px solid var(--ui-line);
   position: sticky;
   top: 0;
-  background: var(--ui-surface);
+  background: var(--ui-glass-strong);
+  -webkit-backdrop-filter: var(--ui-glass-blur);
+  backdrop-filter: var(--ui-glass-blur);
   z-index: 3;
-  padding: 0 6px;
+  padding: 0 8px;
 }
 
+/* Tabs read like the reference's nav links: plain Inter, ink when current. */
 .props-tab {
-  flex: 1;
-  padding: 12px 0;
+  flex: 1 1 auto;
+  padding: 14px 2px 13px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--ui-ink-3);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  color: var(--ui-ink-2);
   position: relative;
   transition: var(--ui-transition);
 }
 
 .props-tab:hover {
-  color: var(--ui-ink-2);
+  color: var(--ui-accent-ink);
 }
 
 .props-tab[aria-selected="true"] {
   color: var(--ui-head);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .props-tab[aria-selected="true"]::after {
   content: "";
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 4px;
+  right: 4px;
   bottom: -1px;
-  height: 2.5px;
-  background: var(--ui-accent);
-  border-radius: 2px 2px 0 0;
+  height: 2px;
+  background: var(--ui-card-bar);
 }
 
 .props-body {
-  padding: 14px;
+  padding: 16px 14px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
 .props-card {
-  background: var(--ui-g50);
-  border: 1px solid var(--ui-line-soft);
-  border-radius: var(--ui-radius-card);
-  padding: 12px;
+  background: var(--ui-glass-card);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-panel);
+  padding: 14px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 9px;
 }
 
+/* A section heading is a kicker: tracked uppercase monospace led by an accent dot. */
 .props-card-heading {
+  font-family: var(--ui-mono);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--ui-ink-3);
-  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--ui-ink-2);
+  font-weight: 500;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.props-card-heading::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  flex: none;
+}
+
+/* The candidates section heading is a real <button> (collapsed by default) wearing the same kicker look — reset the button defaults, keep the dot/type treatment. */
+.bucket-candidates-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.bucket-candidates-chevron {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ui-ink-3);
 }
 
 .props-card-heading .lock-hint {
@@ -80,7 +115,7 @@
   text-transform: none;
   letter-spacing: 0;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .props-row {
@@ -119,7 +154,7 @@
   padding: 9px 11px;
   background: var(--ui-warn-soft);
   border: 1px solid var(--ui-warn-line);
-  border-left: 3px solid var(--ui-warn);
+  border-left: 2px solid var(--ui-warn);
   border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm) 0;
   font-size: 11px;
   color: var(--ui-ink-2);
@@ -137,7 +172,8 @@
   height: 28px;
   border-radius: var(--ui-radius-sm);
   position: relative;
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.12), var(--ui-shadow-sm);
+  /* A resting hairline in place of the retired card-lift shadow. */
+  box-shadow: inset 0 0 0 1px var(--ui-line);
 }
 
 .color-swatch.on::after {
@@ -145,7 +181,7 @@
   position: absolute;
   inset: -3px;
   border: 2px solid var(--ui-accent);
-  border-radius: 11px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .layer-row {
@@ -161,13 +197,13 @@
 }
 
 .layer-row:hover {
-  background: var(--ui-g100);
+  background: var(--ui-accent-soft);
 }
 
 .layer-row.on {
   background: var(--ui-accent-soft);
   color: var(--ui-accent-ink);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .layer-row .layer-name {
@@ -198,7 +234,7 @@
 .regen-btn {
   width: 21px;
   height: 21px;
-  border-radius: 5px;
+  border-radius: var(--ui-radius-sm);
   display: grid;
   place-items: center;
   color: var(--ui-ink-3);
@@ -221,9 +257,13 @@
   cursor: not-allowed;
 }
 
+/* The origin badge is a micro-label pill, the same register as the reference's level chips. */
 .origin-badge {
+  font-family: var(--ui-mono);
   font-size: 9.5px;
-  font-weight: 600;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   padding: 1px 6px;
   border-radius: var(--ui-radius-pill);
   flex: none;
@@ -270,12 +310,12 @@
   padding: 10px 12px;
   background: var(--ui-ok-soft);
   border: 1px solid var(--ui-ok);
-  border-radius: var(--ui-radius-card);
+  border-radius: var(--ui-radius-panel);
 }
 
 .savings-banner .big {
   font-size: 21px;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--ui-ok);
   line-height: 1;
 }
@@ -301,7 +341,8 @@
   cursor: pointer;
   display: grid;
   place-items: center;
-  box-shadow: var(--ui-shadow-sm);
+  /* A resting hairline in place of the retired card-lift shadow. */
+  box-shadow: inset 0 0 0 1px var(--ui-line);
   transition: var(--ui-transition);
   background: var(--ui-g200);
   background-size: cover;
@@ -312,6 +353,14 @@
   border-color: var(--ui-p400);
 }
 
+/* Lazy thumbnail tile (`<img loading="lazy">` against the thumbs endpoint) replacing the old `background-image` div — fills the same square. */
+.asset-tile-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .asset-tile.used {
   border-color: var(--ui-ok);
 }
@@ -320,24 +369,27 @@
   position: absolute;
   bottom: 3px;
   left: 3px;
+  font-family: var(--ui-mono);
   font-size: 8px;
   font-weight: 600;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-g700);
+  color: var(--ui-overlay-ink-2);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .asset-tile .origin-tag {
   position: absolute;
   top: 3px;
   right: 3px;
+  font-family: var(--ui-mono);
   font-size: 7.5px;
-  font-weight: 700;
+  font-weight: 600;
+  text-transform: uppercase;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-p600);
+  color: var(--ui-overlay-ink);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
 }
 
 /* Non-image asset (a file the server cannot paint as `image/*`, e.g. .html/.txt/.json): a neutral placeholder instead of a broken `background-image`. */
@@ -362,12 +414,13 @@
   position: absolute;
   bottom: 3px;
   right: 3px;
+  font-family: var(--ui-mono);
   font-size: 7.5px;
-  font-weight: 700;
+  font-weight: 600;
   background: var(--ui-overlay-badge-soft);
-  color: var(--ui-p600);
+  color: var(--ui-overlay-ink);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm);
   border: none;
   cursor: pointer;
   opacity: 0;
@@ -393,13 +446,12 @@
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-sm);
   font-size: 12px;
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
   transition: var(--ui-transition);
 }
 
 .output-row:hover {
-  border-color: var(--ui-p400);
-  box-shadow: var(--ui-shadow-sm);
+  border-color: var(--ui-accent);
 }
 
 .output-row .output-name {
@@ -417,8 +469,8 @@
 }
 
 .upload-dropzone {
-  border: 1.5px dashed var(--ui-g300);
-  border-radius: var(--ui-radius-sm);
+  border: 1px dashed var(--ui-line-strong);
+  border-radius: var(--ui-radius-panel);
   padding: 16px;
   text-align: center;
   font-size: 11.5px;
@@ -445,7 +497,7 @@
   margin-left: auto;
   font-family: var(--ui-mono);
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .seg-control {
@@ -462,13 +514,15 @@
   font-size: 11.5px;
   font-weight: 500;
   color: var(--ui-ink-2);
-  border-radius: 6px;
+  border-radius: var(--ui-radius-sm);
   transition: var(--ui-transition);
 }
 
+/* A resting hairline in place of the retired card-lift shadow keeps the
+   active segment readable against the track. */
 .seg-control button.on {
   background: var(--ui-surface);
   color: var(--ui-head);
-  font-weight: 600;
-  box-shadow: var(--ui-shadow-sm);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--ui-line);
 }

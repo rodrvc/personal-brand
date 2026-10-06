@@ -6,7 +6,7 @@ import type {
   SlideObject,
 } from "../../../../system/ig-carousel/carousel-document.js";
 import type { LayoutTemplate, LayoutSlot } from "../../../../system/ig-carousel/layout-template.js";
-import { hashContent, loadIndex, registerFile, type AssetEntry } from "../../../../system/assets/index.js";
+import { hashContent, registerFile, type AssetEntry } from "../../../../system/assets/index.js";
 import { contrast, passesAA, describePaletteInWords } from "@personal-brand/core/color";
 import { loadBrandStyle, type BrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
@@ -18,6 +18,7 @@ import type {
   GenerateImageBrandContext,
   GenerateImageSpec,
 } from "../ai/piece-generator.js";
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import type { ProfileStore } from "../profile-store.js";
 
 /** Absolute fallback step count when a template declares no `defaultSlideCount` at all. */
@@ -195,7 +196,7 @@ export function buildCompositionPlan(
   preferredAssetIds?: string[],
 ): CompositionPlan {
   const slideKinds = planSlideKinds(promptText, template, slideCountOverride);
-  const index = loadIndex(store.roots.profileDir);
+  const index = loadIndexCached(store.roots.profileDir);
   const approvedByKind = new Map<AssetEntry["kind"], AssetEntry[]>();
   for (const entry of index.entries) {
     if (entry.status !== "approved") continue;
@@ -430,19 +431,45 @@ export async function applyCompositionPlan(
 }
 
 /**
- * Builds the `CarouselDocument` for a brand-new carousel, with no slides.
+ * Builds the `CarouselDocument` for a brand-new carousel.
  *
  * `templateId` is `undefined` for a document with NO template reference:
  * the `template` key is then omitted entirely rather than written as a
  * sentinel id, which is what "no template" means on disk (carousel-document
  * spec's "Template reference on the document").
+ *
+ * `options.blank` is the "Nuevo carrusel" entry point's own request (owner
+ * feedback: a brand-new carousel must not start carrying `explicativo`'s
+ * footer/pagination on every slide) — it adds exactly one slide with a
+ * manual, unpinned background in the brand's own surface color, so the
+ * editor opens on a real canvas instead of the empty-deck placeholder.
+ * The brand is required with it: the slide's color key is the brand's own
+ * `roles.surface`, never a guessed name. Omitted, the document keeps the
+ * historical zero-slide shape for any other caller (API/script use) that
+ * still relies on it.
  */
 export function buildEmptyDocument(
   templateId: string | undefined,
   carouselId: string,
   title?: string,
+  options?: { blank: true; brand: BrandTokens },
 ): CarouselDocument {
   const now = new Date().toISOString();
+  const slides: Slide[] = options?.blank
+    ? [
+        {
+          id: `${carouselId}-slide-1`,
+          kind: "step",
+          background: {
+            mode: "color",
+            colorKey: options.brand.roles.surface,
+            pinned: false,
+            source: "manual",
+          },
+          objects: [],
+        },
+      ]
+    : [];
 
   return {
     schemaVersion: 1,
@@ -454,7 +481,7 @@ export function buildEmptyDocument(
     canvas: { w: 1080, h: 1350 },
     prompt: { text: "", createdAt: now, runs: [] },
     ...(templateId === undefined ? {} : { template: { id: templateId } }),
-    slides: [],
+    slides,
   };
 }
 
@@ -576,6 +603,7 @@ export function storeImage(
     status: "candidate",
     destRelPath: `assets/generated/${contentHash}.${ext}`,
   });
+  invalidateAssetIndex(store.roots.profileDir);
   store.writeJson(`assets/generated/${entry.id}.json`, {
     prompt: spec.prompt,
     model: image.model,

@@ -3,8 +3,8 @@ import { basename } from "node:path";
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import type { LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { loadIndex } from "../../../../system/assets/index.js";
 
+import { loadIndexCached } from "../asset-index-cache.js";
 import { readValidatedDocument } from "../document-store.js";
 import type { ProfileStore } from "../profile-store.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
@@ -23,7 +23,7 @@ export interface ChatContext {
 export function buildChatContext(store: ProfileStore, carouselId: string): ChatContext {
   const brand = loadBrand(store.roots.profileDir);
   const doc = readValidatedDocument(store, carouselId);
-  const entries = loadIndex(store.roots.profileDir).entries;
+  const entries = loadIndexCached(store.roots.profileDir).entries;
   const assetKinds = new Map(entries.map((entry) => [entry.id, entry.kind]));
   const library = entries
     .filter((entry) => entry.status === "approved" && entry.origin !== "reference" && entry.mime.startsWith("image/"))

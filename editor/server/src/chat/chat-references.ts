@@ -1,5 +1,6 @@
-import { hashContent, loadIndex, registerFile } from "../../../../system/assets/index.js";
+import { hashContent, registerFile } from "../../../../system/assets/index.js";
 
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ImageToolUnavailableError, withSips } from "../image-tools.js";
 import { messages } from "../messages.js";
 import type { ProfileStore } from "../profile-store.js";
@@ -37,16 +38,18 @@ export function normalizeReference(bytes: Buffer, mime: string): { bytes: Buffer
 export function saveReference(store: ProfileStore, mime: string, bytes: Buffer): string {
   const ext = EXTENSIONS[mime];
   if (!ext) throw new ChatReferenceError(`Unsupported reference type "${mime}"`);
-  return registerFile(store.roots.profileDir, bytes, {
+  const entry = registerFile(store.roots.profileDir, bytes, {
     kind: "unclassified",
     origin: "reference",
     status: "candidate",
     destRelPath: `assets/references/${hashContent(bytes)}.${ext}`,
-  }).id;
+  });
+  invalidateAssetIndex(store.roots.profileDir);
+  return entry.id;
 }
 
 export function readAssetFile(store: ProfileStore, assetId: string): { bytes: Buffer; mime: string } | undefined {
-  const entry = loadIndex(store.roots.profileDir).entries.find((e) => e.id === assetId);
+  const entry = loadIndexCached(store.roots.profileDir).entries.find((e) => e.id === assetId);
   if (!entry || !store.exists(entry.path)) return undefined;
   return { bytes: store.readFile(entry.path), mime: entry.mime };
 }

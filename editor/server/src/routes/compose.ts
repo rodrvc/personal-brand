@@ -21,6 +21,7 @@ import {
   assertValidCarouselId,
   documentExists,
   DocumentStoreError,
+  readCarouselHeader,
   readValidatedDocument,
   readValidatedDocumentRevision,
   snapshotDocument,
@@ -58,14 +59,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
   /**
    * Creates a new carousel. This handler is INERT — it returns a document
-   * with no slides at all (`buildEmptyDocument`): no AI provider call, no
-   * library lookup, no cost, and no job id.
+   * with no AI provider call, no library lookup, no cost, and no job id.
    *
    * `?mode=plan` (or `{ preview: true }` in the body) is kept for
    * API/script callers that still want the OLD prompt-driven
    * plan/apply flow — building a plan from a prompt and applying it in a
    * second step. Nothing in editor/web calls either path; the web UI only
-   * ever sends `{ title, templateId }`.
+   * ever sends `{ title, blank: true }`.
    */
   router.post("/api/profiles/:slug/carousels", async (req, res) => {
     try {
@@ -73,18 +73,34 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       const body = req.body as {
         title?: string;
         prompt?: string;
-        /** `null` means "no template": the document is created with no `template` key and renders free (carousel-document spec). Omitting the field keeps the historical default instead. */
+        /** `null` means "no template": the document is created with no `template` key and renders free (carousel-document spec). Omitting the field keeps the historical default instead. Not allowed together with `blank` (400) — see below. */
         templateId?: string | null;
         id?: string;
         assetIds?: string[];
         /** API-client-only override — the web UI never sends this; slide count comes from the prompt or the template default instead (see planner.ts's `resolveStepCount`). */
         slideCount?: number;
         preview?: boolean;
+        /**
+         * The editor's own "Nuevo carrusel" entry point (owner feedback: a
+         * brand-new carousel must not open already stamped with
+         * `explicativo`'s footer/pagination on every slide). Forces the
+         * free template (every zone inert, no footer — same one
+         * `EditorRoute` already falls back to for a template-less
+         * document) and seeds one blank slide. Sending `templateId` as
+         * well is a 400, not a silent override. Omitted (or `false`)
+         * keeps the historical default for any other caller.
+         */
+        blank?: boolean;
       };
+      const blank = body.blank === true;
+      if (blank && body.templateId !== undefined) {
+        res.status(400).json({ error: `"blank" and "templateId" cannot be sent together` });
+        return;
+      }
       // `undefined` (field absent) -> the historical default; explicit
       // `null` -> no template at all. `??` cannot tell those apart, so the
-      // check is on `undefined` specifically.
-      const templateId = body.templateId === undefined ? "explicativo" : body.templateId;
+      // check is on `undefined` specifically. `blank` means no template.
+      const templateId = blank ? null : body.templateId === undefined ? "explicativo" : body.templateId;
       const carouselId = body.id ?? `carousel-${Date.now()}`;
       assertValidCarouselId(carouselId);
       if (documentExists(store, carouselId)) {
@@ -133,7 +149,12 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
       // `brand.json` or an unknown template id, so the result is discarded.
       const brand = loadBrand(store.roots.profileDir);
       if (templateId !== null) void loadLayoutTemplate(store.roots.profileDir, templateId, brand);
-      const document = buildEmptyDocument(templateId ?? undefined, carouselId, body.title);
+      const document = buildEmptyDocument(
+        templateId ?? undefined,
+        carouselId,
+        body.title,
+        blank ? { blank: true, brand } : undefined,
+      );
       await writeDocumentThroughRevision(store, document, { create: true });
 
       res.status(201).json({ document });
@@ -533,11 +554,40 @@ function isVisualObject(object: SlideObject): object is Extract<SlideObject, { k
 }
 
 /** Percentage of the carousel's visual pieces (backgrounds + asset objects) whose `source` is `"library"` (piece-generation spec's "Library ratio with history"). */
-function libraryRatio(doc: CarouselDocument): number {
+export function libraryRatio(doc: CarouselDocument): number {
   const visualPieces = doc.slides.flatMap((s) => [s.background, ...s.objects.filter(isVisualObject)]);
   if (visualPieces.length === 0) return 0;
   const fromLibrary = visualPieces.filter((p) => p.source === "library").length;
   return Math.round((fromLibrary / visualPieces.length) * 100);
+}
+
+/**
+ * `libraryRatio`, but over an unvalidated raw document — same idea as
+ * `listCarousels` in document-store.ts: this stat only ever reads each
+ * piece's `source` field, so there's no reason to pay for
+ * `readValidatedDocument`'s brand reload + full asset-index rescan on
+ * every one of the profile's other carousels just to compute it. Counts
+ * the same visual pieces `libraryRatio` does (every background, plus only
+ * `kind: "asset"` objects — text never counts). A document that doesn't
+ * shape-check the way this expects contributes 0 rather than throwing.
+ */
+export function libraryRatioRaw(raw: unknown): number {
+  const slides = (raw as { slides?: unknown })?.slides;
+  if (!Array.isArray(slides)) return 0;
+  const sources: unknown[] = [];
+  for (const slide of slides) {
+    const s = slide as { background?: { source?: unknown }; objects?: unknown };
+    if (s?.background && "source" in s.background) sources.push(s.background.source);
+    if (Array.isArray(s?.objects)) {
+      for (const object of s.objects) {
+        const o = object as { kind?: unknown; source?: unknown } | null;
+        if (o?.kind === "asset") sources.push(o.source);
+      }
+    }
+  }
+  if (sources.length === 0) return 0;
+  const fromLibrary = sources.filter((s) => s === "library").length;
+  return Math.round((fromLibrary / sources.length) * 100);
 }
 
 /** Every carousel of the same profile, excluding the current one, most recently updated first — used for the reuse-trend comparison (piece-generation spec's "Library ratio with history"). */
@@ -545,17 +595,14 @@ function previousCarouselsLibraryRatio(
   store: ProfileStore,
   currentCarouselId: string,
 ): Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> {
-  const entries = store.list("carousels");
   const out: Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> = [];
-  for (const entry of entries) {
+  for (const entry of store.list("carousels")) {
     if (!entry.isDirectory() || entry.name === currentCarouselId) continue;
-    if (!documentExists(store, entry.name)) continue;
-    try {
-      const doc = readValidatedDocument(store, entry.name);
-      out.push({ carouselId: doc.id, updatedAt: doc.updatedAt, libraryRatio: libraryRatio(doc) });
-    } catch {
-      continue;
-    }
+    // Same raw reader and skip rules as the carousel listing, so the
+    // history covers exactly the carousels the listing shows.
+    const header = readCarouselHeader(store, entry.name);
+    if (!header) continue;
+    out.push({ carouselId: header.id, updatedAt: header.updatedAt, libraryRatio: libraryRatioRaw(header) });
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

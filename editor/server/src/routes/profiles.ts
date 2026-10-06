@@ -8,6 +8,7 @@ import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-d
 import { updateEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
+import { invalidateAssetIndex } from "../asset-index-cache.js";
 import {
   documentExists,
   DocumentStoreError,
@@ -21,6 +22,7 @@ import {
 } from "../document-store.js";
 import { messages } from "../messages.js";
 import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
+import { buildCardSummary } from "../profile-card.js";
 
 /**
  * Turns a rejected path or id into a 400, everything else into a 404/500 as
@@ -45,9 +47,41 @@ function handleStoreError(error: unknown, res: import("express").Response): void
 export function profilesRouter(): Router {
   const router = Router();
 
+  /**
+   * `card` is computed on top of `listProfilesAsync()`'s cheap slug/hasBrand
+   * pair (editor-ui restyle: the picker's "generic slop" feedback) — one
+   * `buildCardSummary` per profile, wrapped so a single broken profile
+   * (corrupt brand.json, unreadable asset index, no local mirror yet in `s3`
+   * mode) never 500s the whole listing: it just answers with
+   * `card: undefined`, same as a profile with no brand.json at all.
+   */
   router.get("/api/profiles", async (_req, res) => {
     try {
-      res.json({ profiles: await listProfilesAsync() });
+      const profiles = (await listProfilesAsync()).map((entry) => {
+        if (!entry.hasBrand) return entry;
+        try {
+          return { ...entry, card: buildCardSummary(entry.slug) };
+        } catch {
+          return entry;
+        }
+      });
+      res.json({ profiles });
+    } catch (error) {
+      handleStoreError(error, res);
+    }
+  });
+
+  /**
+   * Slug-scoped card summary (brand home dashboard) — same data as the
+   * `card` field `GET /api/profiles` attaches to each listing entry, but
+   * without paying for every other profile's cover/asset-index work just
+   * to read one brand's wordmark and font. Never 500s: `buildCardSummary`
+   * degrades to `card: undefined` for a profile with no/broken brand.json,
+   * same as the listing does.
+   */
+  router.get("/api/profiles/:slug/card", (req, res) => {
+    try {
+      res.json({ card: buildCardSummary(req.params.slug) });
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -317,6 +351,7 @@ function approveNewlyPinnedAssets(
     const wasPinned = previousSlide?.background?.pinned ?? false;
     if (background.mode === "asset" && background.pinned && !wasPinned) {
       updateEntry(store.roots.profileDir, background.assetId, { status: "approved" });
+      invalidateAssetIndex(store.roots.profileDir);
     }
 
     for (const object of slide.objects) {
@@ -328,6 +363,7 @@ function approveNewlyPinnedAssets(
       const objectWasPinned = previousObject?.pinned ?? false;
       if (!objectWasPinned) {
         updateEntry(store.roots.profileDir, object.assetId, { status: "approved" });
+        invalidateAssetIndex(store.roots.profileDir);
       }
     }
   });

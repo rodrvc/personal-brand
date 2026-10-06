@@ -4,7 +4,6 @@ import { Router } from "express";
 
 import { computeUsage } from "../../../../system/assets/usage.js";
 import {
-  loadIndex,
   registerFile,
   updateEntry,
   ASSET_KINDS,
@@ -13,7 +12,9 @@ import {
   type AssetStatus,
 } from "../../../../system/assets/index.js";
 
+import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { getOrCreateThumbnail, resolveThumbWidth } from "../thumbnail.js";
 
 /**
  * Max upload size, defensive rather than product-driven — the spec doesn't
@@ -44,7 +45,7 @@ export function assetsRouter(): Router {
   router.get("/api/profiles/:slug/assets", (req, res) => {
     try {
       const store = new ProfileStore(req.params.slug);
-      const index = loadIndex(store.roots.profileDir);
+      const index = loadIndexCached(store.roots.profileDir);
       const usage = computeUsage(store.roots.profileDir);
       const entries = index.entries.map((entry) => ({
         ...entry,
@@ -115,6 +116,7 @@ export function assetsRouter(): Router {
           status: "approved",
           destRelPath,
         });
+        invalidateAssetIndex(store.roots.profileDir);
         res.status(201).json(entry);
       } catch (error) {
         res.status(500).json({ error: (error as Error).message });
@@ -153,6 +155,7 @@ export function assetsRouter(): Router {
       }
 
       const entry = updateEntry(store.roots.profileDir, req.params.assetId, changes);
+      invalidateAssetIndex(store.roots.profileDir);
       res.json(entry);
     } catch (error) {
       const message = (error as Error).message;
@@ -211,6 +214,32 @@ export function assetsRouter(): Router {
       // Never leak *why* — ENOENT vs. confinement rejection both 404, per
       // the spec's "Path outside assets" scenario: "responds 404 without
       // reading the file".
+      res.status(404).end();
+    }
+  });
+
+  /**
+   * Read-only, confined thumbnail serving for the Bucket pane's asset grid
+   * — a ~256px (`?w=`, snapped to 128/256/512) WebP derivative of the same
+   * `assets/**` file the plain `files/*splat` route above serves full-size,
+   * generated on demand and cached outside the profile directory (see
+   * `thumbnail.ts`). Same confinement as the full-size route (every path
+   * goes through `store.readFileAsync`, so a traversal attempt 404s without
+   * ever reading outside `assets/`) and the same cache header reasoning:
+   * the URL is content-addressed (the library stores assets by hash), so a
+   * hit is safe to cache forever client-side too.
+   */
+  router.get("/api/profiles/:slug/assets/thumbs/*splat", async (req, res) => {
+    try {
+      const store = new ProfileStore(req.params.slug);
+      const wildcard = (req.params as unknown as Record<string, string | string[]>).splat;
+      const relUnderAssets = Array.isArray(wildcard) ? wildcard.join("/") : String(wildcard ?? "");
+      const width = resolveThumbWidth(req.query.w as string | string[] | undefined);
+      const buffer = await getOrCreateThumbnail(store, relUnderAssets, width);
+      res.setHeader("Content-Type", "image/webp");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(buffer);
+    } catch {
       res.status(404).end();
     }
   });

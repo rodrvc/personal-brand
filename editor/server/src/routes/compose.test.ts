@@ -223,6 +223,47 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.ok(html.includes("<html"), "still a full HTML document");
     },
   ],
+
+  [
+    "POST /carousels with blank: true writes one slide on the free template, and the document opens (GET 200)",
+    async () => {
+      const { status, body } = await post(`/api/profiles/${SLUG}/carousels`, {
+        id: "blank-one",
+        title: "Blank one",
+        blank: true,
+      });
+      assert.equal(status, 201);
+      const { document } = body as { document: { template?: { id: string }; slides: unknown[] } };
+      assert.equal("template" in document, false, "blank create must omit `template` (the free template)");
+      assert.equal(document.slides.length, 1, "blank create must seed exactly one slide");
+      const [slide] = document.slides as Array<{ background: { mode: string; colorKey: string } }>;
+      assert.equal(slide.background.mode, "color");
+
+      const store = new ProfileStore(SLUG);
+      const onDisk = readDocumentRaw(store, "blank-one") as Record<string, unknown>;
+      assert.equal("template" in onDisk, false, "persisted blank document must omit `template`");
+      assert.deepEqual(onDisk.slides, document.slides, "persisted slides must match the response");
+
+      // The GET route fully validates the document against the profile's
+      // brand, so a 200 proves the seeded color key is one the brand has.
+      const opened = await get(`/api/profiles/${SLUG}/carousels/blank-one`);
+      assert.equal(opened.status, 200, "the blank carousel must open (validate) right after creation");
+    },
+  ],
+
+  [
+    "POST /carousels with both blank and templateId is a 400, not a silent override",
+    async () => {
+      const { status } = await post(`/api/profiles/${SLUG}/carousels`, {
+        id: "blank-and-template",
+        title: "Blank and template",
+        blank: true,
+        templateId: "explicativo",
+      });
+      assert.equal(status, 400);
+      assert.equal(documentExists(new ProfileStore(SLUG), "blank-and-template"), false, "nothing is written");
+    },
+  ],
 ];
 
 let failed = 0;

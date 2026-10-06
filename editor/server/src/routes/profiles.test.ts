@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,11 +31,163 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const FULL_SLUG = "acme-full";
 cpSync(join(REPO_ROOT, "profiles", "example"), join(root, FULL_SLUG), { recursive: true });
 
+/**
+ * Another profile with a valid, minimal brand.json plus a registered
+ * `kind: "logo"` asset — exercises the `GET /api/profiles` card-summary
+ * enrichment (brand cards feature): colors/fonts/wordmark read straight
+ * from brand.json, and `logoAssetUrl` pointing at the registered file.
+ */
+const BRANDED_SLUG = "branded";
+const brandedDir = join(root, BRANDED_SLUG);
+mkdirSync(brandedDir, { recursive: true });
+writeFileSync(
+  join(brandedDir, "brand.json"),
+  JSON.stringify({
+    locale: "es-CL",
+    colors: { ink: "#111111", paper: "#fafafa" },
+    roles: {
+      accent: "ink",
+      wordmark: "ink",
+      surface: "paper",
+      onSurface: "ink",
+      onSurfaceMuted: "ink",
+      flourish: "ink",
+      highlight: "ink",
+    },
+    fonts: { logo: "Fraunces", body: "Inter", handwritten: "Caveat" },
+    googleFontsHref: "https://fonts.googleapis.com/css2?family=Fraunces",
+    radius: { card: "12px" },
+    copy: { wordmark: "Marca Ficticia", site: "marcaficticia.example" },
+  }),
+);
+
+// A 1x1 transparent PNG, just enough for `detectImage` to classify it.
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
+/**
+ * Another profile whose brand.json exists but is missing a required field
+ * (`roles`) — `loadBrand` throws for it. Proves the listing degrades that
+ * one profile's `card` to `undefined` instead of 500ing the whole endpoint.
+ */
+const BROKEN_SLUG = "broken-brand";
+const brokenDir = join(root, BROKEN_SLUG);
+mkdirSync(brokenDir, { recursive: true });
+writeFileSync(join(brokenDir, "brand.json"), JSON.stringify({ colors: {} }));
+
+/**
+ * A fourth profile isolating the cover-picking behavior: two carousels, the
+ * *newer* one still essentially empty (default color background, no
+ * objects — what `POST /carousels` actually creates) and an *older* one
+ * whose first slide has real text. Proves the card's cover skips the
+ * empty-but-newest carousel and falls through to the older one that
+ * actually has content, instead of a blank sheet.
+ */
+const COVER_SLUG = "cover-pick";
+const coverDir = join(root, COVER_SLUG);
+mkdirSync(coverDir, { recursive: true });
+writeFileSync(
+  join(coverDir, "brand.json"),
+  JSON.stringify({
+    locale: "es-CL",
+    colors: { ink: "#222222", paper: "#eeeeee" },
+    roles: {
+      accent: "ink",
+      wordmark: "ink",
+      surface: "paper",
+      onSurface: "ink",
+      onSurfaceMuted: "ink",
+      flourish: "ink",
+      highlight: "ink",
+    },
+    fonts: { logo: "Fraunces", body: "Inter", handwritten: "Caveat" },
+    radius: { card: "12px" },
+    copy: { wordmark: "Cover Pick", site: "coverpick.example" },
+  }),
+);
+
+function minimalCarouselDoc(id: string, updatedAt: string, slide0Objects: unknown[]): unknown {
+  return {
+    schemaVersion: 1,
+    id,
+    title: id,
+    status: "draft",
+    createdAt: updatedAt,
+    updatedAt,
+    canvas: { w: 1080, h: 1350 },
+    prompt: { text: "", createdAt: updatedAt },
+    template: { id: "explicativo" },
+    slides: [
+      {
+        id: "s1",
+        kind: "cover",
+        background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" },
+        objects: slide0Objects,
+      },
+    ],
+  };
+}
+
+const EMPTY_NEWEST_ID = "empty-newest";
+const CONTENT_OLDER_ID = "content-older";
+mkdirSync(join(coverDir, "carousels", EMPTY_NEWEST_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", EMPTY_NEWEST_ID, "carousel.json"),
+  JSON.stringify(minimalCarouselDoc(EMPTY_NEWEST_ID, "2026-09-28T00:00:00.000Z", [])),
+);
+mkdirSync(join(coverDir, "carousels", CONTENT_OLDER_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", CONTENT_OLDER_ID, "carousel.json"),
+  JSON.stringify(
+    minimalCarouselDoc(CONTENT_OLDER_ID, "2026-09-01T00:00:00.000Z", [
+      { id: "t1", kind: "text", text: "Hola mundo", pinned: false, locked: false, source: "manual" },
+    ]),
+  ),
+);
+
 const { default: express } = await import("express");
 const { profilesRouter } = await import("./profiles.js");
 const { ProfileStore } = await import("../profile-store.js");
 const { writeDocument, readDocumentRaw, listVersions } = await import("../document-store.js");
 const { buildEmptyDocument } = await import("../compose/planner.js");
+const { registerFile } = await import("../../../../system/assets/index.js");
+
+registerFile(brandedDir, ONE_PIXEL_PNG, { kind: "logo", origin: "manual", status: "approved" });
+
+/**
+ * A newest carousel whose only content is a `kind: "asset"` object
+ * pointing at an assetId that resolves to nothing — the two causes named
+ * for this are "not in the profile's asset index" and "in the index but
+ * its file is missing on disk"; this fixture exercises the first (a
+ * never-registered id), since the second is inherently self-healing in
+ * `loadIndex` (any stale index entry gets rescanned away the moment disk
+ * and index disagree, which is exactly what makes the profile's own asset
+ * index trustworthy in the first place). Either way the observable
+ * contract is the same: this carousel — despite being the newest, and
+ * despite carrying an `asset` object rather than an empty slide — must not
+ * win the cover race over an older carousel that has real, renderable
+ * content. Its `updatedAt` is newer than both `EMPTY_NEWEST_ID` and
+ * `CONTENT_OLDER_ID`.
+ */
+const ASSET_UNRESOLVABLE_ID = "asset-unresolvable";
+mkdirSync(join(coverDir, "carousels", ASSET_UNRESOLVABLE_ID), { recursive: true });
+writeFileSync(
+  join(coverDir, "carousels", ASSET_UNRESOLVABLE_ID, "carousel.json"),
+  JSON.stringify(
+    minimalCarouselDoc(ASSET_UNRESOLVABLE_ID, "2026-09-29T00:00:00.000Z", [
+      {
+        id: "a1",
+        kind: "asset",
+        assetId: "0000000000000000",
+        pinned: true,
+        locked: false,
+        source: "manual",
+      },
+    ]),
+  ),
+);
 
 const app = express();
 app.use(express.json());
@@ -210,6 +362,188 @@ const tests: Array<[string, () => Promise<void>]> = [
         else process.env.BRAND_PROFILES_DIR = previousProfilesDir;
         rmSync(cacheDir, { recursive: true, force: true });
       }
+    },
+  ],
+
+  [
+    "GET /api/profiles enriches a profile with brand.json with a card summary",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{
+          slug: string;
+          hasBrand: boolean;
+          card?: {
+            colors: string[];
+            logoFont?: string;
+            googleFontsHref?: string;
+            wordmark?: string;
+            logoAssetUrl?: string;
+            carouselCount: number;
+          };
+        }>;
+      };
+      const branded = profiles.find((p) => p.slug === BRANDED_SLUG);
+      assert.ok(branded, "branded profile must be listed");
+      assert.equal(branded!.hasBrand, true);
+      assert.ok(branded!.card, "a profile with brand.json must carry a card summary");
+      assert.deepEqual(branded!.card!.colors.sort(), ["#111111", "#fafafa"]);
+      assert.equal(branded!.card!.logoFont, "Fraunces");
+      assert.equal(branded!.card!.googleFontsHref, "https://fonts.googleapis.com/css2?family=Fraunces");
+      assert.equal(branded!.card!.wordmark, "Marca Ficticia");
+      assert.equal(branded!.card!.carouselCount, 0);
+      assert.match(branded!.card!.logoAssetUrl ?? "", new RegExp(`^/api/profiles/${BRANDED_SLUG}/assets/files/`));
+    },
+  ],
+
+  [
+    "GET /api/profiles/:slug/card returns the same card summary as the listing, scoped to one profile",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${BRANDED_SLUG}/card`);
+      assert.equal(status, 200);
+      const { card } = body as { card?: { wordmark?: string; logoFont?: string; carouselCount: number } };
+      assert.ok(card, "a profile with brand.json must carry a card summary");
+      assert.equal(card!.wordmark, "Marca Ficticia");
+      assert.equal(card!.logoFont, "Fraunces");
+      assert.equal(card!.carouselCount, 0);
+    },
+  ],
+
+  [
+    "GET /api/profiles/:slug/card answers card: undefined for a profile with a broken brand.json",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${BROKEN_SLUG}/card`);
+      assert.equal(status, 200);
+      const { card } = body as { card?: unknown };
+      assert.equal(card, undefined);
+    },
+  ],
+
+  [
+    "GET /api/profiles omits card for a profile with no brand.json, without failing the listing",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as { profiles: Array<{ slug: string; hasBrand: boolean; card?: unknown }> };
+      const noBrand = profiles.find((p) => p.slug === SLUG);
+      assert.ok(noBrand);
+      assert.equal(noBrand!.hasBrand, false);
+      assert.equal(noBrand!.card, undefined);
+    },
+  ],
+
+  [
+    "GET /api/profiles picks the newest carousel that actually has content, skipping an empty newer one",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{ slug: string; card?: { coverImageUrl?: string; carouselCount: number } }>;
+      };
+      const coverPick = profiles.find((p) => p.slug === COVER_SLUG);
+      assert.ok(coverPick?.card, "cover-pick profile must carry a card summary");
+      assert.equal(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${CONTENT_OLDER_ID}/slides/0/png`,
+        "cover must point at the older carousel with content, not the empty newest one",
+      );
+    },
+  ],
+
+  [
+    "GET /api/profiles skips a newest carousel whose only content is an unresolvable assetId, in favor of an older carousel with real content",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{ slug: string; card?: { coverImageUrl?: string; carouselCount: number } }>;
+      };
+      const coverPick = profiles.find((p) => p.slug === COVER_SLUG);
+      assert.ok(coverPick?.card, "cover-pick profile must carry a card summary");
+      assert.notEqual(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${ASSET_UNRESOLVABLE_ID}/slides/0/png`,
+        "the newest carousel's unresolvable asset must never win the cover race",
+      );
+      assert.equal(
+        coverPick!.card!.coverImageUrl,
+        `/api/profiles/${COVER_SLUG}/carousels/${CONTENT_OLDER_ID}/slides/0/png`,
+        "cover must still fall through to the older carousel with real content",
+      );
+    },
+  ],
+
+  [
+    "GET /api/profiles/:slug/carousels lists every carousel newest-first without paying full document validation",
+    async () => {
+      const { status, body } = await get(`/api/profiles/${COVER_SLUG}/carousels`);
+      assert.equal(status, 200);
+      const { carousels } = body as { carousels: Array<{ id: string; status: string; updatedAt: string }> };
+      // All three fixture carousels, including ASSET_UNRESOLVABLE_ID — its
+      // assetId doesn't resolve to anything, which the old
+      // readValidatedDocument-based listing would have rejected outright
+      // ("unknown asset id") and silently dropped from this list. The
+      // lightweight raw listing this route now uses only checks the five
+      // fields it actually displays, so a document with an unrelated bad
+      // reference still shows up (its own carousel page still 400s if
+      // opened, unaffected by this listing).
+      assert.deepEqual(
+        carousels.map((c) => c.id),
+        [ASSET_UNRESOLVABLE_ID, EMPTY_NEWEST_ID, CONTENT_OLDER_ID],
+        "newest-first by updatedAt, all three present",
+      );
+      assert.ok(
+        carousels.every((c) => c.status === "draft"),
+        "status must be read correctly for every entry",
+      );
+    },
+  ],
+
+  [
+    "the carousel listing and the brand card skip a document whose id is not its directory name or whose updatedAt does not parse, and agree on the count",
+    async () => {
+      const slug = "header-rules";
+      const dir = join(root, slug);
+      mkdirSync(dir, { recursive: true });
+      cpSync(join(coverDir, "brand.json"), join(dir, "brand.json"));
+      const writeCarousel = (dirName: string, doc: unknown) => {
+        mkdirSync(join(dir, "carousels", dirName), { recursive: true });
+        writeFileSync(join(dir, "carousels", dirName, "carousel.json"), JSON.stringify(doc));
+      };
+      writeCarousel("valid-one", minimalCarouselDoc("valid-one", "2026-09-10T00:00:00.000Z", []));
+      // Copied folder: its document still carries the original's id, so a
+      // listing that trusted `raw.id` would link to (and count) the wrong carousel.
+      writeCarousel("copied-folder", minimalCarouselDoc("valid-one", "2026-09-11T00:00:00.000Z", []));
+      writeCarousel("bad-date", minimalCarouselDoc("bad-date", "not a date", []));
+
+      const list = await get(`/api/profiles/${slug}/carousels`);
+      assert.equal(list.status, 200);
+      const { carousels } = list.body as { carousels: Array<{ id: string }> };
+      assert.deepEqual(
+        carousels.map((c) => c.id),
+        ["valid-one"],
+        "only the carousel whose id matches its folder and whose updatedAt parses is listed",
+      );
+
+      const listing = await get("/api/profiles");
+      const { profiles } = listing.body as { profiles: Array<{ slug: string; card?: { carouselCount: number } }> };
+      const card = profiles.find((p) => p.slug === slug)?.card;
+      assert.ok(card, "header-rules profile must carry a card summary");
+      assert.equal(card!.carouselCount, carousels.length, "card count must agree with the listing");
+    },
+  ],
+
+  [
+    "GET /api/profiles degrades a broken brand.json to a missing card instead of 500ing",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as { profiles: Array<{ slug: string; hasBrand: boolean; card?: unknown }> };
+      const broken = profiles.find((p) => p.slug === BROKEN_SLUG);
+      assert.ok(broken, "broken-brand profile must still be listed");
+      assert.equal(broken!.hasBrand, true, "brand.json exists on disk, even though it fails to parse");
+      assert.equal(broken!.card, undefined);
     },
   ],
 ];

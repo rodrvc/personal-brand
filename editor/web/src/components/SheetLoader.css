@@ -1,0 +1,142 @@
+.sheet-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 0;
+}
+
+.sheet-loader-svg {
+  width: 132px;
+  height: auto;
+  aspect-ratio: 4 / 5;
+  overflow: visible;
+}
+
+/* Faint static frame — always there, under both the glow and the blocks. */
+.sheet-loader-outline {
+  fill: none;
+  stroke: var(--ui-line);
+  stroke-width: 1.5;
+}
+
+/*
+ * The comet's blurred trail. `color-mix()` derives everything from the one
+ * accent colour a caller passes (`--sheet-loader-accent`, falling back to
+ * the chrome's own `--ui-accent`) — no second hardcoded colour anywhere in
+ * this file.
+ */
+.sheet-loader-glow {
+  fill: none;
+  stroke: var(--sheet-loader-accent, var(--ui-accent));
+  stroke-width: 7;
+  stroke-linecap: round;
+  filter: blur(5px);
+  opacity: 0.4;
+  stroke-dasharray: 130 870;
+  animation: sheet-loader-travel 2.2s linear infinite;
+}
+
+/* The bright comet head riding on top of its own glow. */
+.sheet-loader-light {
+  fill: none;
+  stroke: var(--sheet-loader-accent, var(--ui-accent));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  opacity: 0.95;
+  stroke-dasharray: 46 954;
+  animation: sheet-loader-travel 2.2s linear infinite;
+}
+
+@keyframes sheet-loader-travel {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+/* Placeholder blocks fill with a soft tint of the same accent — never a plain grey, so the loader still reads as "this brand's sheet" even before anything has rendered. */
+.sheet-loader-block {
+  fill: color-mix(in srgb, var(--sheet-loader-accent, var(--ui-accent)) 16%, var(--ui-g100));
+  /* Base (non-animated) state: fully visible, no offset — what shows once `prefers-reduced-motion` disables the animation below via tokens.css's global rule. */
+  opacity: 1;
+}
+
+.sheet-loader-blocks .sheet-loader-block {
+  animation: sheet-loader-compose 2s var(--ui-ease) infinite;
+}
+
+.sheet-loader-block-title {
+  animation-delay: 0s;
+}
+.sheet-loader-block-image {
+  animation-delay: 0.16s;
+}
+.sheet-loader-block-line1 {
+  animation-delay: 0.32s;
+}
+.sheet-loader-block-line2 {
+  animation-delay: 0.44s;
+}
+.sheet-loader-block-line3 {
+  animation-delay: 0.56s;
+}
+
+@keyframes sheet-loader-compose {
+  0% {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  14% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  84% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.sheet-loader-caption {
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ui-ink-3);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Belt-and-suspenders with tokens.css's global `prefers-reduced-motion`
+ * rule (which already disables every animation on the page, including
+ * these): collapses the travelling comet into one steady stroke around the
+ * whole perimeter — "static sheet, steady glow" reads very differently
+ * from "comet frozen mid-flight on one edge", which is what merely turning
+ * the animation off would otherwise leave behind.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .sheet-loader-glow,
+  .sheet-loader-light {
+    stroke-dasharray: none;
+    animation: none;
+  }
+}

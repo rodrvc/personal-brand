@@ -14,8 +14,9 @@ import type {
   LayoutTemplate,
   LayoutTemplateSummary,
   OutputVersion,
+  ProfileCardSummary,
   ProfileListingEntry,
-  StatsResponse,
+  // StatsResponse — only used by the parked `getStats` below.
 } from "./types";
 
 export class ApiError extends Error {
@@ -54,6 +55,11 @@ export function listProfiles(): Promise<{ profiles: ProfileListingEntry[] }> {
 
 export function getBrand(slug: string): Promise<BrandTokens> {
   return request(`/profiles/${slug}/brand`);
+}
+
+/** Slug-scoped brand card summary (wordmark, logo font, cover, counts) — same shape as `ProfileListingEntry.card`, for a route that only needs one profile's own card (the brand home dashboard) rather than the whole picker listing. `card` is `undefined` for a profile with no/broken brand.json. */
+export function getProfileCard(slug: string): Promise<{ card?: ProfileCardSummary }> {
+  return request(`/profiles/${slug}/card`);
 }
 
 /** The brand's optional style guide (palette/fonts/keywords/tone/positioning/image direction/logo rules) — always returns a (possibly all-empty) style, never 404s for a profile with no style files. */
@@ -103,15 +109,18 @@ export function putCarousel(
 }
 
 /**
- * Creates a new, empty carousel (editor-ui spec's "New carousel opens
- * empty"): inert — no AI call, no cost, no job id. `title` is optional;
- * the server falls back to the carousel id when omitted. `templateId: null`
- * is the explicit "sin template" choice — distinct from omitting the field,
- * which the server reads as its default template.
+ * Creates a new carousel. Inert — no AI call, no cost, no job id. `title`
+ * is optional; the server falls back to the carousel id when omitted.
+ * `templateId: null` is the explicit "sin template" choice — distinct from
+ * omitting the field, which the server reads as its default template.
+ * `blank: true` (what the editor's own "Nuevo carrusel" button sends) is a
+ * stronger request that overrides `templateId`: the free template (no
+ * footer, no pagination) plus one blank slide, instead of the historical
+ * zero-slide `explicativo` default.
  */
 export function createCarousel(
   slug: string,
-  body: { title?: string; templateId?: string | null; id?: string },
+  body: { title?: string; templateId?: string | null; id?: string; blank?: boolean },
 ): Promise<CreateCarouselResponse> {
   return request(`/profiles/${slug}/carousels`, {
     method: "POST",
@@ -192,9 +201,15 @@ export function getAiPricing(): Promise<{ imageModel: string; estimatedImageCost
   return request(`/ai/pricing`);
 }
 
-export function getStats(slug: string, carouselId: string): Promise<StatsResponse> {
-  return request(`/profiles/${slug}/carousels/${carouselId}/stats`);
-}
+// Parked (owner decision, 2026-09-28): the library-ratio stat this called
+// validates every OTHER carousel in the profile server-side, which took
+// ~20s on a profile with dozens of carousels — an unused feature that was
+// blocking the whole editor's load. The server route still exists and
+// still works; nothing in the web app calls it any more. Retake only with
+// a cheap server-side implementation and a real use for the number.
+// export function getStats(slug: string, carouselId: string): Promise<StatsResponse> {
+//   return request(`/profiles/${slug}/carousels/${carouselId}/stats`);
+// }
 
 export function slideHtmlUrl(slug: string, carouselId: string, index: number): string {
   return `/api/profiles/${slug}/carousels/${carouselId}/slides/${index}/html`;
@@ -242,6 +257,20 @@ export async function uploadAsset(slug: string, file: File): Promise<AssetEntry>
 
 export function assetFileUrl(slug: string, relPathUnderAssets: string): string {
   return `/api/profiles/${slug}/assets/files/${relPathUnderAssets}`;
+}
+
+/**
+ * A ~256px WebP derivative (`?w=` overrides the default, snapped server-side
+ * to 128, 256 or 512), for a library tile that only needs to be recognizable — never
+ * the full original. Reduces what opening the Bucket tab downloads on a
+ * profile with many large assets; the full `assetFileUrl` stays reserved
+ * for the few places that actually need the original (drag/insert
+ * resolves the real asset by id regardless of which URL painted the tile,
+ * and slide rendering never reads from this endpoint at all).
+ */
+export function assetThumbUrl(slug: string, relPathUnderAssets: string, width?: number): string {
+  const query = width ? `?w=${width}` : "";
+  return `/api/profiles/${slug}/assets/thumbs/${relPathUnderAssets}${query}`;
 }
 
 /** The generation sidecar's `prompt` for an AI-origin asset — used to prefill the "Regenerar" field with what was actually asked for last time. 404s for a manual/library asset. */

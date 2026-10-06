@@ -1,13 +1,14 @@
 .picker {
-  max-width: 640px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 48px 24px;
+  padding: clamp(48px, 7vw, 96px) clamp(24px, 5vw, 64px) 72px;
 }
 
-.picker-title {
-  color: var(--ui-head);
-  font-size: 22px;
-  margin: 0 0 18px;
+/* Kicker + display title, closed by a hairline rule like the reference's section intros. */
+.picker-header {
+  padding-bottom: 32px;
+  margin-bottom: 36px;
+  border-bottom: 1px solid var(--ui-line);
 }
 
 .picker-error {
@@ -15,43 +16,163 @@
 }
 
 .picker-hint {
-  color: var(--ui-ink-3);
+  color: var(--ui-ink-2);
 }
 
-.picker-list {
+.brand-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 20px;
+  /* Default `stretch` would pad every card up to its row's tallest neighbor — exactly what makes a cover-less disabled card read as a big empty box. Each card keeps its own intrinsic height instead; the columns still line up. */
+  align-items: start;
+}
+
+/*
+ * The chrome stays neutral here — translucent paper, hairline border, 12px
+ * radius and the chrome's own short accent bar on the top edge (it grows
+ * to full width on hover). Whatever color a brand's card carries lives
+ * entirely inside the cover/swatches/wordmark, never on the card shell
+ * itself.
+ */
+.brand-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.picker-card {
-  display: block;
-  padding: 14px 16px;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
+  background: var(--ui-glass-card);
   color: var(--ui-ink);
   text-decoration: none;
-  font-weight: 600;
+  overflow: hidden;
   transition: var(--ui-transition);
 }
 
-.picker-card:hover {
-  border-color: var(--ui-p400);
-  color: var(--ui-head);
-  box-shadow: var(--ui-shadow-sm);
+.brand-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  z-index: 1;
+  background: var(--ui-card-bar);
+  transform: scaleX(0.28);
+  transform-origin: left;
+  transition: transform 220ms var(--ui-ease);
 }
 
-.picker-card-disabled {
+.brand-card:hover,
+.brand-card:focus-visible {
+  border-color: var(--ui-accent-line);
+  transform: translateY(-3px);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.brand-card:hover::after,
+.brand-card:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.brand-card:focus-visible {
+  outline-offset: 4px;
+  border-radius: var(--ui-radius-card);
+}
+
+.brand-card:hover .brand-card-cover-img {
+  transform: scale(1.04);
+}
+
+.brand-card-cover {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  background: var(--ui-g100);
+  overflow: hidden;
+}
+
+.brand-card-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 480ms var(--ui-ease);
+}
+
+/* A logo asset floats over the cover instead of replacing it, so the cover still shows the brand's actual work. */
+.brand-card-logo {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  max-width: 34%;
+  max-height: 28%;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.35));
+}
+
+.brand-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px 18px;
+}
+
+.brand-card-wordmark {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ui-head);
+  line-height: 1.2;
+  /* A brand font can push its own line height/metrics; clamp to two lines rather than let a display font blow out card height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.brand-card-swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.brand-card-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  /* An outer hairline in the chrome's own line colour, so a swatch that matches the card (dark on dark, white on paper) still shows its edge. */
+  box-shadow: 0 0 0 1px var(--ui-line);
+  flex-shrink: 0;
+}
+
+/* Chrome's mono micro-label style: tracked uppercase monospace, muted ink. */
+.brand-card-meta {
+  display: flex;
+  gap: 10px;
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-line-soft);
+}
+
+.brand-card-disabled {
   cursor: not-allowed;
   opacity: 0.55;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 
-.picker-card-hint {
+.brand-card-compact .brand-card-body {
+  padding: 14px;
+}
+
+.brand-card-disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--ui-line);
+}
+
+.brand-card-disabled::after {
+  display: none;
+}
+
+.brand-card-hint {
   font-size: 11px;
   font-weight: 500;
   color: var(--ui-ink-3);

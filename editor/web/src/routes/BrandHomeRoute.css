@@ -1,0 +1,181 @@
+.brand-home-page {
+  min-height: 100vh;
+}
+
+.brand-home {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 40px clamp(24px, 5vw, 64px) 72px;
+}
+
+/* Back link, kicker and the wordmark, closed by a hairline rule. */
+.brand-home-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 32px;
+  margin-bottom: 36px;
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.brand-home-back {
+  display: inline-block;
+  margin-bottom: 36px;
+  color: var(--ui-ink-2);
+  font-size: 12.5px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--ui-line);
+  padding-bottom: 2px;
+  transition: var(--ui-transition);
+}
+
+.brand-home-back:hover {
+  color: var(--ui-accent-ink);
+  border-bottom-color: var(--ui-accent);
+}
+
+/* The brand's own wordmark, in its logo font — the one place on this route where the brand's identity, not the chrome's, carries the heading. */
+.brand-home-wordmark {
+  font-size: clamp(2.4rem, 4.2vw, 3.6rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--ui-head);
+  line-height: 1.05;
+  margin: 0;
+}
+
+.brand-home-error {
+  color: var(--ui-danger);
+}
+
+.brand-home-hint {
+  color: var(--ui-ink-2);
+}
+
+.brand-home-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-bottom: 56px;
+}
+
+/* A status figure: translucent paper card with the accent bar on its top edge. */
+.brand-home-figure {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 26px 24px 22px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-glass-card);
+  text-decoration: none;
+  overflow: hidden;
+  transition: var(--ui-transition);
+}
+
+.brand-home-figure::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--ui-card-bar);
+  transform: scaleX(0.28);
+  transform-origin: left;
+  transition: transform 220ms var(--ui-ease);
+}
+
+.brand-home-figure:hover,
+.brand-home-figure:focus-visible {
+  border-color: var(--ui-accent-line);
+  transform: translateY(-3px);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.brand-home-figure:hover::after,
+.brand-home-figure:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.brand-home-figure-value {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: var(--ui-display-tracking);
+  line-height: 1;
+  font-size: 56px;
+  color: var(--ui-head);
+}
+
+.brand-home-figure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ui-ink-2);
+}
+
+.brand-home-figure-label::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+}
+
+.brand-home-section {
+  margin-bottom: 56px;
+}
+
+/* A section title is a display heading over a hairline rule, like the reference's section intros — one step down from the route title. */
+.brand-home-section-title {
+  font-family: var(--ui-display);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  color: var(--ui-head);
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  line-height: 1.1;
+  margin: 0 0 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--ui-line);
+}
+
+.brand-home-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 18px;
+}
+
+/* Room above and below so a hovered card's lift and shadow are not clipped by the scroller. */
+.brand-home-recent-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 4px 2px 14px;
+  margin: -4px -2px 0;
+}
+
+/* A text link: underlined with a hairline, the rule turns accent on hover. */
+.brand-home-all-link {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--ui-head);
+  text-decoration: none;
+  border-bottom: 1px solid var(--ui-line);
+  padding-bottom: 2px;
+  transition: var(--ui-transition);
+}
+
+.brand-home-all-link:hover {
+  color: var(--ui-accent-ink);
+  border-bottom-color: var(--ui-accent);
+}
+
+/* The header's primary action gets the reference's full CTA size; inside the dense editor chrome it stays compact. */
+.brand-home-header .ui-btn {
+  padding: 11px 22px;
+  font-size: 13px;
+}
