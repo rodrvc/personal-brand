@@ -14,12 +14,24 @@ export const es = {
   "common.pinnedNoRegenerate": "Fijado: no se puede regenerar hasta que lo liberes.",
   "common.newTextPlaceholder": "Texto",
 
+  // Relative time (routes/ProfilePickerRoute.tsx's brand cards)
+  "time.justNow": "hace un momento",
+  "time.minutes": "hace {count} min",
+  "time.hours": "hace {count} h",
+  "time.days": "hace {count} d",
+  "time.oneMonth": "hace 1 mes",
+  "time.months": "hace {count} meses",
+  "time.oneYear": "hace 1 año",
+  "time.years": "hace {count} años",
+
   // Profile picker (routes/ProfilePickerRoute.tsx)
   "profilePicker.title": "Perfiles",
   "profilePicker.loading": "Cargando perfiles…",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
   "profilePicker.noBrandHint": "Sin brand.json configurado",
+  "profilePicker.oneCarousel": "1 carrusel",
+  "profilePicker.carousels": "{count} carruseles",
 
   // Carousel list (routes/CarouselListRoute.tsx)
   "carouselList.back": "← Perfiles",

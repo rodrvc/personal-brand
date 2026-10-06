@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,11 +31,60 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const FULL_SLUG = "acme-full";
 cpSync(join(REPO_ROOT, "profiles", "example"), join(root, FULL_SLUG), { recursive: true });
 
+/**
+ * Another profile with a valid, minimal brand.json plus a registered
+ * `kind: "logo"` asset — exercises the `GET /api/profiles` card-summary
+ * enrichment (brand cards feature): colors/fonts/wordmark read straight
+ * from brand.json, and `logoAssetUrl` pointing at the registered file.
+ */
+const BRANDED_SLUG = "branded";
+const brandedDir = join(root, BRANDED_SLUG);
+mkdirSync(brandedDir, { recursive: true });
+writeFileSync(
+  join(brandedDir, "brand.json"),
+  JSON.stringify({
+    locale: "es-CL",
+    colors: { ink: "#111111", paper: "#fafafa" },
+    roles: {
+      accent: "ink",
+      wordmark: "ink",
+      surface: "paper",
+      onSurface: "ink",
+      onSurfaceMuted: "ink",
+      flourish: "ink",
+      highlight: "ink",
+    },
+    fonts: { logo: "Fraunces", body: "Inter", handwritten: "Caveat" },
+    googleFontsHref: "https://fonts.googleapis.com/css2?family=Fraunces",
+    radius: { card: "12px" },
+    copy: { wordmark: "Marca Ficticia", site: "marcaficticia.example" },
+  }),
+);
+
+// A 1x1 transparent PNG, just enough for `detectImage` to classify it.
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
+/**
+ * Another profile whose brand.json exists but is missing a required field
+ * (`roles`) — `loadBrand` throws for it. Proves the listing degrades that
+ * one profile's `card` to `undefined` instead of 500ing the whole endpoint.
+ */
+const BROKEN_SLUG = "broken-brand";
+const brokenDir = join(root, BROKEN_SLUG);
+mkdirSync(brokenDir, { recursive: true });
+writeFileSync(join(brokenDir, "brand.json"), JSON.stringify({ colors: {} }));
+
 const { default: express } = await import("express");
 const { profilesRouter } = await import("./profiles.js");
 const { ProfileStore } = await import("../profile-store.js");
 const { writeDocument, readDocumentRaw, listVersions } = await import("../document-store.js");
 const { buildEmptyDocument } = await import("../compose/planner.js");
+const { registerFile } = await import("../../../../system/assets/index.js");
+
+registerFile(brandedDir, ONE_PIXEL_PNG, { kind: "logo", origin: "manual", status: "approved" });
 
 const app = express();
 app.use(express.json());
@@ -210,6 +259,64 @@ const tests: Array<[string, () => Promise<void>]> = [
         else process.env.BRAND_PROFILES_DIR = previousProfilesDir;
         rmSync(cacheDir, { recursive: true, force: true });
       }
+    },
+  ],
+
+  [
+    "GET /api/profiles enriches a profile with brand.json with a card summary",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as {
+        profiles: Array<{
+          slug: string;
+          hasBrand: boolean;
+          card?: {
+            colors: string[];
+            logoFont?: string;
+            googleFontsHref?: string;
+            wordmark?: string;
+            logoAssetUrl?: string;
+            carouselCount: number;
+          };
+        }>;
+      };
+      const branded = profiles.find((p) => p.slug === BRANDED_SLUG);
+      assert.ok(branded, "branded profile must be listed");
+      assert.equal(branded!.hasBrand, true);
+      assert.ok(branded!.card, "a profile with brand.json must carry a card summary");
+      assert.deepEqual(branded!.card!.colors.sort(), ["#111111", "#fafafa"]);
+      assert.equal(branded!.card!.logoFont, "Fraunces");
+      assert.equal(branded!.card!.googleFontsHref, "https://fonts.googleapis.com/css2?family=Fraunces");
+      assert.equal(branded!.card!.wordmark, "Marca Ficticia");
+      assert.equal(branded!.card!.carouselCount, 0);
+      assert.match(branded!.card!.logoAssetUrl ?? "", new RegExp(`^/api/profiles/${BRANDED_SLUG}/assets/files/`));
+    },
+  ],
+
+  [
+    "GET /api/profiles omits card for a profile with no brand.json, without failing the listing",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as { profiles: Array<{ slug: string; hasBrand: boolean; card?: unknown }> };
+      const noBrand = profiles.find((p) => p.slug === SLUG);
+      assert.ok(noBrand);
+      assert.equal(noBrand!.hasBrand, false);
+      assert.equal(noBrand!.card, undefined);
+    },
+  ],
+
+  [
+    "GET /api/profiles degrades a broken brand.json to a missing card instead of 500ing",
+    async () => {
+      const { status, body } = await get("/api/profiles");
+      assert.equal(status, 200);
+      const { profiles } = body as { profiles: Array<{ slug: string; hasBrand: boolean; card?: unknown }> };
+      const broken = profiles.find((p) => p.slug === BROKEN_SLUG);
+      assert.ok(broken, "broken-brand profile must still be listed");
+      assert.equal(broken!.hasBrand, true, "brand.json exists on disk, even though it fails to parse");
+      assert.equal(broken!.card, undefined);
     },
   ],
 ];
