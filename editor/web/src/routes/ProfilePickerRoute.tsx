@@ -88,10 +88,20 @@ function BrandCard({ profile }: { profile: ProfileListingEntry }) {
   );
 }
 
+/**
+ * No cover area at all: a profile with no `brand.json` has no cover image,
+ * no palette, nothing to show — stretching it to the same height as a real
+ * brand card would just be a bigger empty box. `.brand-card-grid`'s
+ * `align-items: start` keeps the grid's columns aligned while letting this
+ * card be exactly as tall as its own two lines of text.
+ */
 function DisabledBrandCard({ profile }: { profile: ProfileListingEntry }) {
   return (
-    <span key={profile.slug} className="brand-card brand-card-disabled" title={t("profilePicker.noBrandTitle")}>
-      <div className="brand-card-cover brand-card-cover-empty" />
+    <span
+      key={profile.slug}
+      className="brand-card brand-card-disabled brand-card-compact"
+      title={t("profilePicker.noBrandTitle")}
+    >
       <div className="brand-card-body">
         <span className="brand-card-wordmark">{profile.slug}</span>
         <span className="brand-card-hint">{t("profilePicker.noBrandHint")}</span>
