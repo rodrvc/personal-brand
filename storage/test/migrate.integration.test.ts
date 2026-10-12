@@ -17,7 +17,10 @@ const sql = postgres(process.env.DATABASE_URL, { connect_timeout: 3, onnotice: (
 try {
   await sql`SELECT 1`;
 } catch (error) {
-  console.log(`SKIP - could not reach DATABASE_URL (${String((error as { code?: string }).code ?? error)})`);
+  // Only an unreachable server skips; bad credentials or a missing database must fail loudly.
+  const code = (error as { code?: string }).code;
+  if (!["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "CONNECT_TIMEOUT"].includes(code ?? "")) throw error;
+  console.log(`SKIP - could not reach DATABASE_URL (${code})`);
   await sql.end({ timeout: 1 });
   process.exit(0);
 }
@@ -41,8 +44,6 @@ async function rejects(fn: () => Promise<unknown>, pattern: RegExp): Promise<voi
 
 let dir: string | undefined;
 try {
-  await sql.unsafe(`CREATE SCHEMA ${schema}`);
-
   const first = await Promise.all([migrate(sql, { schema }), migrate(sql, { schema }), migrate(sql, { schema })]);
   assert.equal(first.flat().length, 1, "concurrent runners apply exactly once");
   assert.deepEqual(await migrate(sql, { schema }), [], "second run applies nothing");
@@ -115,7 +116,6 @@ try {
   await writeFile(path.join(dir, "0001_foundation.sql"), original);
   await inSchema((c) => c`INSERT INTO schema_migrations (name, checksum) VALUES ('0099_gone.sql', 'x')`);
   await rejects(() => migrate(sql, { schema, dir }), /0099_gone\.sql has no file/);
-  await rejects(() => migrate(sql, { schema: `${schema}_missing` }), /does not exist/);
   console.log("migrate.integration: ok");
 } finally {
   if (dir) await rm(dir, { recursive: true, force: true });

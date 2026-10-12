@@ -1,5 +1,4 @@
-import postgres from "postgres";
-
+import { connect } from "../pg/connect.ts";
 import { migrate } from "../pg/migrate.ts";
 
 // Migrations run as the schema owner (brand_migrator), not the application role.
@@ -8,9 +7,9 @@ if (!url) {
   console.error("Set DATABASE_MIGRATOR_URL (or DATABASE_URL)");
   process.exit(1);
 }
-const sql = postgres(url, { onnotice: () => {} });
+const sql = connect(process.env, url);
 try {
-  const applied = await migrate(sql, { schema: process.env.DATABASE_SCHEMA });
+  const applied = await migrate(sql);
   console.log(applied.length ? `Applied: ${applied.join(", ")}` : "Nothing to apply");
 } catch (error) {
   console.error((error as Error).message);

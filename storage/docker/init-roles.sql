@@ -6,6 +6,6 @@ CREATE ROLE brand_owner    LOGIN PASSWORD 'local-dev-only';
 CREATE ROLE brand_app      LOGIN PASSWORD 'local-dev-only';
 CREATE ROLE brand_reader   LOGIN PASSWORD 'local-dev-only';
 CREATE ROLE brand_purger   LOGIN PASSWORD 'local-dev-only';
--- The migrator owns the schema it migrates and may create test schemas.
-ALTER SCHEMA public OWNER TO brand_migrator;
+-- All a shared-database admin needs to grant: the migrator creates and owns the
+-- product schema itself (`content_platform`); it owns nothing in `public`.
 GRANT CREATE ON DATABASE brands TO brand_migrator;

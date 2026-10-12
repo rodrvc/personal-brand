@@ -190,7 +190,7 @@ everywhere, `version int not null default 1`, enum-like columns as `text` +
 | `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `dry_run`, `started_at`, `finished_at`, `report jsonb` | — | S7a |
 | `restore_drills` | `id`, `target_db` (host/db name, no secrets), `dump_taken_at`, `restored_at`, `verified bool`, `notes` | insert-only | S8 |
 | `seasonal_themes` | `id`, `brand_id`, `name`, `starts_on`, `ends_on`, `token_overrides jsonb`, `guidance_md`, `updated_at`, `version` | CHECK `ends_on >= starts_on` | S13 (scheduled, after cutover) |
-| `content_items` (future) | ideas / drafts / published markdown | — | not scheduled (§14 Q5) |
+| `content_items` | ideas / drafts / published markdown | — | scheduled in S6 (§14 decision 5) |
 
 Notes:
 
@@ -214,7 +214,9 @@ Notes:
 provisioning (the compose init SQL locally, documented setup steps on a
 hosted DB), **never by migrations**. Migrations only `GRANT` to roles that
 already exist (`DO` block guarded by a `pg_roles` lookup), so per-test
-schemas never create or collide on roles.
+schemas never create or collide on roles. Role names are cluster-wide: on a
+shared cluster the `brand_*` names must be reserved for this product at
+provisioning.
 
 | Role | Can | Used by |
 |---|---|---|
@@ -232,9 +234,10 @@ credentials the owner provided for that session.
 
 **Migration runner** (`storage/src/pg/migrate.ts`), in this order on **one
 reserved connection** (`sql.reserve()`; advisory locks are session-level and
-postgres.js pools): set `search_path = <schema>` (default `public`; tests use
-`test_<random>`; files are not schema-qualified) ->
-`pg_advisory_lock(hashtext('migrations:' || <schema>))` -> `CREATE TABLE IF
+postgres.js pools): `pg_advisory_lock(hashtext('migrations:' || <schema>))` ->
+`CREATE SCHEMA IF NOT EXISTS <schema> AUTHORIZATION CURRENT_USER` (default
+`content_platform`; tests use `test_<random>`) -> set `search_path` (files are
+not schema-qualified) -> `CREATE TABLE IF
 NOT EXISTS schema_migrations` (inside the lock: concurrent creators race on
 `pg_type`) -> **re-read** `schema_migrations` -> run each pending file in
 its own transaction on that same connection, recording name + sha256
@@ -382,7 +385,7 @@ list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
 §14 Q5.
 
 **`app/`** (deprecated; writes `brand.yaml` and `content/**`, though its UI
-never calls those commands): **retire formally**, no migration (Q10).
+never calls those commands): **retire formally**, no migration (§14 decision 10).
 
 ## 9. Generic rule/check mechanism
 
@@ -442,7 +445,7 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
 | reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
-| `ideas/`, `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; becomes `content_items` if Q5 says so) |
+| `ideas/`, `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; becomes `content_items` once S6 lands) |
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -537,7 +540,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S3 | Postgres + memory repos for brands, documents (incl. templates), revisions; revision policy; contract suite | ~550 | S1 | contract suite passes on both |
 | S4 | `0002`: rules, guidance, recipes + repos; check runner and `validateRuleParams` in `core/` | ~590 | S3 | §9 examples produce expected findings; contract suite |
 | S5 | `0003`: assets, `tts_cache` + repos; `system/assets/index.ts` on `AssetRepository` + blobs (no `index.json`/sidecars); `fetch-fonts.ts` uploads fonts as assets | ~580 | S2, S3 | asset library tests run on memory storage, no profile dir |
-| S6 | `0004`: carousels (status stripped), exports (`started_at`, stale reclaim), chat, `recipe_runs`, `run_artifacts` + repos; `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~590 | S4, S5 | concurrent reserve/append tests; usage/verify tests on memory storage |
+| S6 | `0004`: `content_items`, carousels (status stripped), exports (`started_at`, stale reclaim), chat, `recipe_runs`, `run_artifacts` + repos; `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~590 | S4, S5 | concurrent reserve/append tests; usage/verify tests on memory storage |
 | S7a | CLI skeleton (bin, `runCli`, flag parser from #116) + `import`/`cutover` verbs; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs`; `resolveBrandSource` + `resolveProfileDir` post-cutover refusal | ~590 | S3, S4 | example brands import, re-run is a no-op, cutover writes marker + `cutover_at`, legacy readers refuse it |
 | S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass | ~590 | S7a, S5, S6 | verification clean on examples |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
@@ -546,8 +549,8 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
 | S10b | Editor write path: save (`If-Match`), export, chat, compose; 409 with current version | ~580 | S10a | concurrent-save tests; exports land in bucket |
 | S11a | Skills: `usar-perfil` (trust envelope wording), `generar-carrusel-semana`, `generar-reel-semana`, `carousel-designer` + references, `narrated-slide-video` + reference; commit gate denylist from `brand denylist --write` | ~550 | S8, S9b | no skill references `profiles/`; gate derives terms with no folders on disk |
-| S11b | Agents: all `.claude/agents/*.md` + README; `app/` retirement note (per Q10); `system/guides/workflow.md`, schema docs | ~450 | S8, S11a | no agent references `profiles/`; **real brands can now be cut over** |
-| S12a/b | Remove mirror, runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
+| S11b | Agents (incl. content agents on `content_items`): all `.claude/agents/*.md` + README; `app/` retirement;  `system/guides/workflow.md`, schema docs | ~450 | S8, S11a | no agent references `profiles/`; **real brands can now be cut over** |
+| S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
 17 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
@@ -571,19 +574,15 @@ when S7a lands.
 - Two paths live between S7a and S12, behind the single `resolveBrandSource` switch.
 - Long agent sessions hit version conflicts by design; the CLI says how to retry.
 
-**Open questions**
+**Decisions (owner, 2026-10-12)**
 
-1. Package placement: new `storage/` package (recommended) or inside `core/`?
-2. Postgres host (§12) and backup destination (outside the brand bucket).
-3. Same bucket with the new `brands/` root (recommended) or a new bucket?
-4. For each real brand, which is fresher: its folder or the legacy bucket
-   prefix written in `s3` mode?
-5. Ideas/drafts/published markdown: add `content_items` now (and switch the
-   content agents to it), or import them as legacy blobs and decide later?
-6. Drop the local `fs` backend entirely (recommended; docker replaces it)?
-7. Commit-gate denylist: gitignored local file from `brand denylist --write`
-   (proposed), or the gate queries the DB?
-8. Who holds `brand_owner` credentials; editor UI for rules/guidance later?
-9. Should `author` carry a real identity now, or is free text enough?
-10. `app/`: retire formally (recommended) or migrate it as a storage
-    consumer?
+1. Reuse the existing `ObjectStore`/`S3ObjectStore` from `editor/server/src/storage`: S2 moves it into the shared package, never duplicates it.
+2. Postgres: local docker for now. Production will be one shared company database, so product tables live in their own schema `content_platform`, configured only via `DATABASE_URL`, with no ownership assumptions and no cloud provisioning here (§12 is reference only). The backup destination stays open until hosting is chosen.
+3. Same existing bucket, new `brands/` root.
+4. Per brand, import the copy whose content is finished, decided by evidence; the choice is reported to the owner before any real import.
+5. Ideas, drafts and published go into the database too: `content_items` is scheduled (S6) together with the content agents' switch (S11b).
+6. The editor's local `fs` mode is removed; local dev uses docker (S12).
+7. Commit-gate denylist: gitignored local file generated by `brand denylist --write`.
+8. `brand_owner` credentials: owner only; an editor UI for rules/guidance comes later.
+9. `author`: free text for now.
+10. `app/`: retired formally (S11b).

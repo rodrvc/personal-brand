@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Sql } from "./connect.ts";
+import { PRODUCT_SCHEMA, type Sql } from "./connect.ts";
 
 export const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 
@@ -29,14 +29,14 @@ export function assertTransactional(name: string, content: string): void {
 }
 
 export interface MigrateOptions {
-  /** Target schema; migration files are not schema-qualified. Default: public. */
+  /** Target schema (created if missing); migration files are not schema-qualified. Default: the product schema; tests pass throwaway ones. */
   schema?: string;
   dir?: string;
 }
 
 /** Applies pending migrations and returns the names applied by this call. */
 export async function migrate(sql: Sql, options: MigrateOptions = {}): Promise<string[]> {
-  const schema = options.schema ?? "public";
+  const schema = options.schema ?? PRODUCT_SCHEMA;
   const dir = options.dir ?? DEFAULT_MIGRATIONS_DIR;
   const files = (await readdir(dir)).filter((f) => /^\d{4}_.+\.sql$/.test(f)).sort();
   const contents = new Map<string, string>();
@@ -51,11 +51,14 @@ export async function migrate(sql: Sql, options: MigrateOptions = {}): Promise<s
   const lockKey = "migrations:" + schema;
   const applied: string[] = [];
   try {
-    const found = await conn`SELECT 1 FROM pg_namespace WHERE nspname = ${schema}`;
-    if (found.length === 0) throw new Error(`Schema "${schema}" does not exist`);
-    await conn.unsafe(`SET search_path = "${schema.replace(/"/g, '""')}"`);
     await conn`SELECT pg_advisory_lock(hashtext(${lockKey}))`;
     try {
+      // Only create when missing: CREATE SCHEMA needs CREATE on the database, which a shared-database
+      // admin may withhold after pre-creating the schema for the migrator.
+      const quoted = `"${schema.replace(/"/g, '""')}"`;
+      const [exists] = await conn`SELECT 1 FROM pg_namespace WHERE nspname = ${schema}`;
+      if (!exists) await conn.unsafe(`CREATE SCHEMA ${quoted} AUTHORIZATION CURRENT_USER`);
+      await conn.unsafe(`SET search_path = ${quoted}`);
       // Created under the lock: concurrent CREATE TABLE IF NOT EXISTS can still race on pg_type.
       await conn`CREATE TABLE IF NOT EXISTS schema_migrations (
         name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;

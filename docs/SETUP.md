@@ -218,12 +218,17 @@ pnpm --filter @personal-brand/storage migrate      # idempotent; safe to run con
 ```
 
 `migrate` reads `DATABASE_MIGRATOR_URL` and falls back to `DATABASE_URL`;
-run it as `brand_migrator`, which owns the schema. The port is bound to
+run it as `brand_migrator`, which creates and owns the product schema. The port is bound to
 127.0.0.1 only. The container's init SQL creates the roles
 (`brand_migrator`, `brand_owner`, `brand_app`, `brand_reader`,
 `brand_purger`) with local-only placeholder passwords; migrations never
-create roles and only `GRANT` to those that exist. `DATABASE_SCHEMA`
-selects the target schema (default `public`). The storage integration
+create roles and only `GRANT` to those that exist. All tables live in
+the Postgres schema `content_platform` (created by the runner; nothing in
+`public`), so the database can be shared with other products: configuration
+is only `DATABASE_URL` / `DATABASE_MIGRATOR_URL` (+ `DATABASE_PREPARE`), and
+`connect()` sets the `search_path`. Behind a transaction-mode pooler, which
+may drop that startup parameter, provision `ALTER ROLE <role> SET search_path
+= content_platform` instead. The storage integration
 tests need a superuser `DATABASE_URL`
 (`postgres://postgres:local-dev-only@localhost:5442/brands`), SKIP when it
 is unset or unreachable, and use a throwaway `test_<random>` schema.
