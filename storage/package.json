@@ -2,14 +2,18 @@
   "name": "@personal-brand/storage",
   "version": "1.0.0",
   "private": true,
-  "description": "Shared storage infrastructure: blob and repository contracts.",
+  "description": "Shared storage infrastructure: contracts, Postgres connection, migrations.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "tsx test/keys.test.ts",
+    "migrate": "tsx src/cli/migrate.ts",
+    "test": "tsx test/keys.test.ts && tsx test/migrate-unit.test.ts && tsx test/migrate.integration.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

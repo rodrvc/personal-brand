@@ -205,6 +205,29 @@ with `BRAND_OUTPUTS_ROOT` unset — that variable is the editor's own
 s3-mode mirror redirect, and the migration needs to read the real local
 output tree, not a mirror.
 
+## Postgres and migrations (`storage/`)
+
+Structured data lives in Postgres (design: `docs/design/storage-foundation.md`).
+Start the local database (Postgres 17 on host port 5442; override with
+`POSTGRES_PORT`), then apply the migrations:
+
+```bash
+docker compose -f docker-compose.storage.yml up -d postgres
+export DATABASE_MIGRATOR_URL=postgres://brand_migrator:local-dev-only@localhost:5442/brands
+pnpm --filter @personal-brand/storage migrate      # idempotent; safe to run concurrently
+```
+
+`migrate` reads `DATABASE_MIGRATOR_URL` and falls back to `DATABASE_URL`;
+run it as `brand_migrator`, which owns the schema. The port is bound to
+127.0.0.1 only. The container's init SQL creates the roles
+(`brand_migrator`, `brand_owner`, `brand_app`, `brand_reader`,
+`brand_purger`) with local-only placeholder passwords; migrations never
+create roles and only `GRANT` to those that exist. `DATABASE_SCHEMA`
+selects the target schema (default `public`). The storage integration
+tests need a superuser `DATABASE_URL`
+(`postgres://postgres:local-dev-only@localhost:5442/brands`), SKIP when it
+is unset or unreachable, and use a throwaway `test_<random>` schema.
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs

@@ -233,9 +233,10 @@ credentials the owner provided for that session.
 **Migration runner** (`storage/src/pg/migrate.ts`), in this order on **one
 reserved connection** (`sql.reserve()`; advisory locks are session-level and
 postgres.js pools): set `search_path = <schema>` (default `public`; tests use
-`test_<random>`; files are not schema-qualified) -> `CREATE TABLE IF NOT
-EXISTS schema_migrations` -> `pg_advisory_lock(hashtext('migrations:' ||
-<schema>))` -> **re-read** `schema_migrations` -> run each pending file in
+`test_<random>`; files are not schema-qualified) ->
+`pg_advisory_lock(hashtext('migrations:' || <schema>))` -> `CREATE TABLE IF
+NOT EXISTS schema_migrations` (inside the lock: concurrent creators race on
+`pg_type`) -> **re-read** `schema_migrations` -> run each pending file in
 its own transaction on that same connection, recording name + sha256
 (computed after normalizing CRLF to LF) -> unlock. A changed checksum of an
 applied file stops the runner. `CREATE INDEX CONCURRENTLY` (or anything that
@@ -488,21 +489,21 @@ hash).
 
 ```yaml
   postgres:
-    image: postgres:17-alpine
-    ports: ["5433:5432"]          # avoids 5432 (a host Postgres), 4310/4311, 5173/5174, 9000/9001
+    image: postgres:17
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5442}:5432"]   # loopback only; 5442 avoids 5432/5433/5440, which other local Postgres instances use
     environment:
-      POSTGRES_USER: brand
-      POSTGRES_PASSWORD: brand
-      POSTGRES_DB: personal_brand
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-dev-only
+      POSTGRES_DB: brands
     volumes: [postgres-data:/var/lib/postgresql/data]
-    healthcheck: { test: ["CMD", "pg_isready", "-U", "brand"], interval: 5s, retries: 10 }
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres", "-d", "brands"], interval: 3s, retries: 20 }
 ```
 
 The compose init SQL (provisioning, not a migration) creates the five roles (§4) with local passwords.
 
 ```
-DATABASE_URL=postgres://brand_app:...@localhost:5433/personal_brand
-DATABASE_MIGRATOR_URL=postgres://brand_migrator:...@localhost:5433/personal_brand
+DATABASE_URL=postgres://brand_app:...@localhost:5442/brands
+DATABASE_MIGRATOR_URL=postgres://brand_migrator:...@localhost:5442/brands
 DATABASE_PREPARE=true
 S3_ENDPOINT=http://localhost:9000  S3_BUCKET=brand-profiles  S3_ACCESS_KEY_ID=...  S3_SECRET_ACCESS_KEY=...
 BLOB_CACHE_DIR=~/.cache/personal-brand/blobs   # optional
