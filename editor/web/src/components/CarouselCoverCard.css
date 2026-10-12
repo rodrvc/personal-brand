@@ -130,3 +130,40 @@
 .cover-card-small .cover-card-title {
   font-size: 13px;
 }
+
+/*
+ * Phones: the "large" card (brand-home draft grid, carousel-list card
+ * grid) shortens its cover from 4:5 to 1:1 and tightens type so two fit
+ * per row; the fixed-width "small" card (brand-home recent row) just
+ * narrows a bit. Desktop (>= 1024px) is untouched.
+ */
+@media (max-width: 640px) {
+  .cover-card-thumb {
+    aspect-ratio: 1 / 1;
+  }
+
+  .cover-card-body {
+    padding: 10px 12px 12px;
+    gap: 6px;
+  }
+
+  .cover-card-title {
+    font-size: 13px;
+  }
+
+  .cover-card-meta {
+    font-size: 10px;
+  }
+
+  .cover-card-small {
+    width: 112px;
+  }
+
+  .cover-card-small .cover-card-body {
+    padding: 8px 9px 9px;
+  }
+
+  .cover-card-small .cover-card-title {
+    font-size: 12px;
+  }
+}

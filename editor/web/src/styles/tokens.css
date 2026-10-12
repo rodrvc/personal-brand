@@ -393,6 +393,22 @@ button {
 .ui-reveal > :nth-child(6) { animation-delay: 350ms; }
 .ui-reveal > :nth-child(n + 7) { animation-delay: 420ms; }
 
+/*
+ * Shared entry-screen chrome (picker/brand-home/carousel-list) scales down
+ * together on phones, so the three routes' kickers/display titles stay in
+ * sync instead of drifting per-route. Desktop (>= 1024px) is untouched.
+ */
+@media (max-width: 640px) {
+  .ui-kicker {
+    font-size: 10px;
+    margin-bottom: 12px;
+  }
+
+  .ui-display-title {
+    font-size: clamp(1.7rem, 8vw, 2.3rem);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

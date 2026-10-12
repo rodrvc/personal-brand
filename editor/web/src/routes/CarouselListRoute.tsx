@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { getBrand, listCarousels } from "../api/client";
 import type { CarouselSummary } from "../api/types";
 import { Button } from "../components/Button";
+import { CarouselCoverCard } from "../components/CarouselCoverCard";
 import { SheetLoader } from "../components/SheetLoader";
 import { useCreateCarousel } from "../hooks/useCreateCarousel";
 import { useDelayedVisible } from "../hooks/useDelayedVisible";
@@ -142,34 +143,51 @@ export function CarouselListRoute() {
               </p>
             )}
             {!showListLoader && visibleCarousels && visibleCarousels.length > 0 && (
-              <table className="carousel-table">
-                <thead>
-                  <tr>
-                    <th>{t("carouselList.columnTitle")}</th>
-                    <th>{t("carouselList.columnStatus")}</th>
-                    <th>{t("carouselList.columnUpdated")}</th>
-                    <th>{t("carouselList.columnSlides")}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleCarousels.map((c) => (
-                    <tr key={c.id}>
-                      <td>{c.title || c.id}</td>
-                      <td>
-                        <span className={`carousel-status ${c.status}`}>{statusLabel(c.status)}</span>
-                      </td>
-                      <td>{new Date(c.updatedAt).toLocaleString()}</td>
-                      <td>{c.slideCount}</td>
-                      <td>
-                        <Link to={`/${slug}/carousels/${c.id}`} className="carousel-open-link">
-                          {t("carouselList.open")}
-                        </Link>
-                      </td>
+              <>
+                <table className="carousel-table">
+                  <thead>
+                    <tr>
+                      <th>{t("carouselList.columnTitle")}</th>
+                      <th>{t("carouselList.columnStatus")}</th>
+                      <th>{t("carouselList.columnUpdated")}</th>
+                      <th>{t("carouselList.columnSlides")}</th>
+                      <th></th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {visibleCarousels.map((c) => (
+                      <tr key={c.id}>
+                        <td>{c.title || c.id}</td>
+                        <td>
+                          <span className={`carousel-status ${c.status}`}>{statusLabel(c.status)}</span>
+                        </td>
+                        <td>{new Date(c.updatedAt).toLocaleString()}</td>
+                        <td>{c.slideCount}</td>
+                        <td>
+                          <Link to={`/${slug}/carousels/${c.id}`} className="carousel-open-link">
+                            {t("carouselList.open")}
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {/*
+                 * Mobile only (`.carousel-card-grid` in CarouselListRoute.css):
+                 * the table's rows don't reflow into a 2-up grid by CSS alone,
+                 * so phones get this card grid instead, built from the same
+                 * `visibleCarousels` and the same cover card the brand-home
+                 * dashboard already uses. The table above stays in the DOM for
+                 * desktop and is hidden (not removed) under that breakpoint.
+                 * Keep both toggles on `display: none`, not `visibility:
+                 * hidden`, so only one list is in the accessibility tree.
+                 */}
+                <div className="carousel-card-grid ui-reveal">
+                  {visibleCarousels.map((c) => (
+                    <CarouselCoverCard key={c.id} slug={slug} carousel={c} accentColor={accentColor} size="large" />
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </>
             )}
           </>
         )}

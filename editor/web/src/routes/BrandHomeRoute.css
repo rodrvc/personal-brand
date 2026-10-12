@@ -179,3 +179,81 @@
   padding: 11px 22px;
   font-size: 13px;
 }
+
+/*
+ * Phones: header stacks (wordmark above the CTA, both full-bleed), the
+ * three status figures stay 3-across but compact, and the "Seguir
+ * editando" grid (real cover cards) goes 2-up — the recent row underneath
+ * already scrolls horizontally, so it just gets a tighter gap. Desktop
+ * (>= 1024px) is untouched.
+ */
+@media (max-width: 640px) {
+  .brand-home {
+    padding: 24px 16px 48px;
+  }
+
+  .brand-home-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+  }
+
+  .brand-home-header .ui-btn {
+    min-height: 40px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .brand-home-back {
+    margin-bottom: 20px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    border-bottom: 0;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .brand-home-wordmark {
+    font-size: clamp(1.6rem, 8vw, 2.1rem);
+  }
+
+  .brand-home-summary {
+    gap: 10px;
+    margin-bottom: 36px;
+  }
+
+  .brand-home-figure {
+    padding: 16px 12px 14px;
+  }
+
+  .brand-home-figure-value {
+    font-size: 32px;
+  }
+
+  .brand-home-figure-label {
+    font-size: 10px;
+    gap: 6px;
+  }
+
+  .brand-home-section {
+    margin-bottom: 36px;
+  }
+
+  .brand-home-section-title {
+    font-size: 1.3rem;
+    padding-top: 16px;
+    margin-bottom: 14px;
+  }
+
+  .brand-home-draft-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .brand-home-recent-row {
+    gap: 10px;
+  }
+}

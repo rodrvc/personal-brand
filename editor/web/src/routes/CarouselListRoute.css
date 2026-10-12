@@ -155,3 +155,67 @@
   padding: 11px 22px;
   font-size: 13px;
 }
+
+/* Hidden on desktop: the table above is the real list there. See the mobile breakpoint below. */
+.carousel-card-grid {
+  display: none;
+}
+
+/*
+ * Phones: the table doesn't reflow into a 2-up card grid by CSS alone, so
+ * it's swapped for `.carousel-card-grid` (same data, `CarouselCoverCard`)
+ * under this breakpoint, while the header stacks and filter chips grow to
+ * a 40px tap target. Desktop (>= 1024px) is untouched.
+ */
+@media (max-width: 640px) {
+  .carousel-list {
+    padding: 24px 16px 48px;
+  }
+
+  .carousel-list-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+  }
+
+  .carousel-list-header .ui-btn {
+    min-height: 40px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .carousel-list-back {
+    margin-bottom: 20px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    border-bottom: 0;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .carousel-list-filters {
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .carousel-filter-chip {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 14px;
+  }
+
+  .carousel-table {
+    display: none;
+  }
+
+  .carousel-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
