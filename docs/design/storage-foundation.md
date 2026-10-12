@@ -1,0 +1,588 @@
+# Storage foundation: one storage interface, bucket + Postgres, no working copies
+
+Issue: #135 (supersedes the mirror approach of #115; refs #114, #99).
+Status: design proposal, revised after architecture review. Nothing
+implemented. Owner decisions pending in §14.
+
+## Decisions at a glance
+
+| # | Decision |
+|---|---|
+| D1 | **Two stores, nothing else.** Files (images, fonts, audio, rendered clips, exported PNG/MP4) live in the S3-compatible bucket. Everything structured (brands, tokens, config, templates, rules, guidance, recipes, carousels, status, schedule, revisions) lives in Postgres. After cutover (D12) no `profiles/<slug>/` folder is read or written. |
+| D2 | **New workspace package `storage/` (`@personal-brand/storage`)** is shared infrastructure, not a module. It holds the contracts (`BlobStore`, typed repositories, errors, key scheme), the adapters (S3, Postgres, in-memory fakes), migrations, the importer and the `brand` CLI. `core/` stays pure. |
+| D3 | **Optimistic concurrency everywhere.** Blobs: conditional `put`. Rows: a `version` integer, `UPDATE ... WHERE version = $expected`. A lost race is a typed `VersionConflictError`, never a silent overwrite. |
+| D4 | **Append-only history, no deletion in normal operation.** Revisions are append-only; brands are archived, assets hidden, exports re-versioned. The only deletion is a deliberate, owner-run `brand purge` (§8). FKs are `ON DELETE RESTRICT`. |
+| D5 | **Content-addressed blobs** for inputs and intermediates (`brands/<brandId>/blobs/sha256/<hh>/<sha256>`), **named immutable keys** for deliverables (`brands/<brandId>/exports/...`). |
+| D6 | **The only local copy is a read-only blob cache keyed by sha256.** Shared by every process, safe to delete at any time, never written back. There is no `syncUp`. Every scratch dir (render staging, reel clips) is rebuilt from that cache per run. |
+| D7 | **Render without a mirror:** Playwright resolves assets through `page.route` backed by the blob cache. Remotion gets a per-run staging dir hardlinked from the cache. |
+| D8 | **Migrations:** plain numbered `.sql` files + a small runner on a reserved connection. **Driver:** `postgres` (postgres.js). No ORM. Storage validates only the JSON envelope; domain schemas are injected by callers. |
+| D9 | **Agents use a CLI, never repo paths:** `pnpm brand <noun> <verb>`. Agent sessions are read-only by default. Per-brand skills become `brand_guidance` rows, returned with an explicit `trust: "brand-data"` envelope. |
+| D10 | **Per-brand rules are data:** a closed set of generic check kinds with JSON params, run by a pure function in `core/`. |
+| D11 | **Migration is an idempotent importer** (folder or legacy bucket prefix -> bucket + DB), dry-run first, verification report, backup drill before any real brand. |
+| D12 | **Per-brand cutover:** a real brand is cut over only after every consumer is switched (end of S11b). Cutover sets `brands.cutover_at` and writes one marker file in the folder; from then on folder readers refuse the brand and storage is its single source. |
+
+---
+
+## 1. Problem, goals, non-goals
+
+**Problem.** Brand data is treated as a folder. In `s3` mode the editor keeps a
+mirror of that folder; the terminal sync CLI (#116) added another. Skills
+Read/Write repo-literal `profiles/<slug>/` while scripts read the mirror, so
+an agent's edit can silently never reach the bucket. Copies drift, and
+unpushed edits in an OS temp dir can be lost.
+
+**Goals:** order over speed (one place per fact; slower is fine, ambiguous
+is not); brands as data (adding, changing or archiving a brand, its rules
+and guidance changes no code, file or skill); no working copies (local files
+are a read-only cache or per-run scratch rebuilt from it; writes go straight
+to storage, conditionally); one interface for engine, skills/agents (via the
+CLI) and editor server.
+
+**Non-goals:** offline editing; user accounts (`author` is free text; access
+is split only by DB roles and bucket keys, §4); rewriting engines, the
+carousel document format or the editor UI; provisioning infrastructure (§12).
+
+## 2. Current state (short)
+
+| Piece | Where | Note |
+|---|---|---|
+| Profile folder | `profiles/<slug>/` (gitignored, often a symlink) | `brand.json`, `brand-spec.md`, `profile.md`, `config.yaml`, `config.local.yaml`, `templates/*.json`, `recipes/*.yaml`, `skills/*/SKILL.md`, `carousels/<id>/carousel.json` + `versions/` + `chat.jsonl`, `assets/` + `index.json` + sidecars, `ideas/`, `content/drafts|published/`, `reels/<date>/storyboard.yaml` + TTS cache, `outputs/` |
+| Path resolution | `system/ig-carousel/profile.ts` (`BRAND_PROFILES_DIR`, `BRAND_OUTPUTS_ROOT`, `outputs.base_dir`) | every engine entry point reads plain files |
+| Other folder readers/writers | `system/assets/index.ts` (index + sidecars), `fetch-fonts.ts` (writes fonts into the profile), `usage.ts`; `system/ig-carousel/verify-slides.ts`, `recipe.ts`, `layout-template.ts` (`templates/*.json`), `brand-schema.ts`, `brand-style.ts::loadBrandStyle(profileDir)` (reads `brand-spec.md`, `profile.md`, `config.yaml`, `brand.json`); `system/ig-reel/*`; `scripts/init-profile.mjs` | all assigned in §13 |
+| Object store, mirror | `editor/server/src/storage/{object-store,mirror,runtime}.ts`, `ProfileStore` (`writeJsonIfRevision`/`appendLine`/`reserveOnce`) | contract reused (§3a); mirror + manifest + per-request sync removed |
+| Carousel save | `PUT /api/profiles/:slug/carousels/:id` | `?base=<updatedAt>` + revision -> 409; snapshots in `versions/` |
+| Render | preview: `page.route("http://editor.local/**")`; export: filesystem paths | two asset paths for the same slide |
+| Reel | `system/ig-reel/render-reel-week.ts`, `storyboard.ts` | reuses `clipsDir`/`rendersDir` across runs (assemble-only, re-render one card); TTS mp3 + sidecars cached by `narrationCacheKey`; one shared `remotion/public/staging/` wiped per run |
+| Agents and skills | `.claude/agents/*.md` (8 agents + README), `.claude/skills/{usar-perfil,generar-carrusel-semana,generar-reel-semana,carousel-designer,narrated-slide-video}` | read/write `profiles/<slug>/` paths |
+| Desktop app | `app/` (deprecated) | writes `brand.yaml` and `content/**` into the folder |
+| Commit gate | `scripts/validate_commit_guardian.py` | derives the brand denylist from profile folders on disk |
+
+**The three-copies problem:** repo folder (skills edit it, never reaches the
+bucket), editor mirror, #116 CLI mirror (no cross-process lock) — plus the
+bucket. Mirror edits survive only if a `syncUp` runs before temp cleanup.
+The reel's reused clip/TTS dirs are a fourth, unlisted working copy.
+
+## 3. Storage interface
+
+### 3a. `BlobStore`: files by key
+
+Reuse the existing `ObjectStore` contract unchanged, moved into
+`storage/src/contracts/blob-store.ts` and renamed `BlobStore`:
+
+```ts
+interface BlobStore {
+  get(key: string): Promise<{ body: Buffer; etag: string }>;
+  getStream(key: string): Promise<{ stream: AsyncIterable<Buffer>; etag: string }>;
+  head(key: string): Promise<{ etag: string; size: number; metadata: Record<string, string> }>;
+  put(key: string, body: Buffer, opts?: { ifMatch?: string; ifNoneMatch?: "*"; contentType?: string; metadata?: Record<string, string> }): Promise<{ etag: string }>;
+  list(prefix: string): Promise<Array<{ key: string; etag: string; size: number }>>;
+}
+// errors: ObjectNotFoundError, PreconditionFailedError (unchanged)
+```
+
+No `delete` (and the app key lacks `s3:DeleteObject`, §4). `putBlob(store,
+brandId, bytes, mime)` puts with `ifNoneMatch: "*"` + `metadata.sha256`; a
+`PreconditionFailedError` counts as success once `head` shows the same hash.
+
+**Key scheme** (one root; the legacy `S3_PREFIX`/`profiles/` tree is left
+untouched and only read by the importer):
+
+```
+brands/<brandId>/blobs/sha256/<hh>/<sha256>                       content-addressed: image, font, TTS audio, rendered clip, reference
+brands/<brandId>/exports/carousels/<carouselId>/v<NNN>/<nn>.png   deliverable, immutable
+brands/<brandId>/exports/carousels/<carouselId>/v<NNN>/manifest.json
+brands/<brandId>/exports/reels/<runId>/v<NNN>/reel.mp4
+brands/<brandId>/legacy/<importRunId>/<original relative path>    importer: files with no mapping (nothing lost)
+```
+
+`<brandId>`, `<carouselId>` and `<runId>` are the rows' UUIDs, never slugs,
+so renaming a slug moves no objects. `<hh>` is the first two hex chars.
+
+### 3b. Typed repositories: structured data
+
+All in `storage/src/contracts/repositories.ts`. Every mutable entity is read
+as `Versioned<T>` and written with `WriteMeta`:
+
+```ts
+interface Versioned<T> { id: string; value: T; version: number; updatedAt: string }
+interface WriteMeta {
+  expectedVersion: number | null;   // null = create, must not exist
+  author: string;                   // free text: "editor", "cli:<user>", "agent:<skill>"
+  source: "editor" | "cli" | "agent" | "import" | "system";
+  reason: RevisionReason;           // "save" | "autosave" | "structural" | "snapshot" | "status" | "import" | "archive"
+}
+class VersionConflictError extends Error { currentVersion: number | null }
+class NotFoundError extends Error {}
+
+/** Injected by callers; storage itself only checks the envelope (schema_version + JSON object/text). */
+type BodyValidator<T> = (body: unknown, schemaVersion: number) => T;
+
+interface BrandRepository     { list({ includeArchived? }); getBySlug(slug); create(input, meta); update(id, patch, meta); archive(id, meta); unarchive(id, meta) }
+interface BrandDocumentRepository {   // kind: tokens | config | identity | spec | template (name = template id)
+  get<T>(brandId, kind, name, validate: BodyValidator<T>): Promise<Versioned<T>>; list(brandId, kind); put(brandId, kind, name, body, meta) }
+interface BrandRuleRepository  { list(brandId, opts?); create(...); update(...); disable(...) }
+interface GuidanceRepository   { list(brandId); get(brandId, name); put(brandId, name, body, meta) }
+interface RecipeRepository     { get(brandId, recipe, validate); put(brandId, recipe, params, meta) }
+interface AssetRepository      { list(brandId, filter?); get(brandId, assetId); register(brandId, AssetInput, meta); update(...) }
+interface TtsCacheRepository   { get(brandId, narrationHash); record(brandId, narrationHash, sha256, seconds, voice) }
+interface CarouselRepository   { list(brandId, filter?); get(brandId, slug, validate); create(...); save(...); setStatus(...) }
+interface ExportRepository     { reserveNextVersion(carouselId, carouselVersion): Promise<number>; complete(...); fail(...); list(carouselId) }
+interface ChatRepository       { append(carouselId, message): Promise<number>; list(carouselId) }
+interface RecipeRunRepository  { create(...); get(id); setStoryboard(...); addArtifact(runId, RunArtifact); latestArtifacts(runId) }
+interface RevisionRepository   { list(entityType, entityId); get(entityType, entityId, version) }
+// later slice: ThemeRepository (seasonal_themes)
+
+interface Storage { blobs; blobCache; brands; documents; rules; guidance; recipes; assets; tts; carousels; exports; chat; runs; revisions; close() }
+openStorage(env): Promise<Storage>   /* S3 + Postgres */      openMemoryStorage(): Storage   /* fakes, for tests */
+```
+
+### 3c. Where it lives, and the module rule
+
+`storage/` (`@personal-brand/storage`, pnpm workspace member): `migrations/`,
+`src/contracts/` (interfaces, errors, keys; no deps), `src/blob/` (S3, fake,
+cache), `src/pg/` (connect, migrate, repositories), `src/memory/`,
+`src/import/`, `src/cli/`, `test/`.
+
+**Restated rule (replaces the "modules talk through `profiles/` files"
+rule in `docs/ARQUITECTURA.md`; the rewrite lands in S1):**
+
+> Modules never import each other's code; they share data only through
+> `@personal-brand/storage` (BlobStore + repositories). Shared pure logic
+> lives in `core/`, shared I/O in `storage/`. No module creates tables or
+> keys outside `storage/migrations` and the key scheme in
+> `storage/src/contracts/keys.ts`. `storage/` is shared infrastructure, not a
+> module.
+
+Not `core/` (documented as pure, zero deps); not `editor/server` (engine and
+CLI would import editor code).
+
+**Dependency direction.** `storage/` depends on nothing in the repo and does
+not import the domain zod schemas in `system/ig-carousel` (`brand-schema.ts`,
+`carousel-document.ts`): it checks only the envelope and takes a
+`BodyValidator` from callers, so no schema moves. Engine library functions
+keep taking data plus an injected `AssetResolver`; only entry points open
+storage.
+
+## 4. Postgres data model
+
+Conventions: every versioned table has `id uuid primary key default
+gen_random_uuid()` (natural keys become UNIQUE constraints), `timestamptz`
+everywhere, `version int not null default 1`, enum-like columns as `text` +
+`CHECK`, JSONB bodies with a `schema_version int`. Every FK is
+`ON DELETE RESTRICT`. Each slice adds its own migration file (§13).
+
+| Table | Columns (abridged) | Keys / constraints | Slice |
+|---|---|---|---|
+| `schema_migrations` | `name`, `checksum`, `applied_at` | PK `name` | S1 |
+| `brands` | `id`, `slug`, `display_name`, `status` (`active`/`archived`), `cutover_at` (null until D12 cutover), `created_at`, `updated_at`, `version` | `slug` UNIQUE, CHECK `slug ~ '^[a-z0-9-]+$'` | S1 |
+| `brand_documents` | `id`, `brand_id`, `kind` (`tokens`/`config`/`identity`/`spec`/`template`), `name` (`''` except templates: the template id), `schema_version`, `body_json`, `body_text`, `updated_at`, `version` | UNIQUE (`brand_id`,`kind`,`name`); CHECK exactly one body set. `tokens` = `brand.json`, `config` = `config.yaml`, `identity` = `profile.md`, `spec` = `brand-spec.md`, `template` = `templates/<id>.json` override | S1 |
+| `revisions` | `id bigserial`, `brand_id`, `entity_type`, `entity_id uuid`, `version`, `reason`, `body jsonb`, `body_text`, `author`, `source`, `source_hash`, `created_at` | UNIQUE (`entity_type`,`entity_id`,`version`); index (`brand_id`,`created_at`); trigger rejects UPDATE/DELETE unless the purge flag is set (§8) | S1 |
+| `brand_rules` | `id`, `brand_id`, `kind`, `params jsonb`, `severity` (`error`/`warning`), `applies_to text[]`, `message`, `enabled`, `updated_at`, `version` | CHECK `kind IN (...)` (§9) | S4 |
+| `brand_guidance` | `id`, `brand_id`, `name`, `description`, `body_md`, `updated_at`, `version` | UNIQUE (`brand_id`,`name`). Former `skills/*/SKILL.md` | S4 |
+| `brand_recipes` | `id`, `brand_id`, `recipe`, `schema_version`, `params jsonb`, `updated_at`, `version` | UNIQUE (`brand_id`,`recipe`) | S4 |
+| `assets` | `id`, `brand_id`, `asset_id` (first 16 hex of sha256, **same id as today**), `sha256 char(64)`, `blob_key`, `kind`, `mime`, `width`, `height`, `bytes`, `origin`, `status` (`candidate`/`approved`/`hidden`), `tags text[]`, `family`, `generation jsonb` (former sidecar), `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`asset_id`), UNIQUE (`brand_id`,`sha256`) | S5 |
+| `tts_cache` | `brand_id`, `narration_hash` (today's `narrationCacheKey`), `sha256`, `seconds`, `voice jsonb`, `created_at` | PK (`brand_id`,`narration_hash`); insert-only | S5 |
+| `carousels` | `id`, `brand_id`, `slug`, `title`, `status` (`draft`/`exported`/`scheduled`/`published`), `scheduled_for`, `published_at`, `document jsonb` (**without** `status`), `document_schema_version`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`) | S6 |
+| `exports` | `id`, `carousel_id`, `version_no`, `carousel_version`, `status` (`running`/`done`/`failed`), `manifest jsonb`, `started_at`, `finished_at` | UNIQUE (`carousel_id`,`version_no`) | S6 |
+| `chat_messages` | `carousel_id`, `seq`, `body jsonb`, `created_at` | PK (`carousel_id`,`seq`); insert-only, not revisioned | S6 |
+| `recipe_runs` | `id`, `brand_id`, `recipe`, `period_start`, `period_end`, `input jsonb`, `storyboard jsonb`, `created_at`, `created_by`, `version` | former `week-input.json` + `storyboard.yaml` | S6 |
+| `run_artifacts` | `id`, `run_id`, `kind` (`clip`/`audio`/`timeline`), `card_index`, `sha256`, `inputs_hash`, `created_at` | insert-only; current = latest per (`run_id`,`kind`,`card_index`) | S6 |
+| `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `dry_run`, `started_at`, `finished_at`, `report jsonb` | — | S7a |
+| `restore_drills` | `id`, `target_db` (host/db name, no secrets), `dump_taken_at`, `restored_at`, `verified bool`, `notes` | insert-only | S8 |
+| `seasonal_themes` | `id`, `brand_id`, `name`, `starts_on`, `ends_on`, `token_overrides jsonb`, `guidance_md`, `updated_at`, `version` | CHECK `ends_on >= starts_on` | S13 (scheduled, after cutover) |
+| `content_items` (future) | ideas / drafts / published markdown | — | not scheduled (§14 Q5) |
+
+Notes:
+
+- **Status is stored once.** The repository strips `status` from the
+  document before writing the JSONB and overlays the column on read.
+- **Exports.** `reserveNextVersion` first marks `running` rows whose
+  `started_at` is older than a timeout (default 30 min) as `failed`, then
+  reserves `max(version_no)+1`.
+- **Revision policy (no autosave flood).** Revisions are a sparse history,
+  not a write log. `save`, `structural`, `snapshot`, `status`, `import` and
+  `archive` writes always append a revision. `autosave` writes append one
+  only if the entity's last revision is older than 10 minutes or was written
+  by another author. The row's `version` still increments on every write.
+  Snapshots replace `versions/<ISO>.json`.
+- **Machine-local config disappears.** `config.local.yaml` and
+  `outputs.base_dir` placed files on one machine. A local copy for the owner
+  is an explicit `brand export pull --out <dir>` (a delivered copy).
+- Secrets never go in the DB; they stay in env.
+
+**Credentials.** Roles are cluster-level, so they are created by
+provisioning (the compose init SQL locally, documented setup steps on a
+hosted DB), **never by migrations**. Migrations only `GRANT` to roles that
+already exist (`DO` block guarded by a `pg_roles` lookup), so per-test
+schemas never create or collide on roles.
+
+| Role | Can | Used by |
+|---|---|---|
+| `brand_migrator` | owns the schema, DDL | `brand migrate` |
+| `brand_owner` | SELECT/INSERT/UPDATE on all tables incl. `brand_rules`/`brand_guidance`; SELECT/INSERT on `revisions` | owner's CLI |
+| `brand_app` | SELECT/INSERT/UPDATE except writes to `brand_rules`/`brand_guidance`; SELECT/INSERT on `revisions` | editor, render entry points, CLI content writes |
+| `brand_reader` | SELECT | default for agent sessions |
+| `brand_purger` | the above plus DELETE | `brand purge` only |
+
+No role but `brand_purger` has DELETE; none has `TRUNCATE` or UPDATE on
+`revisions`. The `revisions` trigger plus the `app.purge_brand` session flag
+are a second guard even for the purger (§8). The app's S3 key has no
+`s3:DeleteObject`. Agents write only through the CLI with `brand_app`
+credentials the owner provided for that session.
+
+**Migration runner** (`storage/src/pg/migrate.ts`), in this order on **one
+reserved connection** (`sql.reserve()`; advisory locks are session-level and
+postgres.js pools): set `search_path = <schema>` (default `public`; tests use
+`test_<random>`; files are not schema-qualified) -> `CREATE TABLE IF NOT
+EXISTS schema_migrations` -> `pg_advisory_lock(hashtext('migrations:' ||
+<schema>))` -> **re-read** `schema_migrations` -> run each pending file in
+its own transaction on that same connection, recording name + sha256
+(computed after normalizing CRLF to LF) -> unlock. A changed checksum of an
+applied file stops the runner. `CREATE INDEX CONCURRENTLY` (or anything that
+cannot run in a transaction) is rejected. Forward-only. Rejected tools:
+`node-pg-migrate` (JS DSL for plain DDL), drizzle/kysely (schema DSL +
+codegen for ~15 tables).
+
+**Driver: `postgres` (postgres.js).** Zero dependencies, bundled types,
+tagged-template parameterization, `sql.begin()`, `sql.reserve()`. Pooled
+hosts need `prepare: false` (`DATABASE_PREPARE=false`). `pg` is the fallback.
+
+## 5. Bucket vs DB
+
+| Goes to the bucket | Goes to Postgres |
+|---|---|
+| Bytes a browser or encoder consumes: images, fonts, generated pieces, reference images, TTS audio, rendered reel clips (both cost money/time to regenerate), exported PNG/MP4 | Everything a program decides on: tokens, config, templates, rules, guidance, recipes, carousel documents, status, schedule, asset metadata, TTS/clip indexes, chat, revisions |
+
+A row points at a blob by key + sha256; a blob never points at a row.
+
+Content-addressed inputs never change under a reader and need no cache
+invalidation; deliverables get named versioned keys (`ifNoneMatch: "*"`,
+version reserved in `exports` first). **Ordering:** upload the blob, then
+insert the row; a crash leaves an orphan blob, never a dangling row.
+
+## 6. Cache semantics
+
+- **One cache, blobs only:** `BLOB_CACHE_DIR` (default
+  `~/.cache/personal-brand/blobs`), `sha256/<hh>/<sha256>`, shared by every
+  process; content-addressed entries cannot go stale.
+- **Fill:** stream to a temp name, verify sha256, `chmod 0444`, atomic
+  `rename`. Concurrent fills are harmless; a hash mismatch is an error.
+- **Read-only, disposable:** API is `read(sha256)` / `pathFor(sha256)`; no
+  code path uploads from it; `rm -rf` is always safe. (LRU size cap: future.)
+- **Scratch dirs are rebuilt per run** (Remotion staging, reel clip dir),
+  hardlinked from the cache (copy fallback) and holding nothing that is not
+  already a blob, so removing them deletes no data. The generic `.cache/osm`
+  (brand-neutral, regenerable) stays.
+- **Structured data is not cached on disk** (in-process memo by `(id, version)` only).
+- **Conflicts:** `VersionConflictError` with the current version. Editor ->
+  409 with current document + version (`If-Match: "<version>"` replaces
+  `?base=<updatedAt>`; responses carry `ETag`). CLI -> exit 3. Agents
+  re-`get`, re-apply, retry once, then stop and report. No auto-merge.
+
+## 7. Render without a mirror
+
+Options: (A) `page.route` interception backed by the blob cache —
+**recommended** for Playwright; (B) an HTTP asset server — rejected, couples
+CLI renders to a running editor; (C) cache files by path — only where a tool
+demands paths (Remotion).
+
+**Carousels (Playwright).** One render-context builder for preview and
+export emits `http://render.local/assets/<assetId>`. `render-batch.ts` gains
+`loadWithResolver(page, html, resolve)` (what `routes/render.ts::loadSlide`
+does today): serve the HTML at `http://render.local/`, fulfil
+`/assets/<assetId>` from asset row -> sha256 -> `BlobCache.read`, abort
+anything else on that origin. Remote images allowed by rules keep loading.
+`text-raster.ts` and `contrast.ts` move to the same loader. This removes the
+filesystem-path export split.
+
+**Reels (Remotion + ffmpeg).** Today's reel keeps state on disk between runs:
+`clipsDir`/`rendersDir` are reused (assemble-only, re-render one card, the
+`existing` clips in `assembleClips`), `storyboard.ts::synthesiseCards`
+caches TTS mp3 + JSON sidecars by `narrationCacheKey`, and one shared
+`remotion/public/staging/` is wiped with `rmSync` at each run, so two
+concurrent renders collide. New shape:
+
+1. **TTS:** before synthesis, look up `tts_cache(brand_id, narration_hash)`.
+   Hit -> blob from cache. Miss -> synthesize, `putBlob`, insert the
+   `tts_cache` row (insert-only; a new voice or text is a new hash, nothing
+   is overwritten).
+2. **Clips:** each rendered card clip is uploaded as a content-addressed
+   blob and recorded in `run_artifacts(kind=clip, card_index, inputs_hash)`.
+   Re-rendering one card appends a new artifact row; the old clip stays
+   (owner's never-delete/version rule). Assemble-only uses the latest
+   artifact per card.
+3. **Scratch per run:** `remotion/public/staging/<runId>/` and a per-run
+   clip dir are built from the cache (hardlink, copy fallback) at the start
+   of each run. No run touches another run's dir; there is no shared
+   `rmSync(stagingDir)`.
+4. **Outputs:** the final MP4 (and storyboard/timeline) upload to
+   `exports/reels/<runId>/v<NNN>/`, verified by `head` (size + sha256
+   metadata) before the run's scratch dirs are removed.
+
+## 8. Skills, agents and the CLI
+
+**CLI:** `pnpm brand <noun> <verb>` (bin in `storage/src/cli/`). `--json`
+for agents. Exit codes: 0 ok, 2 usage, 3 version conflict, 4 not found,
+5 rule violations, 6 refused (cutover/backup/role).
+
+```
+brand list [--archived]
+brand create <slug> --name <display>              replaces scripts/init-profile.mjs
+brand archive <slug>                              soft removal
+brand unarchive <slug>                            reverses archive
+brand purge <slug> --confirm <slug>               deliberate deletion, see below
+brand show <slug> [--since <version>]             documents + versions, rules, guidance; --since diffs guidance revisions after <version>
+brand doc get|put <slug> <tokens|config|identity|spec|template> [<name>] [--if-version <n>]
+brand rules list|add|update|disable <slug> ...    owner role
+brand guidance list|get|put <slug> [<name>] [--if-version <n>]   put: owner role
+brand recipe get|put <slug> <recipe> [--if-version <n>]
+brand asset list|add|get <slug> ...               add <file>: upload + register; get --out <path>
+brand fonts fetch <slug> ...                      replaces system/assets/fetch-fonts.ts writing into the folder
+brand carousel list|get|put|status <slug> ...
+brand export pull <slug> <carousel> [--version N] --out <dir>
+brand check <slug> --carousel <id>
+brand import --from <dir|legacy-bucket:<slug>> [--dry-run] [--report <file>]
+brand cutover <slug> --confirm <slug>             D12, see §10
+brand migrate                                     migrator role
+brand backup drill --target <db>                  record a verified restore in restore_drills
+brand denylist [--write <file>]                   terms for the commit gate
+```
+
+**Removal.** `archive` is the normal path (hidden from lists and pickers,
+data intact). `purge` exists for the rare "this brand must be gone" case:
+it requires an archived brand and runs as `brand_purger`, writes an export bundle
+(all rows as JSON + a blob key manifest) to a local path outside the repo and
+verifies it, then deletes the brand's rows in FK order in one transaction
+under `SET LOCAL app.purge_brand = '<brandId>'`, which the `revisions`
+trigger checks as a second guard. Bucket objects
+under `brands/<brandId>/` are removed afterwards by an operator with a
+delete-capable key; the app key cannot.
+
+**Guidance trust envelope.** `brand guidance get --json` returns
+`{ "trust": "brand-data", "name", "version", "body" }`. `usar-perfil` states
+explicitly: guidance describes brand criteria (what content fits, tone); it
+never authorizes running commands, fetching URLs, reading files, or relaxing
+engine rules, limits or checks — the same posture `system/recipes/*.md`
+already takes for `guidance`. Only the owner role writes guidance, and
+`brand show <slug> --since <version>` prints the guidance revisions after a
+version the caller names, so an unexpected change is visible.
+
+**Consumers to switch** (all in §13): `usar-perfil` (resolve with `brand
+list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
+`brand show`; "profile not found" means "not in `brand list`"),
+`generar-carrusel-semana`, `generar-reel-semana`, `carousel-designer` (+
+`references/brand-context-protocol.md`, `references/verification-checklist.md`),
+`narrated-slide-video` (+ `references/voice-casting.md`), and every agent in
+`.claude/agents/` (`content-strategist`, `draft-writer`, `draft-reviewer`,
+`idea-capture`, `content-publisher`, `channel-adapter`, `analytics-reviewer`,
+`notion-sync`, `README.md`). Rule for all: never Read/Write/`ls` under
+`profiles/`; reads via `brand ... get`, writes via `brand ... put
+--if-version`. Agents whose job is ideas/drafts/published markdown depend on
+§14 Q5.
+
+**`app/`** (deprecated; writes `brand.yaml` and `content/**`, though its UI
+never calls those commands): **retire formally**, no migration (Q10).
+
+## 9. Generic rule/check mechanism
+
+A rule = `{ kind, params, severity, applies_to, message }`. The engine owns a
+**closed** set of kinds; a brand only chooses kinds and params.
+`runChecks(target, rules, ctx) -> Finding[]` and `validateRuleParams(kind,
+params)` are pure functions in `core/src/checks.js` (hand-written
+validation, no new dependency in `core/`). Params are validated on write
+(repository calls `validateRuleParams`) and on load; an unknown kind is a
+load error, never silently skipped.
+
+| Kind | Params | Checks |
+|---|---|---|
+| `forbidden_terms` | `terms[]`, `match` (`word`/`substring`), `case_sensitive`, `fields[]`, `slides` (`cover`/`all`/`last`/indices) | text fields contain none of the terms |
+| `max_length` | `field`, `max`, `slides` | text length |
+| `slide_count` | `min`, `max` | number of slides |
+| `image_hosts` | `hosts[]` | remote image URLs come from allowed hosts (today's recipe `image_hosts`) |
+| `date_window` | `require_dates` | dated items fall inside the run period (today's `verify-slides` check) |
+
+Future kinds, added only when a brand needs them: `required_terms`,
+`asset_policy` (allowed origins / required tags per slide). A regex kind is
+deliberately excluded (ReDoS risk, unreadable rules).
+
+Examples (fictional brand `acme-coffee`):
+
+```jsonc
+{ "kind": "max_length", "severity": "error", "applies_to": ["carousel"],
+  "params": { "field": "title", "max": 32, "slides": "cover" },
+  "message": "Cover titles stay short enough to read in the grid." }
+
+{ "kind": "forbidden_terms", "severity": "warning", "applies_to": ["carousel", "caption"],
+  "params": { "terms": ["guaranteed", "best ever"], "match": "word",
+              "case_sensitive": false, "fields": ["title", "subtitle", "body"], "slides": "all" },
+  "message": "No unverifiable claims." }
+```
+
+Where it runs: editor save (findings returned), editor export and engine
+render entry points (`error` blocks, like `verifyOrThrow` today), `brand
+check`. Judgment that cannot be a check stays in `brand_guidance`.
+
+## 10. Migration of existing profiles and cutover
+
+`brand import --from <dir> | legacy-bucket:<slug> [--dry-run] [--report out.json]`.
+The legacy-bucket source reads the #99 `profiles/<slug>/` prefix, because a
+brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
+
+| Source | Destination |
+|---|---|
+| `brand.json` / `brand.yaml` | `brand_documents(tokens)` |
+| `config.yaml` (`config.local.yaml` reported, not imported) | `brand_documents(config)` |
+| `profile.md`, `brand-spec.md` | `brand_documents(identity / spec)` |
+| `templates/<id>.json` | `brand_documents(template, <id>)` |
+| `recipes/*.yaml` | `brand_recipes`; `image_hosts` also proposed as an `image_hosts` rule |
+| `skills/*/SKILL.md` | `brand_guidance` |
+| `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved) |
+| `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
+| `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
+| reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
+| `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
+| `ideas/`, `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; becomes `content_items` if Q5 says so) |
+
+Importer guarantees: **read-only on the source** (the cutover marker is the
+only folder write, by a separate command); **idempotent** via `source_hash`
+per revision (same hash -> skip; changed since import -> conflict reported,
+never overwritten); **nothing deleted**; **dry-run** writes nothing, not
+even `import_runs`; **verification report** (counts, then re-download every
+blob and compare sha256, re-read every row and compare a canonical-JSON
+hash).
+
+- **Backup gate:** a non-dry-run against a non-localhost `DATABASE_URL` is
+  refused unless `restore_drills` has a `verified` row for that target DB
+  newer than 30 days (a `pg_dump` restored elsewhere and passing the
+  verification pass; recorded by `brand backup drill`). No self-reported
+  flag. Dumps are stored outside the brand bucket.
+- YAML via the `yaml` package (importer only). Local dev seeds with `brand
+  import --from profiles/example` and cuts the example brands over.
+
+**Cutover rule (D12), explicit:**
+
+1. **Timing:** no real brand is cut over until every consumer it uses has
+   been switched to storage (end of S11b). Example brands are cut over in
+   dev from S7a on.
+2. **Transition:** until a brand is cut over, switched consumers serve it
+   from its folder through a single resolver,
+   `resolveBrandSource(slug) -> "storage" | "folder"` (storage package,
+   S7a): `"storage"` iff `brands.cutover_at` is set. One code path decides;
+   no consumer guesses.
+3. **Cutover** = `brand cutover <slug> --confirm <slug>`: final import pass,
+   verification report must be clean, then set `brands.cutover_at` and write
+   one marker file, `profiles/<slug>/.storage-cutover` (brand id +
+   timestamp). That marker is the only file the system ever writes in a
+   folder.
+4. **After cutover:** `resolveProfileDir` (`system/ig-carousel/profile.ts`,
+   changed in S7a next to `resolveBrandSource`) throws for a brand whose
+   folder holds `.storage-cutover` or whose `brands.cutover_at` is set,
+   pointing to the `brand` CLI; every legacy reader goes through it. The
+   importer refuses to re-import it. The folder is never deleted.
+5. S12 removes the folder path and the resolver once every real brand is cut
+   over.
+
+## 11. Local dev
+
+`docker-compose.storage.yml` gains a `postgres` service next to RustFS:
+
+```yaml
+  postgres:
+    image: postgres:17-alpine
+    ports: ["5433:5432"]          # avoids 5432 (a host Postgres), 4310/4311, 5173/5174, 9000/9001
+    environment:
+      POSTGRES_USER: brand
+      POSTGRES_PASSWORD: brand
+      POSTGRES_DB: personal_brand
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "brand"], interval: 5s, retries: 10 }
+```
+
+The compose init SQL (provisioning, not a migration) creates the five roles (§4) with local passwords.
+
+```
+DATABASE_URL=postgres://brand_app:...@localhost:5433/personal_brand
+DATABASE_MIGRATOR_URL=postgres://brand_migrator:...@localhost:5433/personal_brand
+DATABASE_PREPARE=true
+S3_ENDPOINT=http://localhost:9000  S3_BUCKET=brand-profiles  S3_ACCESS_KEY_ID=...  S3_SECRET_ACCESS_KEY=...
+BLOB_CACHE_DIR=~/.cache/personal-brand/blobs   # optional
+```
+
+**Tests** (same `tsx` file-per-suite style):
+
+- Unit: memory repos + `FakeBlobStore`, keys, cache, check runner, CLI via
+  `runCli(argv, env)`, runner CRLF checksum and `CONCURRENTLY` rejection.
+- **Contract suites** run the same assertions on memory and Postgres.
+- Integration SKIPs (exit 0) without a reachable `DATABASE_URL`, like the S3
+  test; each run migrates and drops its own `test_<random>` schema; two
+  concurrent runners on one schema apply each file once.
+
+## 12. Hosting Postgres (owner decides; nothing provisioned)
+
+Hard requirement whatever the host: PITR or daily dumps stored outside the
+brand bucket, proven by a recorded restore drill before the first real
+import. Options: **Railway** (same platform as a Railway bucket/editor,
+private networking; backups/plan on us), **Neon** (PITR, branching per
+PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
+**Supabase** (PITR on paid plans; much we would not use, free tier pauses),
+**self-host on the existing VPS** (cheapest; backups, upgrades, TLS on us).
+
+## 13. Slice plan (chained PRs, each < 600 lines incl. tests)
+
+| # | Scope | Est. | Depends on | Done when |
+|---|---|---|---|---|
+| **S1** | **Foundation:** `storage/` package; contracts (`BlobStore`, brand/document/revision repository interfaces, errors, `WriteMeta`, keys); runner (reserved connection, per-schema lock, re-check, CRLF, `CONCURRENTLY` rejection); `postgres` connection; `0001_foundation.sql` (`brands`, `brand_documents`, `revisions` + trigger, guarded GRANTs to existing roles); compose service + role-creating init SQL; ARQUITECTURA/CLAUDE.md module-rule rewrite (§3c); tests | ~560 | — | migrations apply twice cleanly against docker, concurrent runners apply once; tests green or SKIP; no runtime behavior changes |
+| S2 | Move `ObjectStore`/S3/fake into the package as `BlobStore` (editor re-imports, unchanged); `putBlob`; `BlobCache` | ~450 | S1 | editor suite green; cache tests |
+| S3 | Postgres + memory repos for brands, documents (incl. templates), revisions; revision policy; contract suite | ~550 | S1 | contract suite passes on both |
+| S4 | `0002`: rules, guidance, recipes + repos; check runner and `validateRuleParams` in `core/` | ~590 | S3 | §9 examples produce expected findings; contract suite |
+| S5 | `0003`: assets, `tts_cache` + repos; `system/assets/index.ts` on `AssetRepository` + blobs (no `index.json`/sidecars); `fetch-fonts.ts` uploads fonts as assets | ~580 | S2, S3 | asset library tests run on memory storage, no profile dir |
+| S6 | `0004`: carousels (status stripped), exports (`started_at`, stale reclaim), chat, `recipe_runs`, `run_artifacts` + repos; `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~590 | S4, S5 | concurrent reserve/append tests; usage/verify tests on memory storage |
+| S7a | CLI skeleton (bin, `runCli`, flag parser from #116) + `import`/`cutover` verbs; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs`; `resolveBrandSource` + `resolveProfileDir` post-cutover refusal | ~590 | S3, S4 | example brands import, re-run is a no-op, cutover writes marker + `cutover_at`, legacy readers refuse it |
+| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass | ~590 | S7a, S5, S6 | verification clean on examples |
+| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
+| S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6, S7a | example brand renders from storage with no `profiles/` dir |
+| S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
+| S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
+| S10b | Editor write path: save (`If-Match`), export, chat, compose; 409 with current version | ~580 | S10a | concurrent-save tests; exports land in bucket |
+| S11a | Skills: `usar-perfil` (trust envelope wording), `generar-carrusel-semana`, `generar-reel-semana`, `carousel-designer` + references, `narrated-slide-video` + reference; commit gate denylist from `brand denylist --write` | ~550 | S8, S9b | no skill references `profiles/`; gate derives terms with no folders on disk |
+| S11b | Agents: all `.claude/agents/*.md` + README; `app/` retirement note (per Q10); `system/guides/workflow.md`, schema docs | ~450 | S8, S11a | no agent references `profiles/`; **real brands can now be cut over** |
+| S12a/b | Remove mirror, runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
+| S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
+
+17 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
+lines, and merging the S9 or S11 pairs would break the budget). A slice that
+grows is split, not compressed.
+
+**From #116**, salvaged into S7a: the testable CLI shape (`CliResult {
+lines, exitCode }`, `runCli(argv, env)`), the ~30-line flag parser, and the
+single-object `fetch` idea (`brand asset get --out` / `brand export pull`
+via `getStream`). Everything mirror-based is not salvageable; close #116
+when S7a lands.
+
+## 14. Risks and open questions for the owner
+
+**Risks** (mitigations are in the sections cited)
+
+- The DB is the single copy of brand decisions (§4 roles, §10 backup gate). No offline work.
+- Guidance from the DB reaches agents (§8 envelope, owner-only writes, `--since` diffs).
+- Credentials in agent sessions: read-only by default (§4).
+- Commit gate loses its derived terms when folders go; S11a moves it to `brand denylist`.
+- Two paths live between S7a and S12, behind the single `resolveBrandSource` switch.
+- Long agent sessions hit version conflicts by design; the CLI says how to retry.
+
+**Open questions**
+
+1. Package placement: new `storage/` package (recommended) or inside `core/`?
+2. Postgres host (§12) and backup destination (outside the brand bucket).
+3. Same bucket with the new `brands/` root (recommended) or a new bucket?
+4. For each real brand, which is fresher: its folder or the legacy bucket
+   prefix written in `s3` mode?
+5. Ideas/drafts/published markdown: add `content_items` now (and switch the
+   content agents to it), or import them as legacy blobs and decide later?
+6. Drop the local `fs` backend entirely (recommended; docker replaces it)?
+7. Commit-gate denylist: gitignored local file from `brand denylist --write`
+   (proposed), or the gate queries the DB?
+8. Who holds `brand_owner` credentials; editor UI for rules/guidance later?
+9. Should `author` carry a real identity now, or is free text enough?
+10. `app/`: retire formally (recommended) or migrate it as a storage
+    consumer?
