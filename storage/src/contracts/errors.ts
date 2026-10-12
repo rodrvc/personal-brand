@@ -1,5 +1,5 @@
-// S2 must make the editor re-export these exact classes (not copies), or
-// `instanceof` checks fail across package copies.
+// The editor re-exports these exact classes (not copies); `instanceof`
+// must keep working across both packages.
 
 /** Thrown by `BlobStore.get`/`head` when the key does not exist. */
 export class ObjectNotFoundError extends Error {

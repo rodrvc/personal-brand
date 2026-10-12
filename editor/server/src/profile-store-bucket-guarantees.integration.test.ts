@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
  * `profile-store-bucket-guarantees.test.ts` against `FakeObjectStore`, run
  * here against a real S3-compatible server — see
  * `docker-compose.storage.yml`. SKIPs cleanly (exit 0) when `S3_ENDPOINT` is
- * unset or unreachable, exactly like `storage/s3-object-store.integration.test.ts`.
+ * unset or unreachable, exactly like `storage/test/s3-object-store.integration.test.ts`.
  */
 
 const endpoint = process.env.S3_ENDPOINT;

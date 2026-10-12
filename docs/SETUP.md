@@ -116,6 +116,13 @@ adopted: pulls anonymously, persists data on its named volume across
 `PutObject`. The same `S3_*` variables point at a real MinIO deployment,
 Railway bucket, Cloudflare R2 or AWS S3 without any code change.
 
+The shared `@personal-brand/storage` package also keeps a read-only blob
+cache (content-addressed files fetched from the bucket by sha256) under
+`BLOB_CACHE_DIR`, default `~/.cache/personal-brand/blobs`. It is shared by
+every process and brand, never uploads anything, and is always safe to
+`rm -rf` (which also clears `*.tmp` files left by a crashed fill). There is
+no size cap yet.
+
 In `s3` mode the server keeps a local mirror under `PROFILE_CACHE_DIR`
 (`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` are pointed at it automatically)
 and syncs it against the bucket around each `/api/profiles/:slug/...`

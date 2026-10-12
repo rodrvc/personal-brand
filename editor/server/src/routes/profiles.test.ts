@@ -315,7 +315,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       // `writeDocumentThroughRevision`'s bucket-backed write guarantees are
       // exactly what a chat proposal or export job also goes through.
       const { setStorageRuntimeForTests, resetStorageRuntimeForTests } = await import("../storage/runtime.js");
-      const { FakeObjectStore } = await import("../storage/fake-object-store.js");
+      const { FakeObjectStore } = await import("@personal-brand/storage/blob");
       const { writeDocumentThroughRevision } = await import("../document-store.js");
 
       const cacheDir = mkdtempSync(join(tmpdir(), "editor-server-profiles-route-s3-test-"));

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { PreconditionFailedError } from "./object-store.js";
-import { S3ObjectStore } from "./s3-object-store.js";
+import { PreconditionFailedError } from "../src/contracts/errors.ts";
+import { S3ObjectStore } from "../src/blob/s3-object-store.ts";
 
 /**
  * Exercises `S3ObjectStore` against a real S3-compatible server — bring one

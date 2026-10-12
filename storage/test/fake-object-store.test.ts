@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-import { FakeObjectStore } from "./fake-object-store.js";
-import { ObjectNotFoundError, PreconditionFailedError } from "./object-store.js";
+import { FakeObjectStore } from "../src/blob/fake-object-store.ts";
+import { ObjectNotFoundError, PreconditionFailedError } from "../src/contracts/errors.ts";
 
 const tests: Array<[string, () => Promise<void> | void]> = [
   [

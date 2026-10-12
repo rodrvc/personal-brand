@@ -8,16 +8,15 @@ import {
 } from "@aws-sdk/client-s3";
 
 import {
-  ObjectNotFoundError,
-  PreconditionFailedError,
-  type GetResult,
-  type GetStreamResult,
-  type HeadResult,
-  type ListedObject,
-  type ObjectStore,
-  type PutOptions,
-  type PutResult,
-} from "./object-store.js";
+  type BlobGetResult,
+  type BlobHeadResult,
+  type BlobListEntry,
+  type BlobPutOptions,
+  type BlobPutResult,
+  type BlobStore,
+  type BlobStreamResult,
+} from "../contracts/blob-store.ts";
+import { ObjectNotFoundError, PreconditionFailedError } from "../contracts/errors.ts";
 
 export interface S3ObjectStoreOptions {
   bucket: string;
@@ -61,8 +60,8 @@ function normalizeEtag(etag: string | undefined): string {
   return (etag ?? "").replace(/^"|"$/g, "");
 }
 
-/** `ObjectStore` backed by an S3-compatible bucket (AWS S3, MinIO, Cloudflare R2, Railway buckets). */
-export class S3ObjectStore implements ObjectStore {
+/** `BlobStore` backed by an S3-compatible bucket (AWS S3, MinIO, Cloudflare R2, Railway buckets). */
+export class S3ObjectStore implements BlobStore {
   private readonly client: S3Client;
   private readonly bucket: string;
 
@@ -80,7 +79,7 @@ export class S3ObjectStore implements ObjectStore {
     this.client = new S3Client(config);
   }
 
-  async get(key: string): Promise<GetResult> {
+  async get(key: string): Promise<BlobGetResult> {
     try {
       const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
       const body = await bodyToBuffer(result.Body);
@@ -92,7 +91,7 @@ export class S3ObjectStore implements ObjectStore {
   }
 
   /** Streams the body instead of buffering it whole — the lazy-media on-demand fetch path. */
-  async getStream(key: string): Promise<GetStreamResult> {
+  async getStream(key: string): Promise<BlobStreamResult> {
     try {
       const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
       return { stream: result.Body as AsyncIterable<Buffer>, etag: normalizeEtag(result.ETag) };
@@ -102,7 +101,7 @@ export class S3ObjectStore implements ObjectStore {
     }
   }
 
-  async head(key: string): Promise<HeadResult> {
+  async head(key: string): Promise<BlobHeadResult> {
     try {
       const result = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
       return { etag: normalizeEtag(result.ETag), size: result.ContentLength ?? 0, metadata: result.Metadata ?? {} };
@@ -112,7 +111,7 @@ export class S3ObjectStore implements ObjectStore {
     }
   }
 
-  async put(key: string, body: Buffer, options?: PutOptions): Promise<PutResult> {
+  async put(key: string, body: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
     try {
       const result = await this.client.send(
         new PutObjectCommand({
@@ -132,8 +131,8 @@ export class S3ObjectStore implements ObjectStore {
     }
   }
 
-  async list(prefix: string): Promise<ListedObject[]> {
-    const results: ListedObject[] = [];
+  async list(prefix: string): Promise<BlobListEntry[]> {
+    const results: BlobListEntry[] = [];
     let continuationToken: string | undefined;
     do {
       const page = await this.client.send(
