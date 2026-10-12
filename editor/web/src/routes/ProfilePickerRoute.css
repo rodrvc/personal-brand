@@ -177,3 +177,63 @@
   font-weight: 500;
   color: var(--ui-ink-3);
 }
+
+/*
+ * Phones: two cards per row instead of one. The cover shortens from 4:5 to
+ * 1:1 and every text/swatch size steps down so the denser card still has
+ * room to breathe; tap area stays the whole card, well past 40px either
+ * way. Desktop (>= 1024px) keeps the auto-fill grid above untouched.
+ */
+@media (max-width: 640px) {
+  .picker {
+    padding: 28px 16px 48px;
+  }
+
+  .picker-header {
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+  }
+
+  .brand-card-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .brand-card-cover {
+    aspect-ratio: 1 / 1;
+  }
+
+  .brand-card-logo {
+    max-width: 40%;
+    max-height: 32%;
+  }
+
+  .brand-card-body {
+    padding: 10px 12px 12px;
+    gap: 6px;
+  }
+
+  .brand-card-wordmark {
+    font-size: 15px;
+  }
+
+  .brand-card-swatch {
+    width: 10px;
+    height: 10px;
+  }
+
+  .brand-card-meta {
+    font-size: 10px;
+    gap: 6px;
+    padding-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .brand-card-compact .brand-card-body {
+    padding: 10px;
+  }
+
+  .brand-card-hint {
+    font-size: 10px;
+  }
+}
