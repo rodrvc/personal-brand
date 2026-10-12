@@ -35,9 +35,16 @@ que existe. No es el producto entero.
 └────────────────────────────────────────────────────┘
 ```
 
-**La regla que lo sostiene:** los módulos no se hablan entre ellos. Se
-comunican por los archivos de `profiles/`. Un módulo puede desaparecer y el
-resto sigue funcionando.
+**La regla que lo sostiene:** los módulos nunca importan el código de otro;
+comparten datos solo a través de `@personal-brand/storage` (`BlobStore` +
+repositorios). La lógica pura compartida vive en `core/` y el I/O compartido
+en `storage/`. Ningún módulo crea tablas ni claves fuera de
+`storage/migrations`. `storage/` es infraestructura compartida, no un módulo.
+Un módulo puede desaparecer y el resto sigue funcionando.
+
+> Transición: hasta el corte de cada marca (ver
+> `docs/design/storage-foundation.md`), los módulos existentes siguen
+> leyendo `profiles/<marca>/`.
 
 ## Regla dura: el proyecto es AGNÓSTICO
 

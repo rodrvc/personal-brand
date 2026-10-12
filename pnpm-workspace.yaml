@@ -13,6 +13,7 @@ packages:
   - "system/ig-reel/remotion"
   - "app"
   - "core"
+  - "storage"
   - "editor/*"
 
 # Build scripts of dependencies, decided once here instead of by a prompt on
