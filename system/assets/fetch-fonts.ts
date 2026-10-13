@@ -18,7 +18,7 @@ import { basename, join } from "node:path";
 
 import { loadBrand } from "../ig-carousel/brand-schema.js";
 import { resolveProfileDir } from "../ig-carousel/profile.js";
-import { registerFile } from "./index.js";
+import { registerFile, type AssetLibrary } from "./index.js";
 
 // A modern desktop UA: Google Fonts' CSS endpoint serves different `src`
 // formats depending on the requesting browser, and only a fairly recent one
@@ -88,8 +88,28 @@ async function fetchBuffer(url: string): Promise<Buffer> {
   return Buffer.from(await response.arrayBuffer());
 }
 
-export async function fetchFontsForProfile(profileDir: string): Promise<string[]> {
+export interface FetchFontsDeps {
+  fetchText?: (url: string) => Promise<string>;
+  fetchBuffer?: (url: string) => Promise<Buffer>;
+}
+
+/** Uploads a stylesheet's fonts as assets (blob + row), nothing on disk. Re-running is a no-op. */
+export async function fetchFontsIntoLibrary(href: string, library: AssetLibrary, deps: FetchFontsDeps = {}): Promise<string[]> {
+  const faces = extractFontFaces(await (deps.fetchText ?? fetchText)(href));
+  if (faces.length === 0) throw new Error(`fetch-fonts: no woff2 @font-face rules found in the CSS from ${href}.`);
+  const saved: string[] = [];
+  for (const face of faces) {
+    const filename = `${face.family.replace(/\s+/g, "")}-${basename(face.url).split("?")[0]}`;
+    await library.register(await (deps.fetchBuffer ?? fetchBuffer)(face.url), { kind: "font", origin: "manual", family: face.family, destRelPath: filename });
+    saved.push(filename);
+  }
+  return saved;
+}
+
+/** Default writes into the profile folder; pass `library` to upload the fonts as assets instead. */
+export async function fetchFontsForProfile(profileDir: string, options: { library?: AssetLibrary } & FetchFontsDeps = {}): Promise<string[]> {
   const brand = loadBrand(profileDir);
+  if (brand.googleFontsHref && options.library) return fetchFontsIntoLibrary(brand.googleFontsHref, options.library, options);
   if (!brand.googleFontsHref) {
     console.log("fetch-fonts: brand.json declares no googleFontsHref — nothing to fetch.");
     return [];
