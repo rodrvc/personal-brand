@@ -60,7 +60,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset";
 
 export interface Revision {
   brandId?: string;
@@ -123,4 +123,59 @@ export interface GuidanceRepository {
 export interface RecipeRepository {
   get<T>(brandId: string, recipe: string, validate: BodyValidator<T>): Promise<Versioned<T>>;
   put(brandId: string, recipe: string, input: { params: unknown; schemaVersion: number }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
+}
+
+export type AssetKind = "background" | "character" | "photo" | "logo" | "decoration" | "font" | "unclassified";
+export type AssetOrigin = "manual" | "ai" | "reference";
+export type AssetStatus = "candidate" | "approved" | "hidden";
+
+export interface AssetInput {
+  sha256: string;
+  kind: AssetKind;
+  mime: string;
+  bytes: number;
+  origin: AssetOrigin;
+  status: AssetStatus;
+  tags?: string[];
+  width?: number;
+  height?: number;
+  family?: string;
+  /** Former generated-piece sidecar (prompt, model, cost, ...). */
+  generation?: Record<string, unknown>;
+}
+export interface Asset extends Required<Pick<AssetInput, "sha256" | "kind" | "mime" | "bytes" | "origin" | "status" | "tags">> {
+  assetId: string;
+  blobKey: string;
+  width: number | null;
+  height: number | null;
+  family: string | null;
+  generation: Record<string, unknown> | null;
+  createdAt: string;
+}
+export type AssetPatch = Partial<Pick<AssetInput, "kind" | "tags" | "status" | "family">>;
+
+export interface AssetRepository {
+  /** Ordered by creation, then asset id. */
+  list(brandId: string, filter?: { kind?: AssetKind; status?: AssetStatus; origin?: AssetOrigin }): Promise<Array<Versioned<Asset>>>;
+  get(brandId: string, assetId: string): Promise<Versioned<Asset>>;
+  /** Create only (`expectedVersion` null). The same bytes twice is `AlreadyExistsError`; a different sha256 with the same 16-hex id is `InvalidInputError`. The blob must already be stored. */
+  register(brandId: string, input: AssetInput, meta: WriteMeta): Promise<Versioned<Asset>>;
+  update(brandId: string, assetId: string, patch: AssetPatch, meta: WriteMeta): Promise<Versioned<Asset>>;
+}
+
+export interface TtsEntry {
+  sha256: string;
+  seconds: number;
+  voice: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** Insert-only cache of synthesized narration. A re-take (new audio for the same narration hash) never replaces the old one. */
+export interface TtsCacheRepository {
+  /** The latest recorded take. */
+  get(brandId: string, narrationHash: string): Promise<TtsEntry>;
+  /** Every take, oldest first. */
+  takes(brandId: string, narrationHash: string): Promise<TtsEntry[]>;
+  /** A new (hash, sha256) becomes the current take; an existing one is returned unchanged and does not move. */
+  record(brandId: string, narrationHash: string, entry: Omit<TtsEntry, "createdAt">): Promise<TtsEntry>;
 }

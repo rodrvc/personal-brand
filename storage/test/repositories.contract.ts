@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { runChecks } from "@personal-brand/core/checks";
 import { toCheckRules } from "../src/revision-policy.ts";
-import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
+import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetInput, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
 import type { MemoryRepositories } from "../src/memory/index.ts";
 
 export interface Harness {
@@ -19,6 +20,8 @@ export type Factory = (now: () => Date) => Promise<Harness>;
 
 const MIN = 60_000;
 const meta = (over: Partial<WriteMeta> = {}): WriteMeta => ({ expectedVersion: null, author: "editor", source: "editor", reason: "save", ...over });
+const sha = (seed: string) => createHash("sha256").update(seed).digest("hex");
+const asset = (seed: string, over: Partial<AssetInput> = {}): AssetInput => ({ sha256: sha(seed), kind: "photo", mime: "image/png", bytes: 10, origin: "manual", status: "approved", ...over });
 const identity = (body: unknown) => body;
 
 /** Behavior every repository implementation must share. */
@@ -207,6 +210,61 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => r.recipes.put(a.id, "Bad Recipe", input, meta()), InvalidInputError);
       await assert.rejects(() => r.recipes.get(a.id, "weekly-roundup", () => { throw new Error("invalid params"); }), /invalid params/);
       assert.deepEqual((await r.revisions.list("brand_recipe", put.id)).map((x) => x.version), [1, 2]);
+    },
+
+    async "assets: register, get, ordering, brand scoping, same bytes once"(r, clock) {
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const o = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const first = await r.assets.register(a.id, asset("one", { width: 4, height: 3, tags: ["ink:light"], generation: { prompt: "p" } }), meta());
+      assert.equal(first.version, 1);
+      assert.deepEqual([first.value.assetId, first.value.blobKey], [sha("one").slice(0, 16), `brands/${a.id}/blobs/sha256/${sha("one").slice(0, 2)}/${sha("one")}`]);
+      assert.deepEqual([first.value.width, first.value.tags, first.value.generation, first.value.family], [4, ["ink:light"], { prompt: "p" }, null]);
+      clock.t += 1000;
+      const second = await r.assets.register(a.id, asset("two", { kind: "font", family: "Example Sans" }), meta());
+      assert.deepEqual((await r.assets.list(a.id)).map((x) => x.id), [first.id, second.id], "ordered by creation");
+      assert.deepEqual((await r.assets.list(a.id, { kind: "font" })).map((x) => x.id), [second.id]);
+      assert.deepEqual((await r.assets.get(a.id, first.value.assetId)).value, first.value);
+      await assert.rejects(() => r.assets.register(a.id, asset("one"), meta()), (e) => e instanceof AlreadyExistsError && e.currentVersion === 1);
+      await r.assets.register(a.id, { ...asset("c"), sha256: "a".repeat(16) + "0".repeat(48) }, meta());
+      await assert.rejects(() => r.assets.register(a.id, { ...asset("c"), sha256: "a".repeat(16) + "1".repeat(48) }, meta()), (e) => e instanceof InvalidInputError && /collides/.test(e.message));
+      await assert.rejects(() => r.assets.get(o.id, first.value.assetId), NotFoundError);
+      assert.deepEqual(await r.assets.list(o.id), []);
+      assert.equal((await r.assets.register(o.id, asset("one"), meta())).value.blobKey.includes(o.id), true, "the same bytes are a separate asset per brand");
+      for (const bad of [{ sha256: "abc" }, { kind: "video" }, { status: "gone" }, { origin: "x" }, { bytes: -1 }, { width: 0 }, { mime: "" }] as Array<Partial<AssetInput>>) {
+        await assert.rejects(() => r.assets.register(a.id, asset("z", bad), meta()), InvalidInputError);
+      }
+    },
+
+    async "assets: classification updates are versioned and revisioned"(r) {
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const reg = await r.assets.register(a.id, asset("one", { status: "candidate", origin: "ai" }), meta());
+      const up = await r.assets.update(a.id, reg.value.assetId, { kind: "character", tags: ["x"] }, meta({ expectedVersion: 1, reason: "structural" }));
+      assert.deepEqual([up.version, up.value.kind, up.value.tags, up.value.status, up.value.origin], [2, "character", ["x"], "candidate", "ai"], "untouched fields keep their value");
+      await assert.rejects(() => r.assets.update(a.id, reg.value.assetId, { status: "hidden" }, meta({ expectedVersion: 1 })), (e) => e instanceof VersionConflictError && e.currentVersion === 2);
+      await assert.rejects(() => r.assets.update(a.id, reg.value.assetId, { kind: "video" as never }, meta({ expectedVersion: 2 })), InvalidInputError);
+      const results = await Promise.allSettled([1, 2, 3].map((n) => r.assets.update(a.id, reg.value.assetId, { tags: [`t${n}`] }, meta({ expectedVersion: 2 }))));
+      assert.equal(results.filter((x) => x.status === "fulfilled").length, 1);
+      assert.deepEqual((await r.revisions.list("brand_asset", reg.id)).map((x) => x.version), [1, 2, 3]);
+    },
+
+    async "tts cache: re-takes append, latest is current, brand scoped"(r, clock) {
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const o = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const entry = { sha256: sha("audio"), seconds: 2.5, voice: { id: "v1", speed: 1 } };
+      await assert.rejects(() => r.tts.get(a.id, "n1"), NotFoundError);
+      const rec = await r.tts.record(a.id, "n1", entry);
+      assert.deepEqual([rec.sha256, rec.seconds, rec.voice], [entry.sha256, 2.5, entry.voice]);
+      assert.deepEqual(await r.tts.record(a.id, "n1", entry), rec, "recording the same audio again returns the stored entry");
+      assert.deepEqual(await r.tts.get(a.id, "n1"), rec);
+      clock.t += 1000;
+      const retake = await r.tts.record(a.id, "n1", { ...entry, sha256: sha("retake"), seconds: 3 });
+      assert.deepEqual(await r.tts.get(a.id, "n1"), retake, "the re-take becomes current");
+      assert.deepEqual((await r.tts.takes(a.id, "n1")).map((t) => t.sha256), [sha("audio"), sha("retake")], "the old take is kept");
+      assert.deepEqual(await r.tts.record(a.id, "n1", entry), rec, "an existing take is returned and does not become current");
+      assert.deepEqual(await r.tts.get(a.id, "n1"), retake);
+      await assert.rejects(() => r.tts.get(o.id, "n1"), NotFoundError);
+      await assert.rejects(() => r.tts.record("00000000-0000-4000-8000-000000000000", "n1", entry), NotFoundError);
+      for (const bad of [{ ...entry, sha256: "x" }, { ...entry, seconds: -1 }, { ...entry, voice: [] }]) await assert.rejects(() => r.tts.record(a.id, "n2", bad as never), InvalidInputError);
     },
 
     async "least privilege: the app role cannot write rules or guidance"(r, _clock, h) {
