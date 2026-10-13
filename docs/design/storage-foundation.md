@@ -156,7 +156,8 @@ rule in `docs/ARQUITECTURA.md`; the rewrite lands in S1):**
 Not `core/` (documented as pure, zero deps); not `editor/server` (engine and
 CLI would import editor code).
 
-**Dependency direction.** `storage/` depends on nothing in the repo and does
+**Dependency direction.** `storage/` depends only on `core/` (pure: rule kinds
+and `validateRuleParams`; core must never import storage) and does
 not import the domain zod schemas in `system/ig-carousel` (`brand-schema.ts`,
 `carousel-document.ts`): it checks only the envelope and takes a
 `BodyValidator` from callers, so no schema moves. Engine library functions

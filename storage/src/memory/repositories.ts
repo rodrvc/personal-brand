@@ -7,6 +7,11 @@ import {
   type Brand,
   type BrandDocumentRepository,
   type BrandRepository,
+  type BrandRule,
+  type BrandRuleRepository,
+  type GuidanceRepository,
+  type RecipeRepository,
+  type RuleInput,
   type DocumentKind,
   type Revision,
   type RevisionEntity,
@@ -14,12 +19,15 @@ import {
   type Versioned,
   type WriteMeta,
 } from "../contracts/index.ts";
-import { assertEnvelope, assertSlug, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { assertEnvelope, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
   documents: BrandDocumentRepository;
   revisions: RevisionRepository;
+  rules: BrandRuleRepository;
+  guidance: GuidanceRepository;
+  recipes: RecipeRepository;
 }
 
 interface DocRow {
@@ -37,7 +45,11 @@ interface DocRow {
 /** Byte order, matching `COLLATE "C"` in the Postgres queries. */
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** Same semantics as the Postgres repositories (versions, conflicts, revision policy). `now` is injectable for tests. */
+/**
+ * Same semantics as the Postgres repositories (versions, conflicts, revision policy). `now` is injectable for tests.
+ * It does not model database roles: the owner and app views are the same object, so write-permission
+ * differences (rules and guidance are owner-only) are only enforced and tested against Postgres.
+ */
 export function createMemoryRepositories(now: () => Date = () => new Date()): MemoryRepositories {
   const brands = new Map<string, Versioned<Brand>>();
   const docs = new Map<string, DocRow>();
@@ -131,5 +143,91 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions };
+  const ruleRows = new Map<string, Versioned<BrandRule> & { brandId: string; createdAt: string }>();
+  const out = (r: Versioned<BrandRule>): Versioned<BrandRule> => structuredClone({ id: r.id, value: r.value, version: r.version, updatedAt: r.updatedAt });
+
+  function writeRule(id: string, patch: Partial<RuleInput>, meta: WriteMeta, enabled?: boolean): Versioned<BrandRule> {
+    const cur = ruleRows.get(id);
+    if (!cur) throw new NotFoundError(`rule ${id}`);
+    if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+    const { enabled: wasEnabled, ...base } = cur.value;
+    const next = { ...cur, value: { ...normalizeRule({ ...base, ...patch }), enabled: enabled ?? wasEnabled }, version: cur.version + 1, updatedAt: now().toISOString() };
+    ruleRows.set(id, next);
+    record({ brandId: cur.brandId, entityType: "brand_rule", entityId: id, version: next.version, body: next.value, bodyText: null }, meta);
+    return out(next);
+  }
+
+  const rules: BrandRuleRepository = {
+    async list(brandId, opts) {
+      return [...ruleRows.values()]
+        .filter((r) => r.brandId === brandId && (opts?.includeDisabled || r.value.enabled))
+        .sort((a, b) => cmp(a.createdAt, b.createdAt) || cmp(a.value.kind, b.value.kind) || cmp(a.value.message, b.value.message) || cmp(a.id, b.id))
+        .map(out);
+    },
+    async create(brandId, input, meta) {
+      const rule = normalizeRule(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const row = { id: randomUUID(), brandId, value: structuredClone({ ...rule, enabled: true }), version: 1, updatedAt: now().toISOString(), createdAt: now().toISOString() };
+      ruleRows.set(row.id, row);
+      record({ brandId, entityType: "brand_rule", entityId: row.id, version: 1, body: row.value, bodyText: null }, meta);
+      return out(row);
+    },
+    async update(id, patch, meta) {
+      return writeRule(id, patch, meta);
+    },
+    async disable(id, meta) {
+      return writeRule(id, {}, meta, false);
+    },
+    async enable(id, meta) {
+      return writeRule(id, {}, meta, true);
+    },
+  };
+
+  /** Keyed rows (guidance by name, recipes by recipe) share the document version semantics. */
+  interface KeyedRow { id: string; brandId: string; key: string; data: Record<string, unknown>; version: number; updatedAt: string }
+  const keyed = { brand_guidance: new Map<string, KeyedRow>(), brand_recipes: new Map<string, KeyedRow>() };
+  const findKeyed = (table: keyof typeof keyed, brandId: string, key: string) => [...keyed[table].values()].find((r) => r.brandId === brandId && r.key === key);
+
+  function putKeyed(table: keyof typeof keyed, what: string, brandId: string, key: string, data: Record<string, unknown>, revision: { body: unknown; bodyText: string | null }, meta: WriteMeta) {
+    assertSlug(key, what);
+    if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+    const cur = findKeyed(table, brandId, key);
+    if (cur && meta.expectedVersion === null) throw new AlreadyExistsError(`${table} ${key}`, cur.version);
+    if (meta.expectedVersion !== (cur?.version ?? null)) throw new VersionConflictError(cur?.version ?? null);
+    const row: KeyedRow = { id: cur?.id ?? randomUUID(), brandId, key, data: structuredClone(data), version: (cur?.version ?? 0) + 1, updatedAt: now().toISOString() };
+    keyed[table].set(row.id, row);
+    record({ brandId, entityType: table === "brand_guidance" ? "brand_guidance" : "brand_recipe", entityId: row.id, version: row.version, ...structuredClone(revision) }, meta);
+    return { id: row.id, version: row.version, updatedAt: row.updatedAt };
+  }
+
+  const guidance: GuidanceRepository = {
+    async list(brandId) {
+      return [...keyed.brand_guidance.values()].filter((r) => r.brandId === brandId).sort((a, b) => cmp(a.key, b.key))
+        .map((r) => ({ name: r.key, description: r.data.description as string, version: r.version, updatedAt: r.updatedAt }));
+    },
+    async get(brandId, name) {
+      const r = findKeyed("brand_guidance", brandId, name);
+      if (!r) throw new NotFoundError(`guidance ${name}`);
+      return { trust: "brand-data", id: r.id, name, description: r.data.description as string, body: r.data.body as string, version: r.version, updatedAt: r.updatedAt };
+    },
+    async put(brandId, name, input, meta) {
+      assertGuidance(input);
+      return putKeyed("brand_guidance", "name", brandId, name, input, { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const recipes: RecipeRepository = {
+    async get(brandId, recipe, validate) {
+      const r = findKeyed("brand_recipes", brandId, recipe);
+      if (!r) throw new NotFoundError(`recipe ${recipe}`);
+      return { id: r.id, value: validate(structuredClone(r.data.params), r.data.schemaVersion as number), version: r.version, updatedAt: r.updatedAt };
+    },
+    async put(brandId, recipe, input, meta) {
+      assertParams(input.params, input.schemaVersion);
+      return putKeyed("brand_recipes", "recipe", brandId, recipe, input, { body: input.params, bodyText: null }, meta);
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes };
 }

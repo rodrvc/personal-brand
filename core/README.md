@@ -7,6 +7,8 @@ Es la parte que **no cambia** aunque cambie la interfaz. Por eso está
 separada: si mañana esto es una app instalable en vez de un HTML, este
 código se queda tal cual.
 
+Core must never import `storage/` (storage depends on core, not the reverse).
+
 ```bash
 node core/test/run.mjs     # 54 tests, sin instalar nada
 ```

@@ -7,11 +7,17 @@ import {
   type Brand,
   type BrandDocumentRepository,
   type BrandRepository,
+  type BrandRule,
+  type BrandRuleRepository,
+  type GuidanceRepository,
+  type RecipeRepository,
+  type RuleInput,
+  type Versioned,
   type Revision,
   type RevisionRepository,
   type WriteMeta,
 } from "../contracts/index.ts";
-import { assertEnvelope, assertSlug, isUuid, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { assertEnvelope, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -21,6 +27,9 @@ export interface PgRepositories {
   brands: BrandRepository;
   documents: BrandDocumentRepository;
   revisions: RevisionRepository;
+  rules: BrandRuleRepository;
+  guidance: GuidanceRepository;
+  recipes: RecipeRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -30,6 +39,13 @@ const toBrand = (r: Row) => ({
   id: r.id as string,
   value: { slug: r.slug, displayName: r.display_name, status: r.status, cutoverAt: iso(r.cutover_at) } as Brand,
   version: r.version as number,
+  updatedAt: iso(r.updated_at)!,
+});
+
+const toRule = (r: Row): Versioned<BrandRule> => ({
+  id: r.id,
+  value: { kind: r.kind, params: r.params, severity: r.severity, appliesTo: r.applies_to, message: r.message, enabled: r.enabled },
+  version: r.version,
   updatedAt: iso(r.updated_at)!,
 });
 
@@ -169,5 +185,111 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions };
+  const rules: BrandRuleRepository = {
+    async list(brandId, opts) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM brand_rules WHERE brand_id = ${brandId} AND ${opts?.includeDisabled ? sql`true` : sql`enabled`}
+                             ORDER BY created_at, kind COLLATE "C", message COLLATE "C", id`;
+      return rows.map(toRule);
+    },
+    async create(brandId, input, meta) {
+      const rule = normalizeRule(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const [row] = await tx`INSERT INTO brand_rules (brand_id, kind, params, severity, applies_to, message, created_at, updated_at)
+                               VALUES (${brandId}, ${rule.kind}, ${json(tx, rule.params)}, ${rule.severity}, ${rule.appliesTo}, ${rule.message}, ${now()}, ${now()}) RETURNING *`;
+        const created = toRule(row);
+        await appendRevision(tx, { brandId, entityType: "brand_rule", entityId: created.id, version: 1, body: created.value, bodyText: null }, meta);
+        return created;
+      });
+    },
+    update: (id, patch, meta) => writeRule(id, patch, meta),
+    disable: (id, meta) => writeRule(id, {}, meta, false),
+    enable: (id, meta) => writeRule(id, {}, meta, true),
+  };
+
+  async function writeRule(id: string, patch: Partial<RuleInput>, meta: WriteMeta, enabled?: boolean) {
+    if (!isUuid(id)) throw new NotFoundError(`rule ${id}`);
+    return sql.begin(async (tx) => {
+      const [cur] = await tx`SELECT * FROM brand_rules WHERE id = ${id} FOR UPDATE`;
+      if (!cur) throw new NotFoundError(`rule ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const { enabled: wasEnabled, ...base } = toRule(cur).value;
+      const next = normalizeRule({ ...base, ...patch });
+      const [row] = await tx`UPDATE brand_rules SET kind = ${next.kind}, params = ${json(tx, next.params)}, severity = ${next.severity},
+                                    applies_to = ${next.appliesTo}, message = ${next.message}, enabled = ${enabled ?? wasEnabled},
+                                    updated_at = ${now()}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      const updated = toRule(row);
+      await appendRevision(tx, { brandId: cur.brand_id, entityType: "brand_rule", entityId: id, version: updated.version, body: updated.value, bodyText: null }, meta);
+      return updated;
+    });
+  }
+
+  /** Insert-or-update of one row keyed by (brand, key), with the same version semantics as documents. */
+  async function putKeyed(
+    table: "brand_guidance" | "brand_recipes",
+    keyColumn: "name" | "recipe",
+    entityType: string,
+    brandId: string,
+    key: string,
+    values: Record<string, unknown>,
+    revision: { body: unknown; bodyText: string | null },
+    meta: WriteMeta,
+  ) {
+    assertSlug(key, keyColumn);
+    if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+    return sql.begin(async (tx) => {
+      const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+      if (!brand) throw new NotFoundError(`brand ${brandId}`);
+      const [row] =
+        meta.expectedVersion === null
+          ? await tx`INSERT INTO ${tx(table)} ${tx({ brand_id: brandId, [keyColumn]: key, ...values, updated_at: now() })}
+                     ON CONFLICT (brand_id, ${tx(keyColumn)}) DO NOTHING RETURNING id, version, updated_at`
+          : await tx`UPDATE ${tx(table)} SET ${tx({ ...values, updated_at: now() })}, version = version + 1
+                     WHERE brand_id = ${brandId} AND ${tx(keyColumn)} = ${key} AND version = ${meta.expectedVersion} RETURNING id, version, updated_at`;
+      if (!row) {
+        const [cur] = await tx`SELECT version FROM ${tx(table)} WHERE brand_id = ${brandId} AND ${tx(keyColumn)} = ${key}`;
+        if (cur && meta.expectedVersion === null) throw new AlreadyExistsError(`${entityType} ${key}`, cur.version);
+        throw new VersionConflictError(cur?.version ?? null);
+      }
+      await appendRevision(tx, { brandId, entityType, entityId: row.id, version: row.version, ...revision }, meta);
+      return { id: row.id as string, version: row.version as number, updatedAt: iso(row.updated_at)! };
+    });
+  }
+
+  const guidance: GuidanceRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT name, description, version, updated_at FROM brand_guidance WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async get(brandId, name) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_guidance WHERE brand_id = ${brandId} AND name = ${name}` : [];
+      if (!r) throw new NotFoundError(`guidance ${name}`);
+      return { trust: "brand-data", id: r.id, name: r.name, description: r.description, body: r.body_md, version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, name, input, meta) {
+      assertGuidance(input);
+      return putKeyed("brand_guidance", "name", "brand_guidance", brandId, name, { description: input.description, body_md: input.body },
+        { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const recipes: RecipeRepository = {
+    async get(brandId, recipe, validate) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_recipes WHERE brand_id = ${brandId} AND recipe = ${recipe}` : [];
+      if (!r) throw new NotFoundError(`recipe ${recipe}`);
+      return { id: r.id, value: validate(r.params, r.schema_version), version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, recipe, input, meta) {
+      assertParams(input.params, input.schemaVersion);
+      return putKeyed("brand_recipes", "recipe", "brand_recipe", brandId, recipe, { schema_version: input.schemaVersion, params: sql.json(input.params as postgres.JSONValue) },
+        { body: input.params, bodyText: null }, meta);
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes };
 }
