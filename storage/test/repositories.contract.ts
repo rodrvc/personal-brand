@@ -13,6 +13,10 @@ export interface Harness {
   owner: MemoryRepositories;
   /** True when `repos` is a least-privilege role that must be denied rule/guidance writes. */
   restricted?: boolean;
+  /** The stored `carousels.document` JSON, read raw (Postgres only). */
+  rawCarouselDocument?(id: string): Promise<unknown>;
+  /** A raw `brand_app` connection, to probe constraints and grants (Postgres only). */
+  rawSql?: import("postgres").Sql;
   cleanup(): Promise<void>;
 }
 /** `now` is the clock the repositories must use, so the suite can move time. */
@@ -265,6 +269,115 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => r.tts.get(o.id, "n1"), NotFoundError);
       await assert.rejects(() => r.tts.record("00000000-0000-4000-8000-000000000000", "n1", entry), NotFoundError);
       for (const bad of [{ ...entry, sha256: "x" }, { ...entry, seconds: -1 }, { ...entry, voice: [] }]) await assert.rejects(() => r.tts.record(a.id, "n2", bad as never), InvalidInputError);
+    },
+
+    async "carousels: status lives in the column, never in the stored document"(r, _clock, h) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const doc = { json: { slides: [1, 2], status: "published" }, schemaVersion: 3 };
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "Week 1", document: doc }, meta());
+      assert.deepEqual([c.version, c.value.status], [1, "draft"], "a status inside the document is ignored");
+      const seen: Array<[unknown, number]> = [];
+      const got = await r.carousels.get(b.id, "week-1", (body, sv) => (seen.push([body, sv]), body));
+      assert.deepEqual(seen, [[{ slides: [1, 2], status: "draft" }, 3]], "the validator sees the column status overlaid");
+      assert.equal((await r.carousels.getById(c.id, identity)).id, got.id);
+      if (h.rawCarouselDocument) assert.deepEqual(await h.rawCarouselDocument(c.id), { slides: [1, 2] });
+      const saved = await r.carousels.save(c.id, { title: "Week 1b", document: { json: { slides: [1], status: "scheduled" }, schemaVersion: 3 } }, meta({ expectedVersion: 1 }));
+      assert.deepEqual([saved.version, saved.value.status, saved.value.title], [2, "draft", "Week 1b"]);
+      if (h.rawCarouselDocument) assert.deepEqual(await h.rawCarouselDocument(c.id), { slides: [1] });
+      const st = await r.carousels.setStatus(c.id, { status: "scheduled", scheduledFor: "2026-02-01T10:00:00Z" }, meta({ expectedVersion: 2, reason: "status" }));
+      assert.deepEqual([st.value.status, st.value.scheduledFor, st.value.publishedAt], ["scheduled", "2026-02-01T10:00:00.000Z", null]);
+      assert.equal((await r.carousels.setStatus(c.id, { status: "published", publishedAt: "2026-02-01T11:00:00Z" }, meta({ expectedVersion: 3, reason: "status" }))).value.scheduledFor, "2026-02-01T10:00:00.000Z");
+      assert.deepEqual((await r.revisions.list("carousel", c.id)).map((x) => [x.version, x.reason]), [[1, "save"], [2, "save"], [3, "status"], [4, "status"]]);
+      const rev = await r.revisions.get("carousel", c.id, 4);
+      assert.equal((rev.body as { status: string }).status, "published");
+    },
+
+    async "carousels: list, slug uniqueness, stale save, bad input"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const o = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const doc = { json: {}, schemaVersion: 1 };
+      const second = await r.carousels.create(b.id, { slug: "week-2", title: "Two", document: doc, status: "exported" }, meta());
+      const first = await r.carousels.create(b.id, { slug: "week-1", title: "One", document: doc }, meta());
+      await r.carousels.create(o.id, { slug: "week-1", title: "Other brand", document: doc }, meta());
+      assert.deepEqual((await r.carousels.list(b.id)).map((c) => c.value.slug), ["week-1", "week-2"]);
+      assert.deepEqual((await r.carousels.list(b.id, { status: "exported" })).map((c) => c.id), [second.id]);
+      await assert.rejects(() => r.carousels.create(b.id, { slug: "week-1", title: "Dup", document: doc }, meta()), (e) => e instanceof AlreadyExistsError && e.currentVersion === 1);
+      await assert.rejects(() => r.carousels.create(b.id, { slug: "Bad Slug", title: "x", document: doc }, meta()), InvalidInputError);
+      await assert.rejects(() => r.carousels.create(b.id, { slug: "ok", title: "x", document: { json: [] as never, schemaVersion: 1 } }, meta()), InvalidInputError);
+      await assert.rejects(() => r.carousels.setStatus(first.id, { status: "gone" as never }, meta({ expectedVersion: 1 })), InvalidInputError);
+      await assert.rejects(() => r.carousels.create(b.id, { slug: "ok", title: undefined as never, document: doc }, meta()), InvalidInputError);
+      await assert.rejects(() => r.carousels.get(b.id, "nope", identity), NotFoundError);
+      await assert.rejects(() => r.carousels.create("00000000-0000-4000-8000-000000000000", { slug: "x", title: "x", document: doc }, meta()), NotFoundError);
+      await r.carousels.save(first.id, { document: doc }, meta({ expectedVersion: 1 }));
+      await assert.rejects(() => r.carousels.save(first.id, { document: doc }, meta({ expectedVersion: 1 })), (e) => e instanceof VersionConflictError && e.currentVersion === 2);
+      const results = await Promise.allSettled([1, 2, 3, 4].map(() => r.carousels.save(first.id, { document: doc }, meta({ expectedVersion: 2 }))));
+      assert.equal(results.filter((x) => x.status === "fulfilled").length, 1);
+      assert.equal((await r.carousels.getById(first.id, identity)).version, 3);
+      assert.equal((await r.revisions.list("carousel", first.id)).length, 3);
+    },
+
+    async "exports: concurrent reservations get distinct consecutive versions"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "One", document: { json: {}, schemaVersion: 1 } }, meta());
+      const reserved = await Promise.all(Array.from({ length: 8 }, () => r.exports.reserveNextVersion(c.id, 1)));
+      assert.deepEqual(reserved.map((e) => e.versionNo).sort((a, z) => a - z), [1, 2, 3, 4, 5, 6, 7, 8]);
+      assert.ok(reserved.every((e) => e.status === "running" && e.manifest === null && e.finishedAt === null && e.carouselVersion === 1));
+      assert.equal((await r.exports.reserveNextVersion(c.id, 2)).versionNo, 9);
+      await assert.rejects(() => r.exports.reserveNextVersion("00000000-0000-4000-8000-000000000000", 1), NotFoundError);
+      await assert.rejects(() => r.exports.reserveNextVersion(c.id, 0), InvalidInputError);
+    },
+
+    async "exports: complete, fail, and stale running exports are reclaimed as failed"(r, clock) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "One", document: { json: {}, schemaVersion: 1 } }, meta());
+      const stale = await r.exports.reserveNextVersion(c.id, 1);
+      clock.t += 29 * MIN;
+      const fresh = await r.exports.reserveNextVersion(c.id, 1);
+      assert.deepEqual((await r.exports.list(c.id)).map((e) => e.status), ["running", "running"], "29 minutes is not stale yet");
+      clock.t += 2 * MIN;
+      const third = await r.exports.reserveNextVersion(c.id, 2);
+      const listed = await r.exports.list(c.id);
+      assert.deepEqual(listed.map((e) => [e.versionNo, e.status]), [[1, "failed"], [2, "running"], [3, "running"]], "only the export older than 30 minutes is reclaimed");
+      assert.equal(listed[0].finishedAt, new Date(clock.t).toISOString());
+      await assert.rejects(() => r.exports.complete(stale.id, { files: [] }), InvalidInputError);
+      assert.equal((await r.exports.fail(stale.id)).status, "failed", "failing a finished export is a no-op");
+      const done = await r.exports.complete(fresh.id, { files: ["a.png"] });
+      assert.deepEqual([done.status, done.manifest, done.finishedAt], ["done", { files: ["a.png"] }, new Date(clock.t).toISOString()]);
+      assert.equal((await r.exports.fail(fresh.id)).status, "done");
+      assert.equal((await r.exports.fail(third.id)).status, "failed");
+      clock.t += 5 * MIN;
+      assert.equal((await r.exports.reserveNextVersion(c.id, 2, { staleAfterMs: 1 })).versionNo, 4);
+      await assert.rejects(() => r.exports.complete("00000000-0000-4000-8000-000000000000", {}), NotFoundError);
+      await assert.rejects(() => r.exports.complete(fresh.id, [] as never), InvalidInputError);
+    },
+
+    async "chat: concurrent appends get distinct gap-free seqs, list pages by seq"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "One", document: { json: {}, schemaVersion: 1 } }, meta());
+      const other = await r.carousels.create(b.id, { slug: "week-2", title: "Two", document: { json: {}, schemaVersion: 1 } }, meta());
+      const seqs = await Promise.all(Array.from({ length: 10 }, (_, i) => r.chat.append(c.id, { n: i })));
+      assert.deepEqual([...seqs].sort((a, z) => a - z), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      assert.equal(await r.chat.append(other.id, { role: "user" }), 1, "seq is per carousel");
+      const all = await r.chat.list(c.id);
+      assert.deepEqual(all.map((m) => m.seq), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      assert.equal(all.find((m) => m.seq === seqs[0])!.body.n, 0, "each message keeps the seq it was handed");
+      assert.deepEqual((await r.chat.list(c.id, { afterSeq: 4, limit: 3 })).map((m) => m.seq), [5, 6, 7]);
+      assert.deepEqual(await r.chat.list("00000000-0000-4000-8000-000000000000"), []);
+      for (const bad of [{ limit: -1 }, { afterSeq: 1.5 }, { limit: Number.NaN }]) await assert.rejects(() => r.chat.list(c.id, bad), InvalidInputError);
+      await assert.rejects(() => r.chat.append("00000000-0000-4000-8000-000000000000", {}), NotFoundError);
+      await assert.rejects(() => r.chat.append(c.id, "hi" as never), InvalidInputError);
+    },
+
+    async "carousels and exports: database constraints and grants"(r, _clock, h) {
+      const sql = h.rawSql;
+      if (!sql) return;
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "One", document: { json: {}, schemaVersion: 1 } }, meta());
+      await assert.rejects(() => sql`INSERT INTO carousels (brand_id, slug, title, document, document_schema_version) VALUES (${b.id}, 'raw', 't', '{"status":"draft"}'::jsonb, 1)`, /violates check constraint/);
+      const e = await r.exports.reserveNextVersion(c.id, 1);
+      await assert.rejects(() => sql`UPDATE exports SET carousel_version = 9 WHERE id = ${e.id}`, /permission denied/);
+      await assert.rejects(() => sql`UPDATE exports SET status = 'done' WHERE id = ${e.id}`, /violates check constraint/);
+      await assert.rejects(() => sql`DELETE FROM chat_messages`, /permission denied/);
     },
 
     async "least privilege: the app role cannot write rules or guidance"(r, _clock, h) {
