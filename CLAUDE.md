@@ -173,6 +173,16 @@ Resumen:
 
 ---
 
+## ElevenLabs (voice, audio, music)
+
+Use the official `elevenlabs` CLI, logged in with browser OAuth: **never ask
+the owner for an API key.** Start with `elevenlabs auth status`; the full
+route is in `.claude/skills/elevenlabs-cli/SKILL.md`. The vendored ElevenLabs
+skills (locked in `skills-lock.json`) are reference only and are not edited;
+`setup-api-key` is the CI/headless fallback.
+
+---
+
 ## Regla de separación
 
 No meter en este archivo:
