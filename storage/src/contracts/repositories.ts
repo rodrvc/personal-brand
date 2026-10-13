@@ -60,7 +60,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel" | "content_item";
 
 export interface Revision {
   brandId?: string;
@@ -251,4 +251,51 @@ export interface ChatRepository {
   append(carouselId: string, body: Record<string, unknown>): Promise<number>;
   /** Ordered by `seq`. */
   list(carouselId: string, opts?: { afterSeq?: number; limit?: number }): Promise<ChatMessage[]>;
+}
+
+export type ContentStage = "idea" | "draft" | "published" | "archived";
+
+export interface ContentItemHead {
+  slug: string;
+  title: string;
+  stage: ContentStage;
+  channel: string | null;
+  format: string | null;
+  derivedFrom: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+}
+export interface ContentItem extends ContentItemHead {
+  bodyMd: string;
+  /** The rest of the frontmatter, opaque to storage. `get` overlays the column's `stage` on it. */
+  meta: Record<string, unknown>;
+  metaSchemaVersion: number;
+}
+export interface ContentItemInput {
+  title: string;
+  channel?: string | null;
+  format?: string | null;
+  bodyMd?: string;
+  meta?: Record<string, unknown>;
+  /** Version of the `meta` shape; default 1. */
+  metaSchemaVersion?: number;
+}
+
+/**
+ * Stage is stored once, in its column: any `stage` key in written `meta` is dropped. A slug never changes across
+ * stages. Entering `published` is allowed only from `draft` (or at create, for importers) and needs `publishedAt`;
+ * every other move is allowed, including restoring from `archived`; leaving `published` clears `publishedAt`.
+ * Items are never deleted. Every write appends a revision whose body is the head plus `meta` and whose text is `bodyMd`.
+ */
+export interface ContentItemRepository {
+  /** Ordered by slug. */
+  list(brandId: string, filter?: { stage?: ContentStage; channel?: string; derivedFrom?: string }): Promise<Array<Versioned<ContentItemHead>>>;
+  get(brandId: string, slug: string): Promise<Versioned<ContentItem>>;
+  getById(id: string): Promise<Versioned<ContentItem>>;
+  /** `derivedFrom` must be an item of the same brand. */
+  create(brandId: string, input: ContentItemInput & { slug: string; stage?: ContentStage; derivedFrom?: string; publishedAt?: string }, meta: WriteMeta): Promise<Versioned<ContentItemHead>>;
+  /** Patch semantics: `undefined` keeps the stored value, `null` clears `channel`/`format`. Never changes the stage. */
+  save(id: string, patch: Partial<ContentItemInput>, meta: WriteMeta): Promise<Versioned<ContentItemHead>>;
+  /** `publishedAt` is an ISO string. */
+  setStage(id: string, patch: { stage: ContentStage; publishedAt?: string }, meta: WriteMeta): Promise<Versioned<ContentItemHead>>;
 }

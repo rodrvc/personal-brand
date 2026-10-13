@@ -11,6 +11,8 @@ import {
   type CarouselExport,
   type CarouselHead,
   type CarouselRepository,
+  type ContentItemHead,
+  type ContentItemRepository,
   type ChatMessage,
   type ChatRepository,
   type ExportRepository,
@@ -31,7 +33,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertJsonObject, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -45,6 +47,7 @@ export interface MemoryRepositories {
   carousels: CarouselRepository;
   exports: ExportRepository;
   chat: ChatRepository;
+  content: ContentItemRepository;
 }
 
 interface DocRow {
@@ -369,12 +372,84 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       }));
     },
     async setStatus(id, patch, meta) {
+      assertNotAutosave(meta);
       assertCarousel({ status: patch.status });
       const iso = (v: string | null | undefined, what: string) => (v === undefined ? undefined : (parseInstant(v, what)?.toISOString() ?? null));
       const scheduledFor = iso(patch.scheduledFor, "scheduledFor");
       const publishedAt = iso(patch.publishedAt, "publishedAt");
       return writeCarousel(id, meta, (cur) => ({
         head: { ...cur.head, status: patch.status, scheduledFor: scheduledFor === undefined ? cur.head.scheduledFor : scheduledFor, publishedAt: publishedAt === undefined ? cur.head.publishedAt : publishedAt },
+      }));
+    },
+  };
+
+  interface ContentRow { id: string; brandId: string; head: ContentItemHead; bodyMd: string; meta: Record<string, unknown>; metaSchemaVersion: number; version: number; updatedAt: string }
+  const contentRows = new Map<string, ContentRow>();
+  const contentBody = (c: ContentRow) => structuredClone({ ...c.head, meta: c.meta });
+  const contentVersioned = (c: ContentRow): Versioned<ContentItemHead> => structuredClone({ id: c.id, value: c.head, version: c.version, updatedAt: c.updatedAt });
+  const readContent = (c: ContentRow | undefined, what: string) => {
+    if (!c) throw new NotFoundError(what);
+    return { ...contentVersioned(c), value: structuredClone({ ...c.head, bodyMd: c.bodyMd, meta: { ...c.meta, stage: c.head.stage }, metaSchemaVersion: c.metaSchemaVersion }) };
+  };
+
+  function writeContent(id: string, meta: WriteMeta, change: (cur: ContentRow) => Partial<ContentRow>): Versioned<ContentItemHead> {
+    const cur = contentRows.get(id);
+    if (!cur) throw new NotFoundError(`content item ${id}`);
+    if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+    const next = { ...cur, ...change(cur), version: cur.version + 1, updatedAt: now().toISOString() };
+    contentRows.set(id, next);
+    record({ brandId: cur.brandId, entityType: "content_item", entityId: id, version: next.version, body: contentBody(next), bodyText: next.bodyMd }, meta);
+    return contentVersioned(next);
+  }
+
+  const content: ContentItemRepository = {
+    async list(brandId, filter) {
+      return [...contentRows.values()].filter((c) => c.brandId === brandId && (!filter?.stage || c.head.stage === filter.stage)
+        && (!filter?.channel || c.head.channel === filter.channel) && (!filter?.derivedFrom || c.head.derivedFrom === filter.derivedFrom))
+        .sort((a, b) => cmp(a.head.slug, b.head.slug)).map(contentVersioned);
+    },
+    async get(brandId, slug) {
+      return readContent([...contentRows.values()].find((c) => c.brandId === brandId && c.head.slug === slug), `content item "${slug}"`);
+    },
+    async getById(id) {
+      return readContent(contentRows.get(id), `content item ${id}`);
+    },
+    async create(brandId, input, meta) {
+      assertContentItem(input, true);
+      const stage = input.stage ?? "idea";
+      const publishedAt = resolvePublishedAt(null, stage, input.publishedAt, null);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      if (input.derivedFrom && contentRows.get(input.derivedFrom)?.brandId !== brandId) throw new InvalidInputError("derivedFrom must be an item of the same brand");
+      const dup = [...contentRows.values()].find((c) => c.brandId === brandId && c.head.slug === input.slug);
+      if (dup) throw new AlreadyExistsError(`content item "${input.slug}"`, dup.version);
+      const at = now().toISOString();
+      const row: ContentRow = {
+        id: randomUUID(), brandId, bodyMd: input.bodyMd ?? "", meta: structuredClone(stripStage(input.meta ?? {})), metaSchemaVersion: input.metaSchemaVersion ?? 1, version: 1, updatedAt: at,
+        head: {
+          slug: input.slug, title: input.title, stage, channel: input.channel ?? null, format: input.format ?? null,
+          derivedFrom: input.derivedFrom ?? null, publishedAt: publishedAt?.toISOString() ?? null, createdAt: at,
+        },
+      };
+      contentRows.set(row.id, row);
+      record({ brandId, entityType: "content_item", entityId: row.id, version: 1, body: contentBody(row), bodyText: row.bodyMd }, meta);
+      return contentVersioned(row);
+    },
+    async save(id, patch, meta) {
+      assertContentItem(patch);
+      return writeContent(id, meta, (cur) => ({
+        head: {
+          ...cur.head, title: patch.title ?? cur.head.title,
+          channel: patch.channel === undefined ? cur.head.channel : patch.channel, format: patch.format === undefined ? cur.head.format : patch.format,
+        },
+        bodyMd: patch.bodyMd ?? cur.bodyMd, metaSchemaVersion: patch.metaSchemaVersion ?? cur.metaSchemaVersion, meta: patch.meta === undefined ? cur.meta : structuredClone(stripStage(patch.meta)),
+      }));
+    },
+    async setStage(id, patch, meta) {
+      assertNotAutosave(meta);
+      assertContentItem({ stage: patch.stage });
+      return writeContent(id, meta, (cur) => ({
+        head: { ...cur.head, stage: patch.stage, publishedAt: resolvePublishedAt(cur.head.stage, patch.stage, patch.publishedAt, cur.head.publishedAt)?.toISOString() ?? null },
       }));
     },
   };
@@ -436,5 +511,5 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat };
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content };
 }

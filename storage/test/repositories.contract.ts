@@ -377,7 +377,88 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       const e = await r.exports.reserveNextVersion(c.id, 1);
       await assert.rejects(() => sql`UPDATE exports SET carousel_version = 9 WHERE id = ${e.id}`, /permission denied/);
       await assert.rejects(() => sql`UPDATE exports SET status = 'done' WHERE id = ${e.id}`, /violates check constraint/);
-      await assert.rejects(() => sql`DELETE FROM chat_messages`, /permission denied/);
+      if (h.restricted) await assert.rejects(() => sql`DELETE FROM chat_messages`, /permission denied/);
+    },
+
+    async "content items: create, list filters and order, uniqueness, save, derivation"(r, _clock, h) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const o = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const zed = await r.content.create(b.id, { slug: "zed", title: "Zed", channel: "newsletter", meta: { stage: "draft", topic: "x" } }, meta());
+      const alpha = await r.content.create(b.id, { slug: "alpha", title: "Alpha", stage: "draft", channel: "social", format: "short", bodyMd: "# Hi", derivedFrom: zed.id }, meta());
+      const foreign = await r.content.create(o.id, { slug: "alpha", title: "Other brand" }, meta());
+      await r.content.create(b.id, { slug: "ab", title: "Ab" }, meta());
+      await r.content.create(b.id, { slug: "a-c", title: "A-c" }, meta());
+      assert.deepEqual((await r.content.list(b.id)).map((c) => c.value.slug), ["a-c", "ab", "alpha", "zed"], "byte order, not locale order");
+      assert.deepEqual((await r.content.list(b.id, { stage: "draft" })).map((c) => c.id), [alpha.id]);
+      assert.deepEqual((await r.content.list(b.id, { channel: "newsletter" })).map((c) => c.id), [zed.id]);
+      assert.deepEqual((await r.content.list(b.id, { derivedFrom: zed.id })).map((c) => c.id), [alpha.id]);
+      assert.equal(alpha.value.derivedFrom, zed.id);
+      const got = await r.content.get(b.id, "zed");
+      assert.deepEqual([got.value.stage, got.value.bodyMd, got.value.meta, got.value.metaSchemaVersion], ["idea", "", { topic: "x", stage: "idea" }, 1], "stage is overlaid on meta, not taken from the input");
+      if (h.rawSql) assert.deepEqual((await h.rawSql`SELECT meta FROM content_items WHERE id = ${zed.id}`)[0].meta, { topic: "x" });
+      await assert.rejects(() => r.content.create(b.id, { slug: "alpha", title: "Dup" }, meta()), (e) => e instanceof AlreadyExistsError && e.currentVersion === 1);
+      await assert.rejects(() => r.content.create(b.id, { slug: "Bad Slug", title: "x" }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", channel: "Bad Channel" }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", stage: "gone" as never }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", channel: "" }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", metaSchemaVersion: 0 }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", meta: [] as never }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", derivedFrom: foreign.id }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", derivedFrom: "00000000-0000-4000-8000-000000000000" }, meta()), InvalidInputError);
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", stage: "published" }, meta()), InvalidInputError, "published needs a date");
+      await assert.rejects(() => r.content.create(b.id, { slug: "ok", title: "x", publishedAt: "2026-02-01T10:00:00Z" }, meta()), InvalidInputError, "a date needs the published stage");
+      await assert.rejects(() => r.content.get(b.id, "nope"), NotFoundError);
+      await assert.rejects(() => r.content.create("00000000-0000-4000-8000-000000000000", { slug: "x", title: "x" }, meta()), NotFoundError);
+      const imported = await r.content.create(b.id, { slug: "old-post", title: "Old", stage: "published", publishedAt: "2025-12-01T10:00:00Z" }, meta({ reason: "import", source: "import" }));
+      assert.equal(imported.value.publishedAt, "2025-12-01T10:00:00.000Z");
+      const saved = await r.content.save(zed.id, { title: "Zed 2", bodyMd: "text", channel: null, metaSchemaVersion: 2, meta: { stage: "published", topic: "y" } }, meta({ expectedVersion: 1 }));
+      assert.deepEqual([saved.version, saved.value.title, saved.value.channel, saved.value.stage], [2, "Zed 2", null, "idea"], "save never changes the stage");
+      assert.deepEqual((await r.content.getById(zed.id)).value.meta, { topic: "y", stage: "idea" });
+      assert.equal((await r.content.getById(zed.id)).value.metaSchemaVersion, 2);
+      await assert.rejects(() => r.content.save(zed.id, { title: "Stale" }, meta({ expectedVersion: 1 })), (e) => e instanceof VersionConflictError && e.currentVersion === 2);
+      await assert.rejects(() => r.content.save("00000000-0000-4000-8000-000000000000", {}, meta({ expectedVersion: 1 })), NotFoundError);
+      const rev = await r.revisions.get("content_item", zed.id, 2);
+      assert.deepEqual([rev.bodyText, (rev.body as { meta: unknown }).meta], ["text", { topic: "y" }]);
+    },
+
+    async "content items: stage transitions, published date and revisions"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const item = await r.content.create(b.id, { slug: "post", title: "Post" }, meta());
+      const status = (expectedVersion: number) => meta({ expectedVersion, reason: "status" });
+      const date = "2026-03-01T09:00:00Z";
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "published", publishedAt: date }, status(1)), InvalidInputError, "an idea cannot be published directly");
+      assert.equal((await r.content.getById(item.id)).version, 1, "a rejected transition changes nothing");
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "gone" as never }, status(1)), InvalidInputError);
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "draft" }, meta({ expectedVersion: 1, reason: "autosave" })), InvalidInputError);
+      await r.content.setStage(item.id, { stage: "draft" }, status(1));
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "published" }, status(2)), InvalidInputError, "publishing needs a date");
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "published", publishedAt: "not a date" }, status(2)), InvalidInputError);
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "idea", publishedAt: date }, status(2)), InvalidInputError);
+      const pub = await r.content.setStage(item.id, { stage: "published", publishedAt: date }, status(2));
+      assert.deepEqual([pub.value.stage, pub.value.publishedAt, pub.value.slug], ["published", "2026-03-01T09:00:00.000Z", "post"]);
+      const back = await r.content.setStage(item.id, { stage: "draft" }, status(3));
+      assert.deepEqual([back.value.stage, back.value.publishedAt], ["draft", null], "leaving published clears the date");
+      await r.content.setStage(item.id, { stage: "archived" }, status(4));
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "published", publishedAt: date }, status(5)), InvalidInputError, "an archived item cannot be published directly");
+      assert.equal((await r.content.setStage(item.id, { stage: "draft" }, status(5))).value.stage, "draft", "archived items can be restored");
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "idea" }, status(2)), (e) => e instanceof VersionConflictError && e.currentVersion === 6);
+      assert.deepEqual((await r.revisions.list("content_item", item.id)).map((x) => [x.version, x.reason]), [[1, "save"], [2, "status"], [3, "status"], [4, "status"], [5, "status"], [6, "status"]]);
+    },
+
+    async "content items: database constraints and grants"(r, _clock, h) {
+      const sql = h.rawSql;
+      if (!sql) return;
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const item = await r.content.create(b.id, { slug: "post", title: "Post" }, meta());
+      await assert.rejects(() => sql`INSERT INTO content_items (brand_id, slug, title, meta) VALUES (${b.id}, 'raw', 't', '{"stage":"idea"}'::jsonb)`, /violates check constraint/);
+      await assert.rejects(() => sql`INSERT INTO content_items (brand_id, slug, title, stage) VALUES (${b.id}, 'raw', 't', 'published')`, /violates check constraint/);
+      await assert.rejects(() => sql`UPDATE content_items SET derived_from = id WHERE id = ${item.id}`, /violates check constraint/);
+      await assert.rejects(() => sql`UPDATE content_items SET derived_from = gen_random_uuid() WHERE id = ${item.id}`, /violates foreign key constraint/);
+      await assert.rejects(() => sql`INSERT INTO content_items (brand_id, slug, title, published_at) VALUES (${b.id}, 'raw2', 't', now())`, /violates check constraint/);
+      const other = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const foreign = await r.content.create(other.id, { slug: "post", title: "Other" }, meta());
+      await assert.rejects(() => sql`UPDATE content_items SET derived_from = ${foreign.id} WHERE id = ${item.id}`, /violates foreign key constraint/);
+      if (h.restricted) await assert.rejects(() => sql`DELETE FROM content_items WHERE id = ${item.id}`, /permission denied/);
     },
 
     async "least privilege: the app role cannot write rules or guidance"(r, _clock, h) {
