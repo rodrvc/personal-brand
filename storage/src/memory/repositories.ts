@@ -15,6 +15,10 @@ import {
   type ContentItemRepository,
   type ChatMessage,
   type ChatRepository,
+  type RecipeRunHead,
+  type RecipeRunRepository,
+  type RunArtifact,
+  type RunArtifactRepository,
   type ExportRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
@@ -33,7 +37,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -48,6 +52,8 @@ export interface MemoryRepositories {
   exports: ExportRepository;
   chat: ChatRepository;
   content: ContentItemRepository;
+  runs: RecipeRunRepository;
+  runArtifacts: RunArtifactRepository;
 }
 
 interface DocRow {
@@ -511,5 +517,81 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content };
+  interface RunRow { id: string; brandId: string; head: RecipeRunHead; input: Record<string, unknown>; storyboard: Record<string, unknown> | null; version: number; updatedAt: string }
+  const runRows = new Map<string, RunRow>();
+  const runBody = (r: RunRow) => structuredClone({ ...r.head, input: r.input, storyboard: r.storyboard });
+  const runVersioned = (r: RunRow): Versioned<RecipeRunHead> => structuredClone({ id: r.id, value: r.head, version: r.version, updatedAt: r.updatedAt });
+
+  const runs: RecipeRunRepository = {
+    async create(brandId, input, meta) {
+      assertRecipeRun(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const at = now().toISOString();
+      const row: RunRow = {
+        id: randomUUID(), brandId, version: 1, updatedAt: at, input: structuredClone(input.input.json), storyboard: structuredClone(input.storyboard ?? null),
+        head: { recipe: input.recipe, periodStart: input.periodStart, periodEnd: input.periodEnd, schemaVersion: input.input.schemaVersion, createdBy: meta.author, createdAt: at },
+      };
+      runRows.set(row.id, row);
+      record({ brandId, entityType: "recipe_run", entityId: row.id, version: 1, body: runBody(row), bodyText: null }, meta);
+      return runVersioned(row);
+    },
+    async get(id, validate) {
+      const r = runRows.get(id);
+      if (!r) throw new NotFoundError(`recipe run ${id}`);
+      return { ...runVersioned(r), value: structuredClone({ ...r.head, input: validate(structuredClone(r.input), r.head.schemaVersion), storyboard: r.storyboard }) };
+    },
+    async list(brandId, filter) {
+      if (filter?.periodStart !== undefined) assertDate(filter.periodStart, "periodStart");
+      return [...runRows.values()].filter((r) => r.brandId === brandId && (!filter?.recipe || r.head.recipe === filter.recipe) && (!filter?.periodStart || r.head.periodStart === filter.periodStart))
+        .sort((a, b) => cmp(b.head.periodStart, a.head.periodStart) || cmp(b.head.createdAt, a.head.createdAt) || cmp(a.id, b.id)).map(runVersioned);
+    },
+    async save(id, patch, meta) {
+      assertRecipeRun(patch);
+      const cur = runRows.get(id);
+      if (!cur) throw new NotFoundError(`recipe run ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const next: RunRow = {
+        ...cur, version: cur.version + 1, updatedAt: now().toISOString(),
+        input: patch.input ? structuredClone(patch.input.json) : cur.input,
+        storyboard: patch.storyboard === undefined ? cur.storyboard : structuredClone(patch.storyboard),
+        head: { ...cur.head, schemaVersion: patch.input?.schemaVersion ?? cur.head.schemaVersion },
+      };
+      runRows.set(id, next);
+      record({ brandId: cur.brandId, entityType: "recipe_run", entityId: id, version: next.version, body: runBody(next), bodyText: null }, meta);
+      return runVersioned(next);
+    },
+  };
+
+  const artifactRows: RunArtifact[] = [];
+  const requireRun = (runId: string) => {
+    if (!runRows.has(runId)) throw new NotFoundError(`recipe run ${runId}`);
+  };
+  const slotOf = (runId: string, kind: string, cardIndex: number | null) => artifactRows.filter((a) => a.runId === runId && a.kind === kind && a.cardIndex === cardIndex);
+
+  const runArtifacts: RunArtifactRepository = {
+    async record(runId, input) {
+      assertRunArtifact(input);
+      requireRun(runId);
+      const last = slotOf(runId, input.kind, input.cardIndex).at(-1);
+      if (last && last.sha256 === input.sha256 && last.inputsHash === input.inputsHash) return structuredClone(last);
+      const row: RunArtifact = { ...input, id: randomUUID(), runId, seq: artifactRows.length + 1, createdAt: now().toISOString() };
+      artifactRows.push(row);
+      return structuredClone(row);
+    },
+    async current(runId, filter) {
+      if (filter?.kind) assertArtifactKind(filter.kind);
+      requireRun(runId);
+      const latest = new Map<string, RunArtifact>();
+      for (const a of artifactRows) if (a.runId === runId && (!filter?.kind || a.kind === filter.kind)) latest.set(`${a.kind}:${a.cardIndex}`, a);
+      return structuredClone([...latest.values()].sort((a, b) => cmp(a.kind, b.kind) || (a.cardIndex ?? Infinity) - (b.cardIndex ?? Infinity)));
+    },
+    async history(runId, kind, cardIndex) {
+      assertRunArtifact({ kind, cardIndex }, false);
+      requireRun(runId);
+      return structuredClone(slotOf(runId, kind, cardIndex));
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts };
 }

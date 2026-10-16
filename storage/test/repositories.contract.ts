@@ -461,6 +461,106 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       if (h.restricted) await assert.rejects(() => sql`DELETE FROM content_items WHERE id = ${item.id}`, /permission denied/);
     },
 
+    async "recipe runs: create, get, list order and filters, save, storyboard clear, revisions"(r, clock) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const o = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      const input = (json: Record<string, unknown>) => ({ json, schemaVersion: 2 });
+      const run = (recipe: string, start: string, end: string) => ({ recipe, periodStart: start, periodEnd: end, input: input({ items: [start] }) });
+      const old = await r.runs.create(b.id, run("weekly-reel", "2026-02-02", "2026-02-08"), meta({ author: "alice" }));
+      clock.t += 1000;
+      const first = await r.runs.create(b.id, run("weekly-reel", "2026-02-09", "2026-02-15"), meta());
+      clock.t += 1000;
+      const rerun = await r.runs.create(b.id, { ...run("weekly-reel", "2026-02-09", "2026-02-15"), storyboard: { cards: [1] } }, meta());
+      clock.t += 1000;
+      const other = await r.runs.create(b.id, run("weekly-carousel", "2026-02-09", "2026-02-09"), meta());
+      await r.runs.create(o.id, run("weekly-reel", "2026-03-01", "2026-03-07"), meta());
+      assert.deepEqual((await r.runs.list(b.id)).map((x) => x.id), [other.id, rerun.id, first.id, old.id], "newest period first, then newest creation");
+      assert.deepEqual((await r.runs.list(b.id, { recipe: "weekly-reel" })).map((x) => x.id), [rerun.id, first.id, old.id]);
+      assert.deepEqual((await r.runs.list(b.id, { recipe: "weekly-reel", periodStart: "2026-02-09" })).map((x) => x.id), [rerun.id, first.id]);
+      assert.deepEqual((await r.runs.list(b.id, { periodStart: "2026-02-02" })).map((x) => x.id), [old.id]);
+      const got = await r.runs.get(old.id, (body, v) => ({ body, v }));
+      assert.deepEqual(got.value, { recipe: "weekly-reel", periodStart: "2026-02-02", periodEnd: "2026-02-08", schemaVersion: 2, createdBy: "alice", createdAt: got.value.createdAt, input: { body: { items: ["2026-02-02"] }, v: 2 }, storyboard: null });
+      await assert.rejects(() => r.runs.get("00000000-0000-4000-8000-000000000000", identity), NotFoundError);
+      await assert.rejects(() => r.runs.create(b.id, run("weekly-reel", "2026-02-09", "2026-02-08"), meta()), InvalidInputError);
+      await assert.rejects(() => r.runs.create(b.id, run("weekly-reel", "2026-02-30", "2026-03-01"), meta()), InvalidInputError);
+      await assert.rejects(() => r.runs.create(b.id, run("Bad Recipe", "2026-02-09", "2026-02-09"), meta()), InvalidInputError);
+      await assert.rejects(() => r.runs.create(b.id, { ...run("weekly-reel", "2026-02-09", "2026-02-09"), input: { json: [] as never, schemaVersion: 1 } }, meta()), InvalidInputError);
+      await assert.rejects(() => r.runs.create(b.id, { ...run("weekly-reel", "2026-02-09", "2026-02-09"), storyboard: [] as never }, meta()), InvalidInputError);
+      await assert.rejects(() => r.runs.create("00000000-0000-4000-8000-000000000000", run("weekly-reel", "2026-02-09", "2026-02-09"), meta()), NotFoundError);
+      const kept = await r.runs.save(rerun.id, { input: { json: { items: ["edited"] }, schemaVersion: 3 } }, meta({ expectedVersion: 1, author: "bob" }));
+      assert.deepEqual([kept.version, kept.value.schemaVersion, kept.value.createdBy], [2, 3, "editor"], "created_by stays the creator");
+      assert.deepEqual((await r.runs.get(rerun.id, identity)).value.storyboard, { cards: [1] }, "undefined keeps the storyboard");
+      await r.runs.save(rerun.id, { storyboard: null }, meta({ expectedVersion: 2, author: "bob" }));
+      const cleared = await r.runs.get(rerun.id, identity);
+      assert.deepEqual([cleared.value.storyboard, cleared.value.input, cleared.version, cleared.value.schemaVersion], [null, { items: ["edited"] }, 3, 3], "a storyboard-only save keeps the schema version");
+      await assert.rejects(() => r.runs.save(rerun.id, {}, meta({ expectedVersion: 3 })), InvalidInputError);
+      await assert.rejects(() => r.runs.save(rerun.id, { storyboard: { cards: [] } }, meta({ expectedVersion: 1 })), (e) => e instanceof VersionConflictError && e.currentVersion === 3);
+      await assert.rejects(() => r.runs.save(rerun.id, { storyboard: [] as never }, meta({ expectedVersion: 3 })), InvalidInputError);
+      await assert.rejects(() => r.runs.save("00000000-0000-4000-8000-000000000000", { storyboard: null }, meta({ expectedVersion: 1 })), NotFoundError);
+      assert.deepEqual((await r.revisions.list("recipe_run", rerun.id)).map((x) => [x.version, x.author]), [[1, "editor"], [2, "bob"], [3, "bob"]]);
+      assert.deepEqual((await r.revisions.get("recipe_run", rerun.id, 3)).body, { ...cleared.value, input: { items: ["edited"] }, storyboard: null });
+    },
+
+    async "run artifacts: record dedupes only the current one, current, history, validation"(r, _clock, h) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const run = await r.runs.create(b.id, { recipe: "weekly-reel", periodStart: "2026-02-02", periodEnd: "2026-02-08", input: { json: {}, schemaVersion: 1 } }, meta());
+      const clip = (index: number, seed: string, hash = "h1") => ({ kind: "clip" as const, cardIndex: index, cardId: `card-${index}`, sha256: sha(seed), inputsHash: hash });
+      const a0 = await r.runArtifacts.record(run.id, clip(0, "a"));
+      assert.equal((await r.runArtifacts.record(run.id, clip(0, "a"))).id, a0.id, "the same artifact twice is one row");
+      assert.notEqual((await r.runArtifacts.record(run.id, clip(0, "a", "h2"))).id, a0.id, "same bytes, other inputs hash");
+      const b0 = await r.runArtifacts.record(run.id, clip(0, "b"));
+      const a0again = await r.runArtifacts.record(run.id, clip(0, "a"));
+      assert.ok(![a0.id, b0.id].includes(a0again.id) && a0again.seq > b0.seq, "re-rendering back to A inserts a new row");
+      assert.equal((await r.runArtifacts.record(run.id, clip(0, "a"))).id, a0again.id);
+      await r.runArtifacts.record(run.id, clip(1, "c"));
+      await r.runArtifacts.record(run.id, { kind: "audio", cardIndex: 0, cardId: "card-0", sha256: sha("v"), inputsHash: "n1" });
+      const timeline = await r.runArtifacts.record(run.id, { kind: "timeline", cardIndex: null, cardId: null, sha256: sha("t"), inputsHash: "t1" });
+      assert.deepEqual((await r.runArtifacts.current(run.id)).map((x) => [x.kind, x.cardIndex, x.sha256 === sha("a") || undefined]), [["audio", 0, undefined], ["clip", 0, true], ["clip", 1, undefined], ["timeline", null, undefined]]);
+      assert.equal((await r.runArtifacts.current(run.id)).find((x) => x.kind === "clip" && x.cardIndex === 0)!.id, a0again.id);
+      assert.deepEqual((await r.runArtifacts.current(run.id, { kind: "clip" })).map((x) => x.cardIndex), [0, 1]);
+      assert.deepEqual((await r.runArtifacts.current(run.id, { kind: "timeline" })).map((x) => x.id), [timeline.id]);
+      assert.deepEqual((await r.runArtifacts.history(run.id, "clip", 0)).map((x) => x.sha256), [sha("a"), sha("a"), sha("b"), sha("a")], "oldest first");
+      assert.deepEqual((await r.runArtifacts.history(run.id, "timeline", null)).map((x) => x.id), [timeline.id]);
+      const bad = [
+        { ...clip(0, "a"), kind: "video" as never }, { ...clip(0, "a"), cardIndex: null }, { ...clip(0, "a"), cardIndex: -1 }, { ...clip(0, "a"), cardIndex: 1.5 },
+        { ...clip(0, "a"), cardId: null }, { ...clip(0, "a"), sha256: "xyz" }, { ...clip(0, "a"), inputsHash: "" },
+        { kind: "timeline" as const, cardIndex: 0, cardId: null, sha256: sha("t"), inputsHash: "t1" }, { kind: "timeline" as const, cardIndex: null, cardId: "c", sha256: sha("t"), inputsHash: "t1" },
+      ];
+      for (const input of bad) await assert.rejects(() => r.runArtifacts.record(run.id, input), InvalidInputError);
+      const unknown = "00000000-0000-4000-8000-000000000000";
+      await assert.rejects(() => r.runArtifacts.record(unknown, clip(0, "a")), NotFoundError);
+      await assert.rejects(() => r.runArtifacts.current(unknown), NotFoundError);
+      await assert.rejects(() => r.runArtifacts.history(unknown, "clip", 0), NotFoundError);
+      await assert.rejects(() => r.runArtifacts.history(run.id, "timeline", 0), InvalidInputError);
+      const sql = h.rawSql;
+      if (!sql) return;
+      await assert.rejects(() => sql`INSERT INTO run_artifacts (run_id, kind, card_index, sha256, inputs_hash) VALUES (${run.id}, 'timeline', 0, ${sha("z")}, 'x')`, /violates check constraint/);
+      await assert.rejects(() => sql`INSERT INTO run_artifacts (run_id, kind, card_index, card_id, sha256, inputs_hash) VALUES (${run.id}, 'clip', 0, 'c', 'ABC', 'x')`, /violates check constraint/);
+      await assert.rejects(() => sql`UPDATE recipe_runs SET period_end = '2026-01-01' WHERE id = ${run.id}`, /violates check constraint/);
+      if (h.restricted) {
+        await assert.rejects(() => sql`UPDATE run_artifacts SET inputs_hash = 'y' WHERE id = ${a0.id}`, /permission denied/);
+        await assert.rejects(() => sql`DELETE FROM run_artifacts WHERE id = ${a0.id}`, /permission denied/);
+        await assert.rejects(() => sql`DELETE FROM recipe_runs WHERE id = ${run.id}`, /permission denied/);
+      }
+    },
+
+    async "recipe runs and artifacts: concurrent writers"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const base = { recipe: "weekly-reel", periodStart: "2026-02-02", periodEnd: "2026-02-08", input: { json: {}, schemaVersion: 1 } };
+      const [x, y] = await Promise.all([r.runs.create(b.id, base, meta()), r.runs.create(b.id, base, meta())]);
+      assert.notEqual(x.id, y.id, "re-runs of one period are allowed");
+      const results = await Promise.allSettled(Array.from({ length: 4 }, (_, i) => r.runs.save(x.id, { storyboard: { i } }, meta({ expectedVersion: 1 }))));
+      assert.equal(results.filter((s) => s.status === "fulfilled").length, 1);
+      for (const s of results) if (s.status === "rejected") assert.ok(s.reason instanceof VersionConflictError);
+      const art = { kind: "clip" as const, cardIndex: 0, cardId: "card-0", sha256: sha("a"), inputsHash: "h1" };
+      const rows = await Promise.all([r.runArtifacts.record(x.id, art), r.runArtifacts.record(x.id, art)]);
+      const history = await r.runArtifacts.history(x.id, "clip", 0);
+      assert.ok(history.length >= 1 && history.length <= 2 && rows.every((row) => history.some((h) => h.id === row.id)));
+      const current = await r.runArtifacts.current(x.id);
+      assert.equal(current.length, 1);
+      assert.ok(rows.some((row) => row.id === current[0].id));
+    },
+
     async "least privilege: the app role cannot write rules or guidance"(r, _clock, h) {
       if (!h.restricted) return;
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());

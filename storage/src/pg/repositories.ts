@@ -15,6 +15,10 @@ import {
   type ContentItemRepository,
   type ChatMessage,
   type ChatRepository,
+  type RecipeRunHead,
+  type RecipeRunRepository,
+  type RunArtifact,
+  type RunArtifactRepository,
   type ExportRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
@@ -31,7 +35,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -50,6 +54,8 @@ export interface PgRepositories {
   exports: ExportRepository;
   chat: ChatRepository;
   content: ContentItemRepository;
+  runs: RecipeRunRepository;
+  runArtifacts: RunArtifactRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -85,6 +91,14 @@ const toHead = (r: Row): CarouselHead => ({ slug: r.slug, title: r.title, status
 
 const toContentHead = (r: Row): ContentItemHead => ({
   slug: r.slug, title: r.title, stage: r.stage, channel: r.channel, format: r.format, derivedFrom: r.derived_from, publishedAt: iso(r.published_at), createdAt: iso(r.created_at)!,
+});
+
+const toRunHead = (r: Row): RecipeRunHead => ({
+  recipe: r.recipe, periodStart: r.period_start, periodEnd: r.period_end, schemaVersion: r.schema_version, createdBy: r.created_by, createdAt: iso(r.created_at)!,
+});
+
+const toArtifact = (r: Row): RunArtifact => ({
+  id: r.id, runId: r.run_id, seq: Number(r.seq), kind: r.kind, cardIndex: r.card_index, cardId: r.card_id, sha256: r.sha256, inputsHash: r.inputs_hash, createdAt: iso(r.created_at)!,
 });
 
 const toExport = (r: Row): CarouselExport => ({
@@ -634,5 +648,93 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content };
+  // Dates are read as text so a `date` column never shifts with the server time zone.
+  const runCols = sql`id, brand_id, recipe, period_start::text AS period_start, period_end::text AS period_end, input, storyboard, schema_version, created_by, created_at, updated_at, version`;
+  const runBody = (r: Row) => ({ ...toRunHead(r), input: r.input, storyboard: r.storyboard });
+  const runVersioned = (r: Row) => ({ id: r.id as string, value: toRunHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+
+  const runs: RecipeRunRepository = {
+    async create(brandId, input, meta) {
+      assertRecipeRun(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const at = now();
+        const [row] = await tx`INSERT INTO recipe_runs (brand_id, recipe, period_start, period_end, input, storyboard, schema_version, created_by, created_at, updated_at)
+                               VALUES (${brandId}, ${input.recipe}, ${input.periodStart}, ${input.periodEnd}, ${json(tx, input.input.json)},
+                                       ${input.storyboard === undefined ? null : json(tx, input.storyboard)}, ${input.input.schemaVersion}, ${meta.author}, ${at}, ${at})
+                               RETURNING ${runCols}`;
+        await appendRevision(tx, { brandId, entityType: "recipe_run", entityId: row.id, version: 1, body: runBody(row), bodyText: null }, meta);
+        return runVersioned(row);
+      });
+    },
+    async get(id, validate) {
+      const [row] = isUuid(id) ? await sql`SELECT ${runCols} FROM recipe_runs WHERE id = ${id}` : [];
+      if (!row) throw new NotFoundError(`recipe run ${id}`);
+      return { ...runVersioned(row), value: { ...toRunHead(row), input: validate(row.input, row.schema_version), storyboard: row.storyboard } };
+    },
+    async list(brandId, filter) {
+      if (filter?.periodStart !== undefined) assertDate(filter.periodStart, "periodStart");
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT ${runCols} FROM recipe_runs WHERE brand_id = ${brandId} ${filter?.recipe ? sql`AND recipe = ${filter.recipe}` : sql``}
+                             ${filter?.periodStart ? sql`AND period_start = ${filter.periodStart}` : sql``} ORDER BY period_start DESC, created_at DESC, id ASC`;
+      return rows.map(runVersioned);
+    },
+    async save(id, patch, meta) {
+      assertRecipeRun(patch);
+      if (!isUuid(id)) throw new NotFoundError(`recipe run ${id}`);
+      return sql.begin(async (tx) => {
+        const [cur] = await tx`SELECT version FROM recipe_runs WHERE id = ${id} FOR NO KEY UPDATE`;
+        if (!cur) throw new NotFoundError(`recipe run ${id}`);
+        if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+        const [row] = await tx`UPDATE recipe_runs SET input = COALESCE(${patch.input ? json(tx, patch.input.json) : null}, input),
+                                 schema_version = COALESCE(${patch.input?.schemaVersion ?? null}, schema_version),
+                                 storyboard = ${patch.storyboard === undefined ? tx`storyboard` : patch.storyboard === null ? null : json(tx, patch.storyboard)},
+                                 updated_at = ${now()}, version = version + 1 WHERE id = ${id} RETURNING ${runCols}`;
+        await appendRevision(tx, { brandId: row.brand_id, entityType: "recipe_run", entityId: id, version: row.version, body: runBody(row), bodyText: null }, meta);
+        return runVersioned(row);
+      });
+    },
+  };
+
+  const runArtifacts: RunArtifactRepository = {
+    async record(runId, input) {
+      assertRunArtifact(input);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
+        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':run-artifact:' || ${runId}::text || ':' || ${input.kind}::text || ':' || coalesce(${input.cardIndex}::int::text, ''), 0))`;
+        const [last] = await tx`SELECT * FROM run_artifacts WHERE run_id = ${runId} AND kind = ${input.kind} AND card_index IS NOT DISTINCT FROM ${input.cardIndex}::int ORDER BY seq DESC LIMIT 1`;
+        if (last && last.sha256 === input.sha256 && last.inputs_hash === input.inputsHash) return toArtifact(last);
+        const [row] = await tx`INSERT INTO run_artifacts (run_id, kind, card_index, card_id, sha256, inputs_hash, created_at)
+                               VALUES (${runId}, ${input.kind}, ${input.cardIndex}, ${input.cardId}, ${input.sha256}, ${input.inputsHash}, ${now()}) RETURNING *`;
+        return toArtifact(row);
+      });
+    },
+    async current(runId, filter) {
+      if (filter?.kind) assertArtifactKind(filter.kind);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
+        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        const rows = await tx`SELECT DISTINCT ON (kind, card_index) * FROM run_artifacts WHERE run_id = ${runId} ${filter?.kind ? tx`AND kind = ${filter.kind}` : tx``}
+                              ORDER BY kind, card_index, seq DESC`;
+        return rows.map(toArtifact);
+      });
+    },
+    async history(runId, kind, cardIndex) {
+      assertRunArtifact({ kind, cardIndex }, false);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
+        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        return (await tx`SELECT * FROM run_artifacts WHERE run_id = ${runId} AND kind = ${kind} AND card_index IS NOT DISTINCT FROM ${cardIndex}::int ORDER BY seq`).map(toArtifact);
+      });
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts };
 }

@@ -60,7 +60,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel" | "content_item";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel" | "content_item" | "recipe_run";
 
 export interface Revision {
   brandId?: string;
@@ -298,4 +298,67 @@ export interface ContentItemRepository {
   save(id: string, patch: Partial<ContentItemInput>, meta: WriteMeta): Promise<Versioned<ContentItemHead>>;
   /** `publishedAt` is an ISO string. */
   setStage(id: string, patch: { stage: ContentStage; publishedAt?: string }, meta: WriteMeta): Promise<Versioned<ContentItemHead>>;
+}
+
+export interface RecipeRunHead {
+  recipe: string;
+  /** Calendar dates, `YYYY-MM-DD`. */
+  periodStart: string;
+  periodEnd: string;
+  schemaVersion: number;
+  createdBy: string;
+  createdAt: string;
+}
+export interface RecipeRunInput {
+  recipe: string;
+  periodStart: string;
+  periodEnd: string;
+  input: { json: Record<string, unknown>; schemaVersion: number };
+  storyboard?: Record<string, unknown>;
+}
+
+/**
+ * One run of a recipe for a period. Re-running a period creates another run. `input` and `storyboard` share one
+ * `schemaVersion`, and `created_by` is the author of the creating write. Every write appends a revision whose body is
+ * the head plus `input` and `storyboard`. Writes need `expectedVersion` except `create` (null).
+ */
+export interface RecipeRunRepository {
+  create(brandId: string, input: RecipeRunInput, meta: WriteMeta): Promise<Versioned<RecipeRunHead>>;
+  /** `validate` receives the stored input and its schema version. */
+  get<T>(id: string, validate: BodyValidator<T>): Promise<Versioned<RecipeRunHead & { input: T; storyboard: Record<string, unknown> | null }>>;
+  /** Heads newest first: `periodStart`, then creation, descending. */
+  list(brandId: string, filter?: { recipe?: string; periodStart?: string }): Promise<Array<Versioned<RecipeRunHead>>>;
+  /** `undefined` keeps a field; `storyboard: null` clears it. A given `input` replaces the stored one and its schema version. */
+  save(id: string, patch: { input?: RecipeRunInput["input"]; storyboard?: Record<string, unknown> | null }, meta: WriteMeta): Promise<Versioned<RecipeRunHead>>;
+}
+
+export type RunArtifactKind = "clip" | "audio" | "timeline";
+
+export interface RunArtifact {
+  id: string;
+  runId: string;
+  /** Global insert order; the artifact with the highest `seq` for its (kind, cardIndex) is current. */
+  seq: number;
+  kind: RunArtifactKind;
+  /** Null exactly for a `timeline`, which belongs to the run. */
+  cardIndex: number | null;
+  cardId: string | null;
+  sha256: string;
+  inputsHash: string;
+  createdAt: string;
+}
+export type RunArtifactInput = Pick<RunArtifact, "kind" | "cardIndex" | "cardId" | "sha256" | "inputsHash">;
+
+/** Insert-only, not revisioned. The blob key of an artifact derives from the run's brand and `sha256`. */
+export interface RunArtifactRepository {
+  /**
+   * Returns the current artifact of its (kind, cardIndex) when it has the same `sha256` and `inputsHash`; otherwise
+   * inserts a new one. This deliberately differs from `tts.record`: re-rendering back to an earlier clip inserts again
+   * so that clip becomes current. Two identical concurrent calls are serialized per slot in Postgres. The returned row is current as of the call.
+   */
+  record(runId: string, input: RunArtifactInput): Promise<RunArtifact>;
+  /** The latest artifact per (kind, cardIndex), ordered by kind then cardIndex. */
+  current(runId: string, filter?: { kind?: RunArtifactKind }): Promise<RunArtifact[]>;
+  /** Every artifact of one slot, oldest first. */
+  history(runId: string, kind: RunArtifactKind, cardIndex: number | null): Promise<RunArtifact[]>;
 }

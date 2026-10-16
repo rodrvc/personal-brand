@@ -1,7 +1,7 @@
 import { RuleParamsError, validateRule, validateRuleParams, type Rule } from "@personal-brand/core/checks";
 
 import { InvalidInputError } from "./contracts/errors.ts";
-import type { AssetInput, CarouselStatus, ContentItemInput, ContentStage, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
+import type { AssetInput, RunArtifactInput, CarouselStatus, ContentItemInput, ContentStage, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
 
 /** An autosave within this window by the same author folds into the previous revision. */
 export const AUTOSAVE_WINDOW_MS = 10 * 60 * 1000;
@@ -174,4 +174,43 @@ export function resolvePublishedAt(from: ContentStage | null, to: ContentStage, 
 /** A status or stage change is never an autosave: autosaves fold into the previous revision and would hide it. */
 export function assertNotAutosave(meta: { reason: string }): void {
   if (meta.reason === "autosave") throw new InvalidInputError("a status or stage change cannot be an autosave");
+}
+
+/** `YYYY-MM-DD` and a real calendar date. */
+export function assertDate(value: unknown, what: string): asserts value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) throw new InvalidInputError(`invalid ${what}`);
+}
+
+/** Mirrors the `recipe_runs` CHECK constraints so both implementations reject identically. */
+export function assertRecipeRun(input: { recipe?: string; periodStart?: string; periodEnd?: string; input?: { json: unknown; schemaVersion: number }; storyboard?: unknown }, complete = false): void {
+  if (complete || input.recipe !== undefined) assertSlug(input.recipe ?? "", "recipe");
+  if (complete) {
+    assertDate(input.periodStart, "periodStart");
+    assertDate(input.periodEnd, "periodEnd");
+    if (input.periodEnd < input.periodStart) throw new InvalidInputError("periodEnd must not precede periodStart");
+  }
+  if (complete && !input.input) throw new InvalidInputError("input is required");
+  if (input.input) assertEnvelope(input.input);
+  if (input.storyboard !== undefined && input.storyboard !== null) assertJsonObject(input.storyboard, "storyboard");
+  if (!complete && input.recipe === undefined && !input.input && input.storyboard === undefined) throw new InvalidInputError("nothing to save");
+}
+
+const ARTIFACT_KINDS = ["clip", "audio", "timeline"];
+
+/** Mirrors the `run_artifacts` CHECK constraints; with `complete` false only the (kind, cardIndex) slot is checked. */
+export function assertArtifactKind(kind: string): void {
+  if (!ARTIFACT_KINDS.includes(kind)) throw new InvalidInputError(`invalid artifact kind "${kind}"`);
+}
+
+export function assertRunArtifact(input: Partial<RunArtifactInput> & { kind: string }, complete = true): void {
+  assertArtifactKind(input.kind);
+  const timeline = input.kind === "timeline";
+  const index = input.cardIndex ?? null;
+  if (timeline !== (index === null)) throw new InvalidInputError(timeline ? "a timeline has no cardIndex" : "cardIndex is required");
+  if (index !== null && (!Number.isInteger(index) || index < 0)) throw new InvalidInputError("cardIndex must be a non-negative integer");
+  if (!complete) return;
+  if (timeline !== ((input.cardId ?? null) === null)) throw new InvalidInputError(timeline ? "a timeline has no cardId" : "cardId is required");
+  if (typeof input.cardId === "string" && input.cardId === "") throw new InvalidInputError("cardId must not be empty");
+  if (!SHA256.test(input.sha256 ?? "")) throw new InvalidInputError("invalid sha256");
+  if (typeof input.inputsHash !== "string" || input.inputsHash === "") throw new InvalidInputError("inputsHash must not be empty");
 }
