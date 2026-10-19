@@ -1,6 +1,8 @@
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runChecks, type CheckDocument, type Rule } from "@personal-brand/core/checks";
+
 import { readRecipeImageHosts, type RecipeImagePolicy } from "./recipe.js";
 import type { CarouselInput, Slide, VerifiedSlide } from "./types.js";
 
@@ -324,6 +326,56 @@ export function verifyImagePolicy(
   return [];
 }
 
+/**
+ * The brand-specific part of verification, injected so the engine does not care where it is stored:
+ * where images may come from, and the brand's own content rules (forbidden terms, length limits, ...).
+ */
+export interface VerifyPolicy {
+  imagePolicy: RecipeImagePolicy;
+  /**
+   * Content rules for `runChecks`, evaluated on the slides that survived the drops (slide numbers in findings
+   * count rendered slides, not input positions). `image_hosts` and `date_window` are not re-run here: the engine's
+   * own checks are the floor for both, and a stored rule can only tighten them (a `date_window` with
+   * `require_dates: false` does not relax the period check).
+   */
+  rules: Rule[];
+}
+
+/** The profile-folder policy: image hosts from `recipes/<recipe>.yaml`, no content rules. */
+export function folderVerifyPolicy(profileDir: string, recipe: string): VerifyPolicy {
+  return { imagePolicy: readRecipeImageHosts(profileDir, recipe), rules: [] };
+}
+
+/**
+ * A policy from stored brand rules: the enabled carousel `image_hosts` rules declare the hosts, the rest run through
+ * `runChecks`. Host provenance is always an error whatever the rule's severity, since an invented URL renders as a
+ * card with no photo. A brand with no such rule allows any host (the written opt-out, as a recipe without `image_hosts`).
+ */
+export function rulesVerifyPolicy(rules: Rule[]): VerifyPolicy {
+  const hostRules = rules.filter((rule) => rule.kind === "image_hosts" && rule.enabled !== false && rule.applies_to.includes("carousel"));
+  const hosts = hostRules.flatMap((rule) => ((rule.params as { hosts?: string[] } | undefined)?.hosts ?? []));
+  return {
+    imagePolicy: { path: "the brand's stored rules", exists: true, ...(hostRules.length > 0 ? { declaredHosts: hosts } : {}) },
+    rules: rules.filter((rule) => rule.kind !== "image_hosts" && rule.kind !== "date_window"),
+  };
+}
+
+/** Findings of the policy's content rules on the rendered slides: errors block the render, warnings are only reported. */
+function checkRules(slides: Slide[], rules: Rule[], period: { start: Date; end: Date } | undefined): { errors: string[]; warnings: string[] } {
+  const document: CheckDocument = {
+    kind: "carousel",
+    slides: slides as unknown as Array<Record<string, unknown>>,
+    ...(period ? { period: { start: isoDay(period.start), end: isoDay(period.end) } } : {}),
+  };
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  for (const f of runChecks(document, rules)) {
+    const where = f.slide === undefined ? "" : ` (rendered slide ${f.slide + 1}${f.field ? `, ${f.field}` : ""})`;
+    (f.severity === "error" ? errors : warnings).push(`${f.message}${where}: ${f.detail}`);
+  }
+  return { errors, warnings };
+}
+
 /** `system/`, the engine's own tree — derived from this module's location, not configured. */
 const SYSTEM_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -359,6 +411,50 @@ function assertEngineOwnedInput(inputPath: string): void {
   );
 }
 
+interface VerifyOrThrowCommon {
+  slides: Slide[];
+  input: CarouselInput;
+  inputPath: string;
+  /** Receives the drop report and rule warnings; defaults to `console.warn`. */
+  onWarning?: (lines: string[]) => void;
+  /** Omit for content that is not date-bound (states the opt-out in writing). */
+  period?: { start: Date; end: Date };
+  /** Named in error messages, e.g. the week label being rendered. */
+  label?: string;
+  /**
+   * Set only for a fixture that ships with the engine rather than coming from a
+   * profile, where the input file *is* the authority on its own provenance.
+   *
+   * The rule it opts out of — an input cannot declare its own image hosts —
+   * exists because a profile's input is written by an agent, the same actor that
+   * can invent an image URL, so its self-declaration proves nothing. A fixture
+   * under `system/` is tracked, reviewed in the diff, and covered by the commit
+   * gate; the authority is real there. Narrowly scoped and named rather than
+   * loosening the rule, because the rule is right for every profile input.
+   *
+   * `inputPath` must resolve inside `system/`, and that is enforced rather than
+   * trusted — see `assertEngineOwnedInput`.
+   */
+  selfDeclaredProvenance?: boolean;
+}
+
+/** The brand policy comes from the profile folder or is injected, never both. */
+export type VerifyOrThrowOptions = VerifyOrThrowCommon &
+  (
+    | {
+        /** Folder policy: the profile and the recipe basename under `<profileDir>/recipes/` that declares the source. */
+        profileDir: string;
+        recipe: string;
+        policy?: never;
+      }
+    | {
+        /** Injected policy (e.g. from stored brand rules). */
+        policy: VerifyPolicy;
+        profileDir?: never;
+        recipe?: never;
+      }
+  );
+
 /**
  * The whole pre-render guard, as one call every entry point makes.
  *
@@ -387,34 +483,16 @@ function assertEngineOwnedInput(inputPath: string): void {
  *    candidates behind them
  *  - nothing left → throw, naming what was asked for
  */
-export function verifyOrThrow(options: {
-  slides: Slide[];
-  input: CarouselInput;
-  inputPath: string;
-  profileDir: string;
-  /** Recipe basename under `<profileDir>/recipes/` that declares the source. */
-  recipe: string;
-  /** Omit for content that is not date-bound (states the opt-out in writing). */
-  period?: { start: Date; end: Date };
-  /** Named in error messages, e.g. the week label being rendered. */
-  label?: string;
-  /**
-   * Set only for a fixture that ships with the engine rather than coming from a
-   * profile, where the input file *is* the authority on its own provenance.
-   *
-   * The rule it opts out of — an input cannot declare its own image hosts —
-   * exists because a profile's input is written by an agent, the same actor that
-   * can invent an image URL, so its self-declaration proves nothing. A fixture
-   * under `system/` is tracked, reviewed in the diff, and covered by the commit
-   * gate; the authority is real there. Narrowly scoped and named rather than
-   * loosening the rule, because the rule is right for every profile input.
-   *
-   * `inputPath` must resolve inside `system/`, and that is enforced rather than
-   * trusted — see `assertEngineOwnedInput`.
-   */
-  selfDeclaredProvenance?: boolean;
-}): VerifiedSlide[] {
+export function verifyOrThrow(options: VerifyOrThrowOptions): VerifiedSlide[] {
   const { slides, input, inputPath, profileDir, recipe, period, label } = options;
+  const warn = options.onWarning ?? ((lines: string[]) => console.warn(lines.join("\n")));
+  // Backstop for untyped callers; checked up front so no option (e.g. `selfDeclaredProvenance`) can skip it.
+  if (!options.policy && (profileDir === undefined || recipe === undefined)) {
+    throw new Error("verifyOrThrow needs either a policy or both profileDir and recipe");
+  }
+  // Resolved at most once, and lazily: an engine fixture declaring its own hosts never reads a recipe.
+  let resolved: VerifyPolicy | undefined;
+  const policy = (): VerifyPolicy => (resolved ??= options.policy ?? folderVerifyPolicy(profileDir!, recipe!));
   const subject = label ? `"${label}"` : inputPath;
 
   const inputHosts = readSourceImageHosts(input, inputPath);
@@ -438,9 +516,14 @@ export function verifyOrThrow(options: {
   // Skipped only for an engine fixture that declares its own hosts (see
   // `selfDeclaredProvenance`); a fixture with no declaration still gets checked.
   if (!(options.selfDeclaredProvenance && inputHosts)) {
-    unverified.push(
-      ...verifyImagePolicy(slides, readRecipeImageHosts(profileDir, recipe), inputHosts, inputPath),
-    );
+    unverified.push(...verifyImagePolicy(slides, policy().imagePolicy, inputHosts, inputPath));
+  }
+
+  // After the drops: a rule judges what will be rendered, not slides that were already removed.
+  if (options.policy && options.policy.rules.length > 0) {
+    const { errors, warnings } = checkRules(kept, options.policy.rules, period);
+    unverified.push(...errors);
+    if (warnings.length > 0) warn([`Rule warnings for ${subject}:`, ...warnings.map((w) => `  · ${w}`)]);
   }
 
   if (unverified.length > 0) {
@@ -452,10 +535,7 @@ export function verifyOrThrow(options: {
   }
 
   if (rejected.length > 0) {
-    console.warn(
-      `Dropped ${rejected.length} of ${slides.length} slide(s) for ${subject}:\n` +
-        describeRejections(rejected),
-    );
+    warn([`Dropped ${rejected.length} of ${slides.length} slide(s) for ${subject}:`, describeRejections(rejected)]);
   }
 
   if (kept.length === 0) {

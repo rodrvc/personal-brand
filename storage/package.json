@@ -9,7 +9,8 @@
     "./contracts": "./src/contracts/index.ts",
     "./blob": "./src/blob/index.ts",
     "./pg": "./src/pg/index.ts",
-    "./memory": "./src/memory/index.ts"
+    "./memory": "./src/memory/index.ts",
+    "./rules": "./src/rules.ts"
   },
   "scripts": {
     "migrate": "tsx src/cli/migrate.ts",
