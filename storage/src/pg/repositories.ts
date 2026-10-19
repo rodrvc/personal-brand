@@ -20,6 +20,8 @@ import {
   type RunArtifact,
   type RunArtifactRepository,
   type ExportRepository,
+  type ImportRun,
+  type ImportRunRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -56,6 +58,7 @@ export interface PgRepositories {
   content: ContentItemRepository;
   runs: RecipeRunRepository;
   runArtifacts: RunArtifactRepository;
+  importRuns: ImportRunRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -736,5 +739,18 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts };
+  const toImportRun = (r: Row): ImportRun => ({
+    id: r.id, brandId: r.brand_id, sourceKind: r.source_kind, sourceRootHash: r.source_root_hash, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, report: r.report,
+  });
+  const importRuns: ImportRunRepository = {
+    async record(input) {
+      if (!isUuid(input.brandId)) throw new NotFoundError(`brand ${input.brandId}`);
+      const [row] = await sql`INSERT INTO import_runs (brand_id, source_kind, source_root_hash, started_at, finished_at, report)
+                              VALUES (${input.brandId}, ${input.sourceKind}, ${input.sourceRootHash}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.report)}) RETURNING *`
+        .catch((e) => Promise.reject((e as { code?: string }).code === "23503" ? new NotFoundError(`brand ${input.brandId}`) : e));
+      return toImportRun(row);
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns };
 }

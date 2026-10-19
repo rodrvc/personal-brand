@@ -188,7 +188,7 @@ everywhere, `version int not null default 1`, enum-like columns as `text` +
 | `chat_messages` | `carousel_id`, `seq`, `body jsonb`, `created_at` | PK (`carousel_id`,`seq`); insert-only, not revisioned | S6a |
 | `recipe_runs` | `id`, `brand_id`, `recipe` (slug, no FK), `period_start`, `period_end`, `input jsonb`, `storyboard jsonb` (nullable), `schema_version`, `created_by`, `created_at`, `updated_at`, `version` | former `week-input.json` + `storyboard.yaml`; re-runs of a period allowed; revisioned | S6c |
 | `run_artifacts` | `seq` (identity), `id`, `run_id`, `kind` (`clip`/`audio`/`timeline`), `card_index`, `card_id`, `sha256`, `inputs_hash`, `created_at` | insert-only; current = highest `seq` per (`run_id`,`kind`,`card_index`); a timeline has no card; re-rendering back to an earlier clip inserts again; reel export version numbering is deferred to S9b (`exports` reference carousels only) | S6c |
-| `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `dry_run`, `started_at`, `finished_at`, `report jsonb` | — | S7a |
+| `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `started_at`, `finished_at`, `report jsonb` | insert-only; no `dry_run` column, since a dry run writes nothing | S7a |
 | `restore_drills` | `id`, `target_db` (host/db name, no secrets), `dump_taken_at`, `restored_at`, `verified bool`, `notes` | insert-only | S8 |
 | `seasonal_themes` | `id`, `brand_id`, `name`, `starts_on`, `ends_on`, `token_overrides jsonb`, `guidance_md`, `updated_at`, `version` | CHECK `ends_on >= starts_on` | S13 (scheduled, after cutover) |
 | `content_items` | `id`, `brand_id`, `slug`, `title`, `stage` (`idea`/`draft`/`published`/`archived`), `channel`, `format`, `body_md`, `meta jsonb` (**without** `stage`), `meta_schema_version`, `derived_from`, `published_at`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`); composite FK for `derived_from`; `published_at` set iff `published` | S6b |
@@ -473,7 +473,7 @@ hash).
 2. **Transition:** until a brand is cut over, switched consumers serve it
    from its folder through a single resolver,
    `resolveBrandSource(slug) -> "storage" | "folder"` (storage package,
-   S7a): `"storage"` iff `brands.cutover_at` is set. One code path decides;
+   S7a2): `"storage"` iff `brands.cutover_at` is set. One code path decides;
    no consumer guesses.
 3. **Cutover** = `brand cutover <slug> --confirm <slug>`: final import pass,
    verification report must be clean, then set `brands.cutover_at` and write
@@ -481,10 +481,15 @@ hash).
    timestamp). That marker is the only file the system ever writes in a
    folder.
 4. **After cutover:** `resolveProfileDir` (`system/ig-carousel/profile.ts`,
-   changed in S7a next to `resolveBrandSource`) throws for a brand whose
+   changed in S7a2 next to `resolveBrandSource`) throws for a brand whose
    folder holds `.storage-cutover` or whose `brands.cutover_at` is set,
    pointing to the `brand` CLI; every legacy reader goes through it. The
    importer refuses to re-import it. The folder is never deleted.
+
+   *As built in S7a:* the backup gate refuses every non-dry-run against a
+   non-localhost `DATABASE_URL` until `restore_drills` exists (S8), and
+   `--report out.json` is deferred to S8. The cutover itself (steps 2-4) is
+   S7a2.
 5. S12 removes the folder path and the resolver once every real brand is cut
    over.
 
@@ -546,10 +551,11 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S6b | `0005`: `content_items` (stage/channel/format columns, opaque `meta`) + repo with one shared stage-transition rule | ~560 | S6a | contract suite on both implementations; transitions and grants checked |
 | S6c | `0006`: `recipe_runs`, `run_artifacts` + repos | ~400 | S6b | concurrent run/artifact tests |
 | S6d | `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~300 | S6c | usage/verify tests on memory storage |
-| S7a | CLI skeleton (bin, `runCli`, flag parser from #116) + `import`/`cutover` verbs; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs`; `resolveBrandSource` + `resolveProfileDir` post-cutover refusal | ~590 | S3, S4 | example brands import, re-run is a no-op, cutover writes marker + `cutover_at`, legacy readers refuse it |
-| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass; ideas backlog -> `content_items` | ~590 | S7a, S5, S6c | verification clean on examples |
+| S7a | CLI skeleton (bin, `runCli`, strict per-verb flag parser from #116) + `import` verb with the backup gate; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs` (record only) | ~520 | S3, S4 | example brands import, re-run is a no-op, conflicts are reported and never overwritten |
+| S7a2 | `cutover` verb + `.storage-cutover` marker + `markCutover`; `resolveBrandSource`; `resolveProfileDir` refusal; `verifyBrand` (re-read and compare) | ~230 | S7a | cutover writes marker + `cutover_at`, legacy readers refuse it |
+| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass; ideas backlog -> `content_items`; `import_runs.list` | ~590 | S7a, S5, S6c | verification clean on examples |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
-| S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a | example brand renders from storage with no `profiles/` dir |
+| S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
 | S10b | Editor write path: save (`If-Match`), export, chat, compose; 409 with current version | ~580 | S10a | concurrent-save tests; exports land in bucket |
@@ -558,7 +564,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
-17 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
+18 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
 lines, and merging the S9 or S11 pairs would break the budget). A slice that
 grows is split, not compressed.
 

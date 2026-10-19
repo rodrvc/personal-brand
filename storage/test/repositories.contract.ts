@@ -561,12 +561,24 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.ok(rows.some((row) => row.id === current[0].id));
     },
 
-    async "least privilege: the app role cannot write rules or guidance"(r, _clock, h) {
+    async "import runs: insert-only log written by the owner role"(r, clock, h) {
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const run = (n: number) => ({ brandId: a.id, sourceKind: "folder" as const, sourceRootHash: sha(`root${n}`), startedAt: new Date(clock.t + n * 1000).toISOString(), finishedAt: new Date(clock.t + n * 1000 + 1).toISOString(), report: { n } });
+      const first = await h.owner.importRuns.record(run(1));
+      const second = await h.owner.importRuns.record(run(2));
+      assert.notEqual(first.id, second.id);
+      assert.deepEqual(second.report, { n: 2 });
+      if (h.rawSql) assert.equal((await h.rawSql`SELECT count(*)::int AS n FROM import_runs WHERE brand_id = ${a.id}`)[0].n, 2, "the app role can read them");
+      await assert.rejects(() => h.owner.importRuns.record({ ...run(3), brandId: "00000000-0000-4000-8000-000000000000" }), NotFoundError);
+    },
+
+    async "least privilege: the app role cannot write rules, guidance or import runs"(r, _clock, h) {
       if (!h.restricted) return;
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
       const rule: RuleInput = { kind: "slide_count", params: { max: 5 }, severity: "error", appliesTo: ["carousel"], message: "m" };
       await assert.rejects(() => r.rules.create(a.id, rule, meta()), /permission denied/);
       await assert.rejects(() => r.guidance.put(a.id, "x", { description: "", body: "b" }, meta()), /permission denied/);
+      await assert.rejects(() => r.importRuns.record({ brandId: a.id, sourceKind: "folder", sourceRootHash: sha("r"), startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", report: {} }), /permission denied/);
       const created = await h.owner.rules.create(a.id, rule, meta());
       await assert.rejects(() => r.rules.disable(created.id, meta({ expectedVersion: 1 })), /permission denied/);
     },

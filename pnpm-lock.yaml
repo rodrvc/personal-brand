@@ -99,13 +99,13 @@ importers:
         version: 19.1.7(@types/react@19.1.9)
       '@vitejs/plugin-react':
         specifier: ^4.3.4
-        version: 4.7.0(vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13))
+        version: 4.7.0(vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.1))
       typescript:
         specifier: ^5.7.0
         version: 5.9.2
       vite:
         specifier: ^6.0.0
-        version: 6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)
+        version: 6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.1)
 
   storage:
     dependencies:
@@ -118,6 +118,9 @@ importers:
       postgres:
         specifier: ^3.4.5
         version: 3.4.9
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -2378,6 +2381,11 @@ packages:
   yallist@4.0.0:
     resolution: {integrity: sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==}
 
+  yaml@2.9.1:
+    resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
   yauzl@2.10.0:
     resolution: {integrity: sha512-p4a9I6X6nu6IhoGmBqAcbJy1mlC4j27vEPZX9F4L4/vZT3Lyq1VkFHw/V/PUcB9Buo+DG3iHkT0x3Qya58zc3g==}
 
@@ -3478,7 +3486,7 @@ snapshots:
       '@types/node': 24.13.3
     optional: true
 
-  '@vitejs/plugin-react@4.7.0(vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13))':
+  '@vitejs/plugin-react@4.7.0(vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.1))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.29.7)
@@ -3486,7 +3494,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-beta.27
       '@types/babel__core': 7.20.5
       react-refresh: 0.17.0
-      vite: 6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)
+      vite: 6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -4546,7 +4554,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13):
+  vite@6.4.3(@types/node@24.13.3)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.1):
     dependencies:
       esbuild: 0.25.0
       fdir: 6.5.0(picomatch@4.0.7)
@@ -4559,6 +4567,7 @@ snapshots:
       fsevents: 2.3.3
       terser: 5.51.2
       tsx: 4.23.13
+      yaml: 2.9.1
 
   watchpack@2.5.2:
     dependencies:
@@ -4616,6 +4625,8 @@ snapshots:
   yallist@3.1.1: {}
 
   yallist@4.0.0: {}
+
+  yaml@2.9.1: {}
 
   yauzl@2.10.0:
     dependencies:
