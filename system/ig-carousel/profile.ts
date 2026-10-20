@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,9 +33,29 @@ export function resolveProfilesRoot(): string {
   return isAbsolute(expanded) ? expanded : join(REPO_ROOT, expanded);
 }
 
-/** Absolute path to a profile's folder: `<profiles root>/<slug>/`. */
+/** `lstat`, so a dangling or planted symlink at the marker path still counts as a cutover marker. */
+function hasCutoverMarker(dir: string): boolean {
+  try {
+    lstatSync(join(dir, ".storage-cutover"));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Absolute path to a profile's folder: `<profiles root>/<slug>/`.
+ *
+ * Throws for a brand that was cut over to storage (D12): its folder holds `.storage-cutover`, and every legacy
+ * reader goes through here, so none can silently serve stale folder data. The folder itself is never deleted.
+ */
 export function resolveProfileDir(profile: string): string {
-  return join(resolveProfilesRoot(), profile);
+  const dir = join(resolveProfilesRoot(), profile);
+  if (hasCutoverMarker(dir)) {
+    throw new Error(`Profile "${profile}" was cut over to storage; its folder is no longer a source. Use the \`brand\` CLI (storage package) instead.`);
+  }
+  return dir;
 }
 
 /**

@@ -41,6 +41,8 @@ export interface BrandRepository {
   getBySlug(slug: string): Promise<Versioned<Brand>>;
   create(input: { slug: string; displayName: string }, meta: WriteMeta): Promise<Versioned<Brand>>;
   update(id: string, patch: { displayName?: string }, meta: WriteMeta): Promise<Versioned<Brand>>;
+  /** Sets `cutoverAt` (the D12 cutover); idempotent, a later call keeps the first timestamp. Not reversible through this interface. */
+  markCutover(id: string, meta: WriteMeta): Promise<Versioned<Brand>>;
   archive(id: string, meta: WriteMeta): Promise<Versioned<Brand>>;
   unarchive(id: string, meta: WriteMeta): Promise<Versioned<Brand>>;
 }

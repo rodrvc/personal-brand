@@ -245,11 +245,31 @@ is unset or unreachable, and use a throwaway `test_<random>` schema.
 ```bash
 pnpm --filter @personal-brand/storage brand import --from profiles/example --dry-run
 pnpm --filter @personal-brand/storage brand import --from profiles/example
+pnpm --filter @personal-brand/storage brand cutover example --confirm example --partial
 ```
 
-Run it from the repo root as `brand_owner` (`DATABASE_URL`); relative `--from`
-paths resolve against where you ran it (`INIT_CWD`, set by pnpm) and `~` is
-expanded. `import` is read-only and idempotent. Real writes to a non-localhost database are refused until S8.
+Run these from the repo root, with `DATABASE_URL` set to a `brand_owner`
+connection (the importer writes guidance and import runs, which are
+owner-only).
+
+- `--from` is the brand's folder; its name is the brand slug. A relative path
+  resolves against where you ran the command (pnpm sets `INIT_CWD`), and a
+  leading `~` is expanded.
+- `--dry-run` reads the folder and the database, prints what would change and
+  writes nothing.
+- Without it, `import` is idempotent: an unchanged source is a no-op, a
+  changed source updates only rows the importer itself wrote last, and anything
+  edited in storage since is reported as a conflict (exit 1) and left alone.
+  The folder is never modified or deleted.
+- Real writes to a non-localhost database are refused until the backup drill
+  exists (S8).
+- `cutover <slug> --confirm <slug>` runs a final import, verifies it and then
+  marks the brand cut over and writes `.storage-cutover` in its folder (the
+  folder is not deleted). It refuses while anything the importer does not carry
+  yet (assets, carousels, reels, ideas, content...) is left in the folder, so
+  nothing is stranded; `--partial` acknowledges that. Until S7b lands, the
+  example brands are cut over with `--partial`. Without `--from`, the folder is
+  `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
 
 ## Specs (OpenSpec)
 

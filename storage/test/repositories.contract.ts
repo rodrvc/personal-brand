@@ -561,6 +561,19 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.ok(rows.some((row) => row.id === current[0].id));
     },
 
+    async "brands: markCutover sets cutoverAt once, idempotently, with a revision"(r, clock) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const done = await r.brands.markCutover(b.id, meta({ expectedVersion: 1, source: "cli", reason: "structural" }));
+      assert.equal(done.version, 2);
+      assert.equal(done.value.cutoverAt, "2026-01-01T00:00:00.000Z");
+      assert.equal((await r.brands.getBySlug("acme-coffee")).value.cutoverAt, done.value.cutoverAt);
+      await assert.rejects(() => r.brands.markCutover(b.id, meta({ expectedVersion: 1 })), VersionConflictError);
+      clock.t += MIN;
+      const again = await r.brands.markCutover(b.id, meta({ expectedVersion: 2, source: "cli", reason: "structural" }));
+      assert.equal(again.value.cutoverAt, done.value.cutoverAt, "a second call keeps the first timestamp");
+      assert.equal((await r.revisions.list("brand", b.id)).length, 3);
+    },
+
     async "import runs: insert-only log written by the owner role"(r, clock, h) {
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
       const run = (n: number) => ({ brandId: a.id, sourceKind: "folder" as const, sourceRootHash: sha(`root${n}`), startedAt: new Date(clock.t + n * 1000).toISOString(), finishedAt: new Date(clock.t + n * 1000 + 1).toISOString(), report: { n } });
@@ -578,6 +591,9 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       const rule: RuleInput = { kind: "slide_count", params: { max: 5 }, severity: "error", appliesTo: ["carousel"], message: "m" };
       await assert.rejects(() => r.rules.create(a.id, rule, meta()), /permission denied/);
       await assert.rejects(() => r.guidance.put(a.id, "x", { description: "", body: "b" }, meta()), /permission denied/);
+      for (const statement of ["UPDATE import_runs SET report = '{}'", "DELETE FROM import_runs"]) {
+        await assert.rejects(() => h.rawSql!.unsafe(statement), /permission denied/, `app role: ${statement}`);
+      }
       await assert.rejects(() => r.importRuns.record({ brandId: a.id, sourceKind: "folder", sourceRootHash: sha("r"), startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", report: {} }), /permission denied/);
       const created = await h.owner.rules.create(a.id, rule, meta());
       await assert.rejects(() => r.rules.disable(created.id, meta({ expectedVersion: 1 })), /permission denied/);

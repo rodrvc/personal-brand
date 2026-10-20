@@ -469,7 +469,7 @@ hash).
 
 1. **Timing:** no real brand is cut over until every consumer it uses has
    been switched to storage (end of S11b). Example brands are cut over in
-   dev from S7a on.
+   dev from S7a2 on.
 2. **Transition:** until a brand is cut over, switched consumers serve it
    from its folder through a single resolver,
    `resolveBrandSource(slug) -> "storage" | "folder"` (storage package,
@@ -490,6 +490,17 @@ hash).
    non-localhost `DATABASE_URL` until `restore_drills` exists (S8), and
    `--report out.json` is deferred to S8. The cutover itself (steps 2-4) is
    S7a2.
+   *As built in S7a2:* `markCutover` is idempotent (a second call keeps the
+   first `cutover_at`). The marker is created with `wx` and detected with
+   `lstat`, so a planted or dangling symlink is never followed. One
+   exception to "every legacy reader goes through `resolveProfileDir`":
+   `app/src-tauri/src/main.rs` still reads `profiles/<slug>` directly; it is
+   retired with `app/` (decision 10). `--report out.json` stays deferred to
+   S8. `cutover` refuses while the importer has left anything behind
+   (`notImported` or `skipped`, minus files that are never imported by
+   design) unless `--partial` is passed; the examples are cut over with
+   `--partial` until S7b. A concurrent cutover that already wrote the same
+   brand's marker counts as success.
 5. S12 removes the folder path and the resolver once every real brand is cut
    over.
 
@@ -552,7 +563,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S6c | `0006`: `recipe_runs`, `run_artifacts` + repos | ~400 | S6b | concurrent run/artifact tests |
 | S6d | `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~300 | S6c | usage/verify tests on memory storage |
 | S7a | CLI skeleton (bin, `runCli`, strict per-verb flag parser from #116) + `import` verb with the backup gate; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs` (record only) | ~520 | S3, S4 | example brands import, re-run is a no-op, conflicts are reported and never overwritten |
-| S7a2 | `cutover` verb + `.storage-cutover` marker + `markCutover`; `resolveBrandSource`; `resolveProfileDir` refusal; `verifyBrand` (re-read and compare) | ~230 | S7a | cutover writes marker + `cutover_at`, legacy readers refuse it |
+| S7a2 | `cutover` verb + `.storage-cutover` marker + `markCutover`; `resolveBrandSource`; `resolveProfileDir` refusal; `verifyBrand` (re-read and compare); `--partial` guard | ~480 | S7a | cutover writes marker + `cutover_at`, legacy readers refuse it |
 | S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass; ideas backlog -> `content_items`; `import_runs.list` | ~590 | S7a, S5, S6c | verification clean on examples |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
