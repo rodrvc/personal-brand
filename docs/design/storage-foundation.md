@@ -441,13 +441,13 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `templates/<id>.json` | `brand_documents(template, <id>)` |
 | `recipes/*.yaml` | `brand_recipes`; `image_hosts` also proposed as an `image_hosts` rule |
 | `skills/*/SKILL.md` | `brand_guidance` |
-| `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved) |
+| `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved); `index.json` is a rebuildable cache and is not imported (S7b2a) |
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
 | `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
 | reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
-| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; S7b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
+| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; S7b2b). `content/drafts` and `content/published` become `content_items` in S7b1b |
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -499,7 +499,7 @@ hash).
    S8. `cutover` refuses while the importer has left anything behind
    (`notImported` or `skipped`, minus files that are never imported by
    design) unless `--partial` is passed; the examples are cut over with
-   `--partial` until S7b2. A concurrent cutover that already wrote the same
+   `--partial` until S7b2b. A concurrent cutover that already wrote the same
    brand's marker counts as success.
    *As built in S7b1:* `cutover` re-checks the real pass report against
    `--partial`, and a marker that does not name the brand is refused, not
@@ -547,8 +547,38 @@ hash).
    against mistakes, not a security boundary: anyone who can run the CLI can
    set an env var.
 
-   **S7b2 (next slice, design only).** Seam: S7b1 is everything that lands in
-   Postgres rows alone; S7b2 is everything that needs blobs. It adds
+   *As built in S7b2a:* the S7b1b review follow-ups, then `assets/**`.
+   A refused or raced item is reported in `ImportReport.conflicts` (one
+   `<key> (<reason>)` per conflict, printed as "Conflictos:"), no longer in
+   `skipped`; a row created between classify and write is a conflict, not an
+   abort. A published piece's date key is `publicado`, `published_at`,
+   `publishedAt` or `fecha`. Carousel writes were simplified: a new carousel
+   is created straight in its status, and when only chat follows the create a
+   same-status status write closes the pass instead of saving the document a
+   second time. The importer takes an optional `BlobStore` (the CLI builds it
+   from the editor's `S3_*` variables; tests inject a fake). **Assets mapping
+   (neutral, no owner decision needed):** the folder library's own scan rules
+   are replayed, because `index.json` is a cache: every non-`.json` file is
+   one asset keyed by the first 16 hex of its sha256; `generated/` means
+   origin `ai`, status `candidate` and the `generated/<id>.json` sidecar goes
+   to `generation`; `references/` means origin `reference`, status
+   `candidate`; fonts take their family from `<name>.meta.json` or the file
+   name; `meta/<id>.json` (the user's choice) overrides kind, tags and status;
+   mime comes from the bytes (PNG / JPEG / WebP) then the extension; width and
+   height are borrowed from `index.json` when it has them, else null (the
+   importer does not parse image headers). Same bytes at two paths are one
+   asset (first path in sorted order wins, the other is reported); a stray
+   `.json` is reported. Blobs go through `putBlob`, then `assets.register`;
+   a changed sidecar later `update`s kind, tags, status and family. Without a
+   blob store the whole `assets/` area is reported in `skipped` and nothing is
+   imported. `verifyBrand` re-downloads each asset blob and compares its
+   sha256 (`<key> (blob)` when missing or different), and `cutover` passes the
+   store to it.
+
+   **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
+   Postgres rows alone; S7b2 is everything that needs blobs. S7b2a (above)
+   is the follow-ups plus assets. S7b2b is the rest and needs owner
+   decisions first (see §14, Q-S7b2b). It adds
    `assets/**` (+ `index.json`, sidecars) as blobs through `putBlob` and
    `assets` rows with preserved ids, flat `carousels/*.json` and
    `reels/**/week-input.json` + `storyboard.yaml` as `recipe_runs`, TTS mp3 +
@@ -622,7 +652,8 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7a2 | `cutover` verb + `.storage-cutover` marker + `markCutover`; `resolveBrandSource`; `resolveProfileDir` refusal; `verifyBrand` (re-read and compare); `--partial` guard | ~480 | S7a | cutover writes marker + `cutover_at`, legacy readers refuse it |
 | S7b1 | Owner guard for non-example brands (`import`/`cutover`, dry run included); S7a2 review follow-ups (`--partial` re-check, marker validation, readability); `import_runs.list` | ~240 | S7a2 | non-example brands are refused before any DB or folder access; runs read back newest first |
 | S7b1b | Importer part 2a: templates, rule proposals (reported), carousels + revisions + chat, ideas/drafts/published -> `content_items`, with tests on a temp example copy | ~460 | S7b1, S6a, S6b | examples import, read back clean and re-import as a no-op |
-| S7b2 | Importer part 2b: `assets/**` + `index.json` + sidecars -> blobs + `assets`; flat `carousels/*.json`, `reels/**` -> `recipe_runs`; reel TTS cache and clips -> blobs + `tts_cache` / `run_artifacts`; `outputs/**` -> `exports` + keys; everything else -> `legacy/<importRunId>/` blobs; blob-level verification pass (re-download, compare sha256) | ~500 | S7b1b, S5, S6c | verification clean on examples; `cutover` of an example needs no `--partial` |
+| S7b2a | S7b1b review follow-ups (`conflicts` reasons, create-race, simpler carousel writes, shared frontmatter split, plural refusal, deferred tests) + importer part 2b-1: `assets/**` + sidecars -> blobs + `assets` rows, `BlobStore` wiring in the CLI, blob-level verification of assets | ~560 | S7b1b, S5 | example assets import, verify re-downloads each blob, an example without reels cuts over with no `--partial` |
+| S7b2b | Importer part 2b-2 (blocked on owner answers, §14): flat `carousels/*.json`, `reels/**` -> `recipe_runs`; reel TTS cache and clips -> blobs + `tts_cache` / `run_artifacts`; `outputs/**` -> `exports` + keys; everything else -> `legacy/<importRunId>/` blobs; blob verification for those | ~450 | S7b2a, S6c | verification clean on examples; `cutover` of an example needs no `--partial` at all |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2 | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
@@ -644,6 +675,20 @@ via `getStream`). Everything mirror-based is not salvageable; close #116
 when S7a lands.
 
 ## 14. Risks and open questions for the owner
+
+**Q-S7b2b (blocks S7b2b; the design above does not settle these).**
+(1) `recipe_runs.recipe` and period for the flat `carousels/*.json` and
+`reels/week-input.json`: neither file names its recipe nor its dates, so
+which recipe slug, and which `period_start/end` (the `reels/<date>/` folder
+name, the earliest item date, the file's mtime)? (2) Where TTS mp3 + sidecar
+and rendered clips sit inside a brand folder, and how a clip's `inputs_hash`
+and a `narration_hash` are recomputed without importing engine code.
+(3) `outputs/**` to `exports`: exports belong to a carousel and a version
+(`carouselExportKey`), so which carousel does a loose output file belong to,
+and are unattributable files `legacy/` blobs? (4) `legacy/<importRunId>/`
+needs the run id before the run is recorded, while a re-run must stay
+idempotent: pre-generate the id and accept a new prefix per run, or key
+legacy blobs by content instead?
 
 **Risks** (mitigations are in the sections cited)
 

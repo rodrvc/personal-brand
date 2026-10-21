@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 
-import { NotFoundError, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
+import { NotFoundError, type BlobStore, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
 import type { MemoryRepositories } from "../memory/index.ts";
 
 /** The Postgres and memory repository sets are structurally identical, so the importer is typed once against the memory one. */
@@ -18,6 +18,8 @@ export interface Item {
   payload: unknown;
   read(brandId: string): Promise<{ id: string; version: number; value: unknown } | null>;
   write(brandId: string, expectedVersion: number | null, meta: WriteMeta): Promise<unknown>;
+  /** Blob-level check for items that own bytes in the bucket: true when every blob is stored and hashes to what the row says. */
+  verifyBlobs?(brandId: string): Promise<boolean>;
 }
 
 /** What a collector needs: the brand folder (`root` is its real path), storage, and where to report what it passes over. */
@@ -25,6 +27,8 @@ export interface CollectContext {
   dir: string;
   root: string;
   repos: ImportRepos;
+  /** Where blobs go; without it the items that need blobs are passed over and reported. */
+  blobs?: BlobStore;
   skipped: string[];
   /** Top-level folder entries some collector took responsibility for; the rest are reported as not imported. */
   handled: Set<string>;
@@ -54,3 +58,11 @@ export function readRegular(root: string, file: string, rel: string, skipped: st
 /** Lowercase `[a-z0-9-]` slug of free text (accents folded), or "" when nothing usable is left. */
 export const slugify = (text: string, max = 60): string =>
   text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, max).replace(/-+$/, "");
+
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+
+/** Splits a leading `---` YAML block (still unparsed, `null` when there is none) from the markdown body. */
+export function splitFrontmatter(raw: string): { yaml: string | null; body: string } {
+  const m = FRONTMATTER.exec(raw);
+  return m ? { yaml: m[1], body: m[2] } : { yaml: null, body: raw };
+}

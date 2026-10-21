@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import postgres from "postgres";
 
 import { resolveBrandSource } from "../src/brand-source.ts";
-import { isLocalDatabase, runCli } from "../src/cli/brand.ts";
+import { FakeObjectStore } from "../src/blob/index.ts";
+import { blobKey } from "../src/contracts/index.ts";
+import { blobStoreFromEnv, isLocalDatabase, runCli } from "../src/cli/brand.ts";
 import { verifyBrand } from "../src/import/importer.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
@@ -30,7 +32,8 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const env = { USER: "tester" };
   let recorded = 0;
   const spied = { ...repos, importRuns: { ...repos.importRuns, record: (i: Parameters<typeof repos.importRuns.record>[0]) => (recorded++, repos.importRuns.record(i)) } };
-  const run = (...argv: string[]) => runCli(argv, env, spied);
+  const blobs = new FakeObjectStore();
+  const run = (...argv: string[]) => runCli(argv, env, spied, blobs);
   const dir = fixture(label, "example-coffee");
   const REMOTE = { DATABASE_URL: "postgres://u:p@db.example.com:5432/x" };
 
@@ -54,6 +57,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match(dry.lines.join("\n"), /simulacro/);
   assert.equal((await runCli(["import", `--from=example-coffee`, "--dry-run"], { INIT_CWD: join(work, label) }, repos)).exitCode, 0, "relative --from resolves against INIT_CWD");
   assert.deepEqual(await repos.brands.list(), [], "a dry run writes nothing, not even the brand");
+  assert.match((await runCli(["import", "--from", dir, "--dry-run"], env, spied)).lines.join("\n"), /Omitidos: .*assets \(no blob store configured: nothing imported\)/, "without a bucket the assets are reported, never silently dropped");
 
   const first = await run("import", "--from", dir);
   assert.equal(first.exitCode, 0, first.lines.join("\n"));
@@ -63,11 +67,11 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match((await repos.documents.get(brand.id, "identity", "", identity)).value as string, /^# Perfil/);
   assert.ok((await repos.documents.get(brand.id, "tokens", "", identity)).value);
   assert.ok((await repos.documents.get(brand.id, "config", "", identity)).value);
-  assert.match(first.lines.join("\n"), /no importado:.*assets/);
+  assert.match(first.lines.join("\n"), /no importado: config\.local\.yaml\.example, reels\./);
   const revisions = (await repos.revisions.list("brand_document", (await repos.documents.get(brand.id, "spec", "", identity)).id)).length;
 
   const again = await run("import", "--from", dir);
-  assert.match(again.lines.join("\n"), /Creados 0, actualizados 0, sin cambios 10, conflictos 0/);
+  assert.match(again.lines.join("\n"), /Creados 0, actualizados 0, sin cambios 13, conflictos 0/);
   assert.equal((await repos.documents.get(brand.id, "spec", "", identity)).version, 1, "re-run is a no-op");
   assert.equal((await repos.revisions.list("brand_document", (await repos.documents.get(brand.id, "spec", "", identity)).id)).length, revisions);
   assert.equal(recorded, 2, "each real pass is logged");
@@ -106,7 +110,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await resolveBrandSource(repos.brands, "example-other-shop"), "folder");
   const guarded = await run("cutover", "example-other-shop", "--confirm", "example-other-shop", "--from", clean);
   assert.equal(guarded.exitCode, 1, "data the importer does not carry yet blocks a cutover without --partial");
-  assert.match(guarded.lines[0], /sin importar \(.*assets.*\).*--partial/);
+  assert.match(guarded.lines[0], /sin importar \(.*reels.*\).*--partial/);
   assert.doesNotMatch(guarded.lines[0], /config\.local/, "files never imported by design are not listed");
   await assert.rejects(() => repos.brands.getBySlug("example-other-shop"), /Not found/);
   const cut = await run("cutover", "example-other-shop", "--confirm", "example-other-shop", "--partial", "--from", clean);
@@ -264,7 +268,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.deepEqual([carousel.value.title, carousel.value.status], ["Third", "exported"]);
   assert.deepEqual((await repos.revisions.list("carousel", carousel.id)).map((r) => [r.version, r.reason, (r.body as { document: { title: string } }).document.title]), [[1, "import", "First"], [2, "import", "Second"], [3, "import", "Third"], [4, "import", "Third"]], "history oldest first, current last, then the status move");
   assert.deepEqual((await repos.chat.list(carousel.id)).map((m) => m.body.text), ["hi", "hello"]);
-  assert.match((await run("import", "--from", rich)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 13, conflictos 0/, "re-import is a no-op");
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 16, conflictos 0/, "re-import is a no-op");
   assert.equal((await repos.chat.list(carousel.id)).length, 2);
   // A new snapshot and chat line arrive later: only they are added, in order.
   writeFileSync(join(car, "versions", "2026-01-03T00-00-00-000Z.json"), doc("Fourth", "draft"));
@@ -297,7 +301,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(flakyRun.exitCode, 1);
   assert.equal((await titles()).includes("Sixth"), true, "the first snapshot was stored before the interruption");
   assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 1,/);
-  assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 0, sin cambios 11/);
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 0, sin cambios 14/);
   const all = await titles();
   assert.deepEqual([all.filter((t) => t === "Sixth").length, all.filter((t) => t === "Seventh").length], [1, 1], "no snapshot is stored twice");
 
@@ -324,9 +328,145 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const moved = await run("import", "--from", mover);
   assert.equal(moved.exitCode, 1, moved.lines.join("\n"));
   assert.match(moved.lines.join("\n"), /conflictos 1/);
-  assert.match(moved.lines.join("\n"), /content:idea-promote-me \(cannot publish from idea/);
+  assert.match(moved.lines.join("\n"), /Conflictos: content:idea-promote-me \(cannot publish from idea/);
+  assert.doesNotMatch(moved.lines.join("\n"), /Omitidos:.*idea-promote-me/, "a refused move is a conflict with its reason, not a skipped entry");
   const kept = (await repos.content.get((await repos.brands.getBySlug("example-mover-shop")).id, "idea-promote-me")).value;
   assert.deepEqual([kept.stage, kept.title, kept.bodyMd], ["idea", "Promote me", ""], "the refused move wrote nothing");
+
+  // Assets: bytes become blobs, rows get the folder library's classification, and every blob is re-downloaded to verify.
+  const lib = fixture(label, "example-assets-shop");
+  const png = (tag: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const put = (rel: string, data: Buffer | string) => {
+    mkdirSync(dirname(join(lib, "assets", rel)), { recursive: true });
+    writeFileSync(join(lib, "assets", rel), data);
+  };
+  const [logo, gen] = [png("logo"), png("generated")];
+  const [logoId, genId] = [sha(logo).slice(0, 16), sha(gen).slice(0, 16)];
+  put("copy/logo-again.png", logo);
+  put("logo.png", logo);
+  put("generated/piece.png", gen);
+  put(`generated/${genId}.json`, JSON.stringify({ prompt: "a prompt", model: "m" }));
+  put("fonts/Sample-Regular.woff2", "font-a");
+  put("fonts/Other-Bold.woff2", "font-b");
+  put("fonts/Other-Bold.meta.json", JSON.stringify({ family: "Other Family" }));
+  put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: ["ink:dark"], status: "approved" }));
+  put("index.json", JSON.stringify({ entries: [{ id: logoId, w: 120, h: 40 }] }));
+  put("notes.json", "{}");
+  put("raw.bin", "plain");
+  symlinkSync(join(work, "outside.yaml"), join(lib, "assets", "linked.png"));
+  const libRun = await run("import", "--from", lib);
+  assert.equal(libRun.exitCode, 0, libRun.lines.join("\n"));
+  assert.match(libRun.lines.join("\n"), /Creados 18,/);
+  for (const reason of [/assets\/logo\.png \(same content as assets\/copy\/logo-again\.png\)/, /assets\/linked\.png \(not a regular file\)/, /assets\/notes\.json \(not an asset/]) assert.match(libRun.lines.join("\n"), reason);
+  const lid = (await repos.brands.getBySlug("example-assets-shop")).id;
+  const asset = async (id: string) => (await repos.assets.get(lid, id)).value;
+  assert.deepEqual(await asset(logoId).then((a) => [a.kind, a.tags, a.status, a.origin, a.mime, a.width, a.height]), ["logo", ["ink:dark"], "approved", "manual", "image/png", 120, 40], "the user's meta sidecar wins; the index only lends its size");
+  assert.deepEqual(await asset(genId).then((a) => [a.origin, a.status, a.generation]), ["ai", "candidate", { prompt: "a prompt", model: "m" }]);
+  const fonts = (await repos.assets.list(lid, { kind: "font" })).map((a) => [a.value.family, a.value.mime]).sort();
+  assert.deepEqual(fonts, [["Other Family", "font/woff2"], ["Sample", "font/woff2"]]);
+  assert.deepEqual((await blobs.get(blobKey(lid, sha(logo)))).body, logo);
+  assert.deepEqual(await verifyBrand(repos, lib, blobs), []);
+  const bare = await verifyBrand(repos, lib, new FakeObjectStore());
+  assert.equal(bare.length, 8);
+  assert.ok(bare.every((k) => /^asset:[0-9a-f]{16} \(blob\)$/.test(k)), "a missing blob is a dirty verification");
+  assert.match((await run("import", "--from", lib)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 18, conflictos 0/);
+
+  put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: ["ink:light"], status: "approved" }));
+  assert.match((await run("import", "--from", lib)).lines.join("\n"), /actualizados 1,/);
+  assert.deepEqual((await asset(logoId)).tags, ["ink:light"]);
+  const logoRow = await repos.assets.get(lid, logoId);
+  await repos.assets.update(lid, logoId, { status: "hidden" }, { expectedVersion: logoRow.version, author: "editor", source: "editor", reason: "save" });
+  put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: [], status: "approved" }));
+  const hidden = await run("import", "--from", lib);
+  assert.equal(hidden.exitCode, 1);
+  assert.match(hidden.lines.join("\n"), new RegExp(`Conflictos: asset:${logoId} \\(storage changed since the last import\\)`));
+  assert.equal((await asset(logoId)).status, "hidden", "a reclassification made in storage is never overwritten");
+
+  // The folder library's scan rules apply anywhere in the path; a bad font sidecar falls back to the file name; orphan sidecars are reported.
+  const [nested, late] = [png("nested"), png("late")];
+  put("generated/refs/nested.png", nested);
+  put("references/generated/both.png", png("both"));
+  put("fonts/Fallback-Bold.woff2", "font-c");
+  put("fonts/Fallback-Bold.meta.json", JSON.stringify({ family: 42 }));
+  put("meta/0123456789abcdef.json", "{}");
+  put("late.png", late);
+  const lateId = sha(late).slice(0, 16);
+  const scan = await run("import", "--from", lib);
+  assert.match(scan.lines.join("\n"), /assets\/meta\/0123456789abcdef\.json \(sidecar without an asset\)/);
+  assert.deepEqual(await asset(sha(nested).slice(0, 16)).then((a) => [a.origin, a.status]), ["ai", "candidate"]);
+  assert.deepEqual(await asset(sha(png("both")).slice(0, 16)).then((a) => [a.origin, a.status]), ["reference", "candidate"], "references wins over generated");
+  assert.ok((await repos.assets.list(lid, { kind: "font" })).some((a) => a.value.family === "Fallback"));
+  assert.deepEqual(await asset(lateId).then((a) => [a.width, a.height]), [null, null]);
+  put("index.json", JSON.stringify({ entries: [{ id: logoId, w: 120, h: 40 }, { id: lateId, w: 64, h: 32 }] }));
+  const resized = await run("import", "--from", lib);
+  assert.equal(resized.exitCode, 1);
+  assert.match(resized.lines.join("\n"), new RegExp(`Conflictos: .*asset:${lateId} \\(asset ${lateId}: width, height changed in the folder; registered fields cannot be updated\\)`));
+  assert.deepEqual(await asset(lateId).then((a) => [a.width, a.height]), [null, null], "registered fields are never rewritten");
+
+  // An example with everything imported cuts over without --partial, blobs verified.
+  const whole = fixture(label, "example-whole-shop");
+  for (const left of ["reels", "carousels", "content/drafts/README.md", "content/published/README.md"]) rmSync(join(whole, left), { recursive: true, force: true });
+  const wholeCut = await run("cutover", "example-whole-shop", "--confirm", "example-whole-shop", "--from", whole);
+  assert.equal(wholeCut.exitCode, 0, wholeCut.lines.join("\n"));
+  assert.equal((await repos.assets.list((await repos.brands.getBySlug("example-whole-shop")).id)).length, 3);
+
+  // A row created between classify and write is a conflict with its reason, not an aborted pass.
+  for (const [what, name] of [["content", "example-race-content-shop"], ["carousels", "example-race-carousel-shop"]] as const) {
+    const shop = fixture(label, name);
+    mkdirSync(join(shop, "carousels", "raced"), { recursive: true });
+    writeFileSync(join(shop, "carousels", "raced", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Raced", slides: [] }));
+    let raced = false;
+    const competing = { ...spied, content: { ...repos.content }, carousels: { ...repos.carousels } } as MemoryRepositories;
+    const real = repos[what].create.bind(repos[what]) as (...a: unknown[]) => Promise<unknown>;
+    (competing[what] as { create: unknown }).create = async (...a: unknown[]) => {
+      if (!raced) {
+        raced = true;
+        const input = a[1] as Record<string, unknown>;
+        await real(a[0], { ...input, title: "Created elsewhere" }, { expectedVersion: null, author: "editor", source: "editor", reason: "save" });
+      }
+      return real(...a);
+    };
+    const out = await runCli(["import", "--from", shop], env, competing, blobs);
+    assert.equal(out.exitCode, 1, out.lines.join("\n"));
+    assert.match(out.lines.join("\n"), /Conflictos: \S+ \(created in storage during the pass\)/);
+    assert.equal((await repos.importRuns.list((await repos.brands.getBySlug(name)).id))[0].report.aborted, undefined, "the pass finished");
+  }
+
+  // Carousel write paths: a new draft with chat, a new non-draft without, a diverged chat log, and symlinked history.
+  const wr = fixture(label, "example-writes-shop");
+  const cdoc = (title: string, status: string) => JSON.stringify({ schemaVersion: 1, title, status, slides: [] });
+  const addCarousel = (id: string, document: string, chat?: string) => {
+    mkdirSync(join(wr, "carousels", id), { recursive: true });
+    writeFileSync(join(wr, "carousels", id, "carousel.json"), document);
+    if (chat) writeFileSync(join(wr, "carousels", id, "chat.jsonl"), chat);
+  };
+  addCarousel("with-chat", cdoc("Chatty", "draft"), '{"role":"user","text":"one"}\n{"role":"user","text":"two"}\n');
+  addCarousel("scheduled", cdoc("Plain", "scheduled"));
+  addCarousel("linked", cdoc("Linked", "draft"));
+  mkdirSync(join(wr, "carousels", "linked", "versions"));
+  writeFileSync(join(work, "outside.json"), cdoc("Outside", "draft"));
+  symlinkSync(join(work, "outside.json"), join(wr, "carousels", "linked", "versions", "a.json"));
+  mkdirSync(join(work, "outside-versions"), { recursive: true });
+  writeFileSync(join(work, "outside-versions", "b.json"), cdoc("Outside", "draft"));
+  addCarousel("linked-dir", cdoc("Linked dir", "draft"));
+  symlinkSync(join(work, "outside-versions"), join(wr, "carousels", "linked-dir", "versions"));
+  const wrRun = await run("import", "--from", wr);
+  assert.equal(wrRun.exitCode, 0, wrRun.lines.join("\n"));
+  assert.match(wrRun.lines.join("\n"), /carousels\/linked\/versions\/a\.json \(not a regular file\)/);
+  assert.match(wrRun.lines.join("\n"), /carousels\/linked-dir\/versions\/b\.json \(outside the folder\)/);
+  const wid = (await repos.brands.getBySlug("example-writes-shop")).id;
+  const chatty = await repos.carousels.get(wid, "with-chat", identity);
+  assert.equal((await repos.revisions.list("carousel", chatty.id)).length, 2, "a new draft with chat is created once, then closed by one status write (no second copy of the document)");
+  assert.equal((await repos.chat.list(chatty.id)).length, 2);
+  const plain = await repos.carousels.get(wid, "scheduled", identity);
+  assert.deepEqual([plain.value.status, (await repos.revisions.list("carousel", plain.id)).length], ["scheduled", 1], "a new carousel is created straight in its status");
+  writeFileSync(join(wr, "carousels", "with-chat", "chat.jsonl"), '{"role":"user","text":"other"}\n{"role":"user","text":"two"}\n');
+  writeFileSync(join(wr, "carousels", "with-chat", "carousel.json"), cdoc("Chatty 2", "draft"));
+  const diverged = await run("import", "--from", wr);
+  assert.equal(diverged.exitCode, 1);
+  assert.match(diverged.lines.join("\n"), /Conflictos: carousel:with-chat \(chat log diverged from storage\)/);
+  assert.deepEqual([(await repos.carousels.get(wid, "with-chat", identity)).value.title, (await repos.chat.list(chatty.id)).map((m) => m.body.text)], ["Chatty", ["one", "two"]], "a diverged chat log is never rewritten");
 
   // A marker that names another brand is never trusted or overwritten.
   const wrong = fixture(label, "example-wrong-shop");
@@ -363,6 +503,13 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   for (const argv of forBrand("example-alias")) await refusedBy(argv, withOptIn());
   for (const argv of forBrand("example-alias")) await refusedBy(argv, withOptIn("example-alias", "example-alias"));
 
+  // Several blocked names are listed with the plural verb.
+  const two = join(profilesDir, "acme-two");
+  cpSync(target, two, { recursive: true });
+  symlinkSync(two, join(profilesDir, "acme-one"));
+  const plural = await runCli(["import", "--from", join(profilesDir, "acme-one")], { USER: "tester" }, untouchable);
+  assert.deepEqual(plural.lines, ['Las marcas "acme-one", "acme-two" no son de ejemplo: requieren la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.']);
+
   const approved = fixture(label, "acme-demo");
   const both = { USER: "tester", BRAND_OWNER_OPT_IN: "acme-demo", BRAND_PROFILES_DIR: profilesDir };
   const passed = await runCli(["import", "--from", approved, "--dry-run", "--owner-opt-in", "acme-demo"], both, repos);
@@ -382,6 +529,10 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
 
   console.log(`  ok - ${label}: import, no-op re-run, conflict, cutover`);
 }
+
+// The bucket is configured only when all three required S3_* variables are set.
+assert.equal(blobStoreFromEnv({ S3_BUCKET: "b", S3_ACCESS_KEY_ID: "k" }), undefined);
+assert.ok(blobStoreFromEnv({ S3_BUCKET: "b", S3_ACCESS_KEY_ID: "k", S3_SECRET_ACCESS_KEY: "s" }));
 
 // Hosts the backup gate treats as local, and everything else (lookalikes, multi-host, sockets, `?host=`, short IPv4) as remote.
 for (const url of ["postgres://u:p@localhost:5442/db", "postgres://u@127.0.0.1/db", "postgres://u@[::1]:5432/db"]) assert.equal(isLocalDatabase(url), true, url);

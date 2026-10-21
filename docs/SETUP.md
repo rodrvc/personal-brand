@@ -248,6 +248,12 @@ pnpm --filter @personal-brand/storage brand import --from profiles/example
 pnpm --filter @personal-brand/storage brand cutover example --confirm example --partial
 ```
 
+`assets/**` are uploaded to the bucket, so a real import needs the same `S3_*`
+variables as the editor (`S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY`, optional `S3_ENDPOINT`, `S3_REGION`,
+`S3_FORCE_PATH_STYLE`). Without them the assets are not imported: they are
+listed under "Omitidos" and a cutover refuses until they are.
+
 These commands only accept the fictional example brands (slug `example` or
 `example-*`). Any other brand is refused, `--dry-run` included, before the
 database or the folder is touched. Only the owner can lift that, by hand and

@@ -3,10 +3,11 @@ import { basename, join, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { AlreadyExistsError, InvalidInputError, VersionConflictError, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
+import { AlreadyExistsError, InvalidInputError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
-import { canon, found, readRegular, sha256, type ImportRepos, type Item } from "./shared.ts";
+import { collectAssets } from "./assets.ts";
+import { canon, found, readRegular, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
 export type { ImportRepos };
 type Repos = ImportRepos;
@@ -14,7 +15,8 @@ type Repos = ImportRepos;
 /**
  * What a pass did (or, in a dry run, would do) with one item:
  * `created` is new in storage, `updated` replaced a row the importer itself wrote last, `unchanged` has the same
- * source hash as the last import, and `conflict` was left alone because storage changed since (or a write raced).
+ * source hash as the last import, and `conflict` was left alone because storage changed since, a write raced, or the
+ * repository refused the move (the reason is in `ImportReport.conflicts`).
  */
 export type Outcome = "created" | "updated" | "unchanged" | "conflict";
 
@@ -37,21 +39,23 @@ export interface ImportReport {
   notImported: string[];
   /** Entries inside imported areas that were passed over, each with the reason, so nothing disappears silently. */
   skipped: string[];
+  /** One `<key> (<reason>)` per item counted as `conflict`: why it was left alone. */
+  conflicts: string[];
   /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
   proposals: Array<{ kind: string; params: Record<string, unknown>; from: string }>;
   /** Set when the pass threw part-way; the counts then cover only the items done before it. */
   aborted?: string;
 }
 
-/** Splits `---` frontmatter (YAML) from the markdown body. */
+/** A guidance file as `{ description, body }`: the description comes from the YAML frontmatter. */
 function splitFrontmatter(raw: string): { description: string; body: string } {
-  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  const description = m ? (parseYaml(m[1]) as { description?: unknown } | null)?.description : undefined;
-  return { description: typeof description === "string" ? description.trim() : "", body: m ? m[2] : raw };
+  const { yaml, body } = splitYaml(raw);
+  const description = yaml === null ? undefined : (parseYaml(yaml) as { description?: unknown } | null)?.description;
+  return { description: typeof description === "string" ? description.trim() : "", body };
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos): { items: Item[]; notImported: string[]; skipped: string[]; proposals: ImportReport["proposals"] } {
+function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[]; notImported: string[]; skipped: string[]; proposals: ImportReport["proposals"] } {
   const items: Item[] = [];
   const skipped: string[] = [];
   const proposals: ImportReport["proposals"] = [];
@@ -144,8 +148,8 @@ function collect(dir: string, repos: Repos): { items: Item[]; notImported: strin
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
-  const ctx = { dir, root, repos, skipped, handled };
-  items.push(...collectContent(ctx), ...collectCarousels(ctx));
+  const ctx = { dir, root, repos, blobs, skipped, handled };
+  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx));
   const notImported = readdirSync(dir).filter((f) => !handled.has(f)).sort();
   return { items, notImported, skipped, proposals };
 }
@@ -155,27 +159,27 @@ function collect(dir: string, repos: Repos): { items: Item[]; notImported: strin
  * `source_hash`; any other version means storage was edited since (or the row never came from an import), which is a
  * conflict whatever the hash says, so a stored edit is never reported as unchanged or overwritten.
  */
-async function classify(item: Item, brandId: string | null, repos: Repos): Promise<{ outcome: Outcome; current: { version: number } | null }> {
+async function classify(item: Item, brandId: string | null, repos: Repos): Promise<{ outcome: Outcome; current: { version: number } | null; reason?: string }> {
   const current = brandId ? await item.read(brandId) : null;
   if (!current) return { outcome: "created", current: null };
   const lastImport = (await repos.revisions.list(item.entityType, current.id)).filter((r) => r.source === "import").at(-1);
-  if (lastImport?.version !== current.version) return { outcome: "conflict", current };
+  if (lastImport?.version !== current.version) return { outcome: "conflict", current, reason: "storage changed since the last import" };
   return { outcome: lastImport.sourceHash === item.hash ? "unchanged" : "updated", current };
 }
 
 /**
- * Imports documents, templates, guidance, recipes, content and carousels of a brand folder (slug = folder name). Idempotent per item via the
+ * Imports documents, templates, guidance, recipes, content, carousels and assets (blobs) of a brand folder (slug = folder name). Idempotent per item via the
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
-export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; now?: () => Date }): Promise<ImportReport> {
+export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; now?: () => Date }): Promise<ImportReport> {
   const dir = resolve(opts.from);
   const slug = basename(dir);
   const now = opts.now ?? (() => new Date());
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, proposals } = collect(dir, repos);
+  const { items, notImported, skipped, proposals } = collect(dir, repos, opts.blobs);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
 
   if (!opts.dryRun && !brand) {
@@ -184,7 +188,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
     brand = await repos.brands.create({ slug, displayName: slug }, meta).catch((e) => (e instanceof AlreadyExistsError ? repos.brands.getBySlug(slug) : Promise.reject(e)));
   }
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, proposals,
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, proposals, conflicts: [],
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256(items.map((i) => `${i.key}:${i.hash}`).join("\n")),
   };
@@ -194,14 +198,17 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
     for (const item of items) {
       const planned = await classify(item, brand?.id ?? null, repos);
       let outcome = planned.outcome;
+      if (planned.reason) report.conflicts.push(`${item.key} (${planned.reason})`);
       if (!opts.dryRun && (outcome === "created" || outcome === "updated")) {
         try {
           await item.write(brand!.id, planned.current?.version ?? null, { expectedVersion: null, author: opts.author, source: "import", reason: "import", sourceHash: item.hash });
         } catch (error) {
-          // A write landed between classify and write: report it and keep going, so the pass still leaves a report.
-          // The same for a row the repository refuses to move (e.g. an idea that would jump to published).
-          if (error instanceof InvalidInputError) skipped.push(`${item.key} (${error.message})`);
-          else if (!(error instanceof VersionConflictError)) throw error;
+          // A write landed between classify and write (a changed row, or one created meanwhile): report it and keep going,
+          // so the pass still leaves a report. The same for a row the repository refuses to move (e.g. an idea that would jump to published).
+          if (error instanceof InvalidInputError) report.conflicts.push(`${item.key} (${error.message})`);
+          else if (error instanceof AlreadyExistsError) report.conflicts.push(`${item.key} (created in storage during the pass)`); // before its parent class
+          else if (error instanceof VersionConflictError) report.conflicts.push(`${item.key} (storage changed during the pass)`);
+          else throw error;
           outcome = "conflict";
         }
       }
@@ -218,14 +225,19 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   return report;
 }
 
-/** Re-reads every item of the folder from storage and returns the keys whose stored value differs from the source. */
-export async function verifyBrand(repos: Repos, from: string): Promise<string[]> {
+/**
+ * Re-reads every item of the folder from storage and returns the keys whose stored value differs from the source;
+ * an item that owns blobs is also re-downloaded and hashed (reported as `<key> (blob)`). Without `blobs`, such items
+ * cannot be verified and are not listed by the collector, which reports them in `skipped` instead.
+ */
+export async function verifyBrand(repos: Repos, from: string, blobs?: BlobStore): Promise<string[]> {
   const dir = resolve(from);
   const brand = await repos.brands.getBySlug(basename(dir));
   const bad: string[] = [];
-  for (const item of collect(dir, repos).items) {
+  for (const item of collect(dir, repos, blobs).items) {
     const stored = await item.read(brand.id);
     if (!stored || canon(stored.value) !== canon(item.payload)) bad.push(item.key);
+    else if (item.verifyBlobs && !(await item.verifyBlobs(brand.id))) bad.push(`${item.key} (blob)`);
   }
   return bad;
 }
