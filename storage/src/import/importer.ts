@@ -1,14 +1,14 @@
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type DocumentKind, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
-import type { MemoryRepositories } from "../memory/index.ts";
+import { AlreadyExistsError, InvalidInputError, VersionConflictError, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
+import { collectCarousels } from "./carousels.ts";
+import { collectContent } from "./content.ts";
+import { canon, found, readRegular, sha256, type ImportRepos, type Item } from "./shared.ts";
 
-/** The Postgres and memory repository sets are structurally identical, so the importer is typed once against the memory one. */
-export type ImportRepos = MemoryRepositories;
+export type { ImportRepos };
 type Repos = ImportRepos;
 
 /**
@@ -37,40 +37,10 @@ export interface ImportReport {
   notImported: string[];
   /** Entries inside imported areas that were passed over, each with the reason, so nothing disappears silently. */
   skipped: string[];
+  /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
+  proposals: Array<{ kind: string; params: Record<string, unknown>; from: string }>;
   /** Set when the pass threw part-way; the counts then cover only the items done before it. */
   aborted?: string;
-}
-
-interface Item {
-  key: string;
-  entityType: RevisionEntity;
-  /** sha256 of the source file bytes. */
-  hash: string;
-  /** What the stored row must read back as. */
-  payload: unknown;
-  read(brandId: string): Promise<{ id: string; version: number; value: unknown } | null>;
-  write(brandId: string, expectedVersion: number | null, meta: WriteMeta): Promise<unknown>;
-}
-
-const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
-const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
-const found = async <T>(p: Promise<T>): Promise<T | null> => p.catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
-
-/**
- * Reads a regular file whose real path (symlinks in any parent directory resolved) lies inside `root`, or returns
- * null. Anything else is reported in `skipped` and never read: a symlink, a non-file, or a path that escapes the
- * brand folder. A missing file is reported only when `expected`.
- */
-function readRegular(root: string, file: string, rel: string, skipped: string[], expected = false): Buffer | null {
-  try {
-    if (!lstatSync(file).isFile()) skipped.push(`${rel} (not a regular file)`);
-    else if (!realpathSync(file).startsWith(root + sep)) skipped.push(`${rel} (outside the folder)`);
-    else return readFileSync(file);
-  } catch (error) {
-    if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-    if (expected) skipped.push(`${rel} (missing)`);
-  }
-  return null;
 }
 
 /** Splits `---` frontmatter (YAML) from the markdown body. */
@@ -81,9 +51,10 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos): { items: Item[]; notImported: string[]; skipped: string[] } {
+function collect(dir: string, repos: Repos): { items: Item[]; notImported: string[]; skipped: string[]; proposals: ImportReport["proposals"] } {
   const items: Item[] = [];
   const skipped: string[] = [];
+  const proposals: ImportReport["proposals"] = [];
   const root = realpathSync(dir); // the folder itself may be a symlink; what it contains may not point out of it
   const handled = new Set<string>();
   const docs: Array<[DocumentKind, string[], "json" | "text"]> = [
@@ -110,6 +81,32 @@ function collect(dir: string, repos: Repos): { items: Item[]; notImported: strin
       key: `document:${kind}`, entityType: "brand_document", hash: sha256(raw), payload,
       read: (id) => found(repos.documents.get(id, kind, "", (b) => b)),
       write: (id, expectedVersion, meta) => repos.documents.put(id, kind, "", body, { ...meta, expectedVersion }),
+    });
+  }
+  const templatesDir = join(dir, "templates");
+  for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).sort() : []) {
+    handled.add("templates");
+    const id = basename(file, ".json");
+    if (!file.endsWith(".json") || !/^[a-z0-9-]+$/.test(id)) {
+      skipped.push(`templates/${file} (not a <template-id>.json file)`);
+      continue;
+    }
+    const raw = readRegular(root, join(templatesDir, file), `templates/${file}`, skipped);
+    if (!raw) continue;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw.toString("utf-8"));
+    } catch {
+      payload = null;
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      skipped.push(`templates/${file} (not valid JSON)`);
+      continue;
+    }
+    items.push({
+      key: `template:${id}`, entityType: "brand_document", hash: sha256(raw), payload,
+      read: (brandId) => found(repos.documents.get(brandId, "template", id, (b) => b)),
+      write: (brandId, expectedVersion, meta) => repos.documents.put(brandId, "template", id, { json: payload, schemaVersion: 1 }, { ...meta, expectedVersion }),
     });
   }
   const skillsDir = join(dir, "skills");
@@ -139,14 +136,18 @@ function collect(dir: string, repos: Repos): { items: Item[]; notImported: strin
     const recipe = basename(file, ".yaml");
     const payload = parseYaml(raw.toString("utf-8"));
     const schemaVersion = Number.isInteger(payload?.version) && payload.version >= 1 ? payload.version : 1;
+    const hosts = payload?.source?.image_hosts;
+    if (Array.isArray(hosts) && hosts.every((h) => typeof h === "string")) proposals.push({ kind: "image_hosts", params: { hosts }, from: `recipe:${recipe}` });
     items.push({
       key: `recipe:${recipe}`, entityType: "brand_recipe", hash: sha256(raw), payload,
       read: (id) => found(repos.recipes.get(id, recipe, (b) => b)),
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
+  const ctx = { dir, root, repos, skipped, handled };
+  items.push(...collectContent(ctx), ...collectCarousels(ctx));
   const notImported = readdirSync(dir).filter((f) => !handled.has(f)).sort();
-  return { items, notImported, skipped };
+  return { items, notImported, skipped, proposals };
 }
 
 /**
@@ -163,7 +164,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
 }
 
 /**
- * Imports documents, guidance and recipes of a brand folder (slug = folder name). Idempotent per item via the
+ * Imports documents, templates, guidance, recipes, content and carousels of a brand folder (slug = folder name). Idempotent per item via the
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
@@ -174,7 +175,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped } = collect(dir, repos);
+  const { items, notImported, skipped, proposals } = collect(dir, repos);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
 
   if (!opts.dryRun && !brand) {
@@ -183,7 +184,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
     brand = await repos.brands.create({ slug, displayName: slug }, meta).catch((e) => (e instanceof AlreadyExistsError ? repos.brands.getBySlug(slug) : Promise.reject(e)));
   }
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped,
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, proposals,
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256(items.map((i) => `${i.key}:${i.hash}`).join("\n")),
   };
@@ -198,7 +199,9 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
           await item.write(brand!.id, planned.current?.version ?? null, { expectedVersion: null, author: opts.author, source: "import", reason: "import", sourceHash: item.hash });
         } catch (error) {
           // A write landed between classify and write: report it and keep going, so the pass still leaves a report.
-          if (!(error instanceof VersionConflictError)) throw error;
+          // The same for a row the repository refuses to move (e.g. an idea that would jump to published).
+          if (error instanceof InvalidInputError) skipped.push(`${item.key} (${error.message})`);
+          else if (!(error instanceof VersionConflictError)) throw error;
           outcome = "conflict";
         }
       }

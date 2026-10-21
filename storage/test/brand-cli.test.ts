@@ -8,6 +8,7 @@ import postgres from "postgres";
 
 import { resolveBrandSource } from "../src/brand-source.ts";
 import { isLocalDatabase, runCli } from "../src/cli/brand.ts";
+import { verifyBrand } from "../src/import/importer.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
@@ -66,7 +67,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const revisions = (await repos.revisions.list("brand_document", (await repos.documents.get(brand.id, "spec", "", identity)).id)).length;
 
   const again = await run("import", "--from", dir);
-  assert.match(again.lines.join("\n"), /Creados 0, actualizados 0, sin cambios 6, conflictos 0/);
+  assert.match(again.lines.join("\n"), /Creados 0, actualizados 0, sin cambios 10, conflictos 0/);
   assert.equal((await repos.documents.get(brand.id, "spec", "", identity)).version, 1, "re-run is a no-op");
   assert.equal((await repos.revisions.list("brand_document", (await repos.documents.get(brand.id, "spec", "", identity)).id)).length, revisions);
   assert.equal(recorded, 2, "each real pass is logged");
@@ -162,6 +163,21 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const twinRun = await runCli(["cutover", "example-twin-shop", "--confirm", "example-twin-shop", "--partial", "--from", twin], env, twinned);
   assert.deepEqual([twinRun.exitCode, /ya estaba cortada/.test(twinRun.lines[0])], [0, true]);
 
+  // The real pass can see more than the dry-run plan did: left-behind entries it reports still refuse without --partial.
+  const shifting = fixture(label, "example-shifting-shop");
+  for (const left of ["assets", "reels", "content/drafts/README.md", "content/published/README.md", "carousels"]) rmSync(join(shifting, left), { recursive: true, force: true });
+  let lookups = 0;
+  const shifted = { ...spied, brands: { ...repos.brands, getBySlug: async (...a: Parameters<typeof repos.brands.getBySlug>) => {
+    // Lookups: 1 = cutover, 2 = plan, 3 = real pass; the folder gains a passed-over entry just before the real pass scans it.
+    if (++lookups === 3) writeFileSync(join(shifting, "recipes", "notes.txt"), "not a recipe");
+    return repos.brands.getBySlug(...a);
+  } } };
+  const shiftedRun = await runCli(["cutover", "example-shifting-shop", "--confirm", "example-shifting-shop", "--from", shifting], env, shifted);
+  assert.equal(shiftedRun.exitCode, 1, shiftedRun.lines.join("\n"));
+  assert.match(shiftedRun.lines[0], /sin importar \(.*notes\.txt.*\).*--partial/);
+  assert.equal(existsSync(join(shifting, ".storage-cutover")), false);
+  assert.equal((await repos.brands.getBySlug("example-shifting-shop")).value.cutoverAt, null, "the real import ran but the brand is not cut over");
+
   // Entries passed over are reported, and a symlink is never followed out of the folder.
   const edge = fixture(label, "example-edge-shop");
   mkdirSync(join(edge, "skills", "empty"));
@@ -210,6 +226,107 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     console.warn = warn;
   }
   assert.match(warnings[0], /Could not record the aborted import run: db gone/);
+
+  // Content, templates and carousels (with history and chat) import, read back clean, and re-import as a no-op.
+  const rich = fixture(label, "example-rich-shop");
+  mkdirSync(join(rich, "templates"));
+  writeFileSync(join(rich, "templates", "plain.json"), JSON.stringify({ zones: [] }));
+  writeFileSync(join(rich, "templates", "broken.json"), "{ not json");
+  writeFileSync(join(rich, "templates", "list.json"), "[1]");
+  writeFileSync(join(rich, "ideas", "backlog.md"), "# Ideas\n\n- [ ] Open idea\n- [x] Done idea\n- Plain bullet\nstray prose\n");
+  mkdirSync(join(rich, "content", "published"), { recursive: true });
+  writeFileSync(join(rich, "content", "published", "2026-02-01-launch.md"), "---\ntitulo: Launch\ncanal: linkedin\naprobado: true\n---\nBody\n");
+  writeFileSync(join(rich, "content", "published", "undated.md"), "Body without a date\n");
+  const car = join(rich, "carousels", "intro");
+  mkdirSync(join(car, "versions"), { recursive: true });
+  const doc = (title: string, status: string) => JSON.stringify({ schemaVersion: 1, title, status, slides: [] });
+  writeFileSync(join(car, "versions", "2026-01-01T00-00-00-000Z.json"), doc("First", "draft"));
+  writeFileSync(join(car, "versions", "2026-01-02T00-00-00-000Z.json"), doc("Second", "draft"));
+  writeFileSync(join(car, "carousel.json"), doc("Third", "exported"));
+  writeFileSync(join(car, "chat.jsonl"), '{"role":"user","text":"hi"}\n{"role":"assistant","text":"hello"}\nnot json\n');
+  const richRun = await run("import", "--from", rich);
+  assert.equal(richRun.exitCode, 0, richRun.lines.join("\n"));
+  const text = richRun.lines.join("\n");
+  assert.match(text, /Propuesta de regla \(no creada\): image_hosts .*images\.example\.com.* desde recipe:reel-week/);
+  assert.match(text, /content\/published\/undated\.md \(no publication date/);
+  assert.match(text, /ideas\/backlog\.md \(1 line\(s\) outside the checklist/);
+  assert.match(text, /carousels\/week-input\.json \(recipe input/);
+  assert.match(text, /templates\/broken\.json \(not valid JSON\).*templates\/list\.json \(not valid JSON\)/, "a malformed template is skipped and reported; the rest imports");
+  const rid = (await repos.brands.getBySlug("example-rich-shop")).id;
+  assert.deepEqual((await repos.content.list(rid)).map((c) => [c.value.slug, c.value.stage]), [
+    ["2026-01-15-ejemplo-borrador", "draft"], ["2026-02-01-launch", "published"], ["idea-done-idea", "archived"], ["idea-open-idea", "idea"], ["idea-plain-bullet", "idea"],
+  ]);
+  const launch = (await repos.content.get(rid, "2026-02-01-launch")).value;
+  assert.deepEqual([launch.channel, launch.publishedAt, (launch.meta.frontmatter as { aprobado: boolean }).aprobado], ["linkedin", "2026-02-01T00:00:00.000Z", true], "an owner approval stays in meta, not in the stage");
+  assert.deepEqual((await repos.content.get(rid, "idea-done-idea")).value.meta, { legacy: { file: "ideas/backlog.md", checked: true }, stage: "archived" }, "get overlays the stage column");
+  assert.deepEqual((await repos.documents.get(rid, "template", "plain", identity)).value, { zones: [] });
+  const carousel = await repos.carousels.get(rid, "intro", identity);
+  assert.deepEqual([carousel.value.title, carousel.value.status], ["Third", "exported"]);
+  assert.deepEqual((await repos.revisions.list("carousel", carousel.id)).map((r) => [r.version, r.reason, (r.body as { document: { title: string } }).document.title]), [[1, "import", "First"], [2, "import", "Second"], [3, "import", "Third"], [4, "import", "Third"]], "history oldest first, current last, then the status move");
+  assert.deepEqual((await repos.chat.list(carousel.id)).map((m) => m.body.text), ["hi", "hello"]);
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 13, conflictos 0/, "re-import is a no-op");
+  assert.equal((await repos.chat.list(carousel.id)).length, 2);
+  // A new snapshot and chat line arrive later: only they are added, in order.
+  writeFileSync(join(car, "versions", "2026-01-03T00-00-00-000Z.json"), doc("Fourth", "draft"));
+  writeFileSync(join(car, "chat.jsonl"), '{"role":"user","text":"hi"}\n{"role":"assistant","text":"hello"}\n{"role":"user","text":"more"}\n');
+  assert.equal((await run("import", "--from", rich)).exitCode, 0);
+  assert.equal((await repos.chat.list(carousel.id)).length, 3);
+  assert.equal((await repos.carousels.get(rid, "intro", identity)).value.status, "exported");
+  assert.equal((await repos.importRuns.list(rid))[0].sourceKind, "folder", "import runs read back, newest first");
+  // A checked line moving stage later (file edited) updates in place.
+  writeFileSync(join(rich, "ideas", "backlog.md"), "- [x] Open idea\n");
+  assert.equal((await run("import", "--from", rich)).exitCode, 0);
+  assert.equal((await repos.content.get(rid, "idea-open-idea")).value.stage, "archived");
+
+  // A changed publication date is written, so the stored piece reads back clean and the brand can be cut over.
+  writeFileSync(join(rich, "content", "published", "2026-02-01-launch.md"), "---\ntitulo: Launch\ncanal: linkedin\naprobado: true\npublicado: 2026-03-05\n---\nBody\n");
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 1,/);
+  assert.equal((await repos.content.get(rid, "2026-02-01-launch")).value.publishedAt, "2026-03-05T00:00:00.000Z");
+  assert.deepEqual(await verifyBrand(repos, rich), [], "nothing differs after the date moved");
+
+  // An interrupted pass (the second save throws) re-runs as `updated`, then settles as `unchanged`, with history intact.
+  writeFileSync(join(car, "versions", "2026-01-04T00-00-00-000Z.json"), doc("Sixth", "draft"));
+  writeFileSync(join(car, "versions", "2026-01-05T00-00-00-000Z.json"), doc("Seventh", "draft"));
+  let saves = 0;
+  const flaky = { ...spied, carousels: { ...repos.carousels, save: (async (...args: Parameters<typeof repos.carousels.save>) => {
+    if (++saves === 2) throw new Error("interrupted");
+    return repos.carousels.save(...args);
+  }) as typeof repos.carousels.save } };
+  const titles = async () => (await repos.revisions.list("carousel", carousel.id)).map((r) => (r.body as { document: { title: string } }).document.title);
+  const flakyRun = await runCli(["import", "--from", rich], env, flaky);
+  assert.equal(flakyRun.exitCode, 1);
+  assert.equal((await titles()).includes("Sixth"), true, "the first snapshot was stored before the interruption");
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 1,/);
+  assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 0, sin cambios 11/);
+  const all = await titles();
+  assert.deepEqual([all.filter((t) => t === "Sixth").length, all.filter((t) => t === "Seventh").length], [1, 1], "no snapshot is stored twice");
+
+  // An item edited in storage between classify and write is a conflict, and the row keeps that edit.
+  writeFileSync(join(car, "carousel.json"), doc("Fifth", "exported"));
+  let reads = 0;
+  const editRace = { ...spied, carousels: { ...repos.carousels, get: (async <T,>(brandId: string, slug: string, validate: (b: unknown) => T) => {
+    const row = await repos.carousels.get(brandId, slug, validate);
+    if (++reads === 1) await repos.carousels.save(row.id, { title: "Edited in the app", document: { json: { ...(row.value.document as object), title: "Edited in the app" }, schemaVersion: 1 } }, { expectedVersion: row.version, author: "app", source: "editor", reason: "save" });
+    return row;
+  }) as typeof repos.carousels.get } };
+  const editRaced = await runCli(["import", "--from", rich], env, editRace);
+  assert.equal(editRaced.exitCode, 1);
+  assert.match(editRaced.lines.join("\n"), /conflictos 1/);
+  assert.equal((await repos.carousels.get(rid, "intro", identity)).value.title, "Edited in the app");
+
+  // A row the repository refuses to move (an idea that would become published) is a conflict with its reason; the pass goes on.
+  const mover = fixture(label, "example-mover-shop");
+  writeFileSync(join(mover, "ideas", "backlog.md"), "- Promote me\n");
+  assert.equal((await run("import", "--from", mover)).exitCode, 0);
+  writeFileSync(join(mover, "ideas", "backlog.md"), "- Other\n");
+  mkdirSync(join(mover, "content", "published"), { recursive: true });
+  writeFileSync(join(mover, "content", "published", "idea-promote-me.md"), "---\npublicado: 2026-04-01\n---\nBody\n");
+  const moved = await run("import", "--from", mover);
+  assert.equal(moved.exitCode, 1, moved.lines.join("\n"));
+  assert.match(moved.lines.join("\n"), /conflictos 1/);
+  assert.match(moved.lines.join("\n"), /content:idea-promote-me \(cannot publish from idea/);
+  const kept = (await repos.content.get((await repos.brands.getBySlug("example-mover-shop")).id, "idea-promote-me")).value;
+  assert.deepEqual([kept.stage, kept.title, kept.bodyMd], ["idea", "Promote me", ""], "the refused move wrote nothing");
 
   // A marker that names another brand is never trusted or overwritten.
   const wrong = fixture(label, "example-wrong-shop");

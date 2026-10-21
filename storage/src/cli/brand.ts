@@ -23,7 +23,7 @@ const VERBS: Record<string, { values: string[]; flags: string[] }> = {
   import: { values: ["from", "owner-opt-in"], flags: ["dry-run"] },
   cutover: { values: ["from", "confirm", "owner-opt-in"], flags: ["partial"] },
 };
-const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)"];
+const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)"];
 
 /** Brands the tool may touch freely: the fictional, tracked `profiles/example*` folders. */
 const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
@@ -38,7 +38,8 @@ const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
  */
 function ownerRefusal(names: string[], env: NodeJS.ProcessEnv, flag: string | undefined): string | null {
   const blocked = [...new Set(names)].filter((n) => !EXAMPLE_BRAND.test(n) && !(/^[a-z0-9-]+$/.test(n) && env.BRAND_OWNER_OPT_IN === n && flag === n));
-  return blocked.length ? `La marca "${blocked[0]}" no es de ejemplo: requiere la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.` : null;
+  const many = blocked.length > 1;
+  return blocked.length ? `${many ? "Las marcas" : "La marca"} ${blocked.map((n) => `"${n}"`).join(", ")} ${many ? "no son" : "no es"} de ejemplo: requiere la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.` : null;
 }
 
 /** Strict per-verb parser (`--flag value` or `--flag=value`). Returns null for an unknown verb or flag, or a missing value. */
@@ -135,6 +136,7 @@ function describe(report: ImportReport): string[] {
     ...report.items.map((i) => `  ${i.outcome} ${i.key}`),
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
     ...(report.notImported.length ? [`Fuera de esta etapa, no importado: ${report.notImported.join(", ")}.`] : []),
+    ...report.proposals.map((p) => `Propuesta de regla (no creada): ${p.kind} ${JSON.stringify(p.params)} desde ${p.from}.`),
     ...(report.skipped.length ? [`Omitidos: ${report.skipped.join(", ")}.`] : []),
   ];
 }
