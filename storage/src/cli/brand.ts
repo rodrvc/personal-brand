@@ -1,5 +1,5 @@
 #!/usr/bin/env -S pnpm exec tsx
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -20,10 +20,26 @@ export const CUTOVER_MARKER = ".storage-cutover";
 const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 /** Each verb accepts only its own flags: `--dry-run` must never reach a verb that cannot honor it. */
 const VERBS: Record<string, { values: string[]; flags: string[] }> = {
-  import: { values: ["from"], flags: ["dry-run"] },
-  cutover: { values: ["from", "confirm"], flags: ["partial"] },
+  import: { values: ["from", "owner-opt-in"], flags: ["dry-run"] },
+  cutover: { values: ["from", "confirm", "owner-opt-in"], flags: ["partial"] },
 };
-const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial]"];
+const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)"];
+
+/** Brands the tool may touch freely: the fictional, tracked `profiles/example*` folders. */
+const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
+
+/**
+ * Owner guard: any brand that is not an example brand is refused, `--dry-run` included, unless BOTH the env var
+ * `BRAND_OWNER_OPT_IN` and the flag `--owner-opt-in` name that exact slug (never a wildcard). Only the owner sets it,
+ * by hand, per brand, after approving that brand's source; agents and automation must not. A local env var is a speed
+ * bump against mistakes, not a security boundary. Runs before any database connection or folder read.
+ * `names` holds every name the folder goes by: its own and, when it exists, its real one, so a symlink called
+ * `example-x` that points at a real brand is judged by the real brand's name too.
+ */
+function ownerRefusal(names: string[], env: NodeJS.ProcessEnv, flag: string | undefined): string | null {
+  const blocked = [...new Set(names)].filter((n) => !EXAMPLE_BRAND.test(n) && !(/^[a-z0-9-]+$/.test(n) && env.BRAND_OWNER_OPT_IN === n && flag === n));
+  return blocked.length ? `La marca "${blocked[0]}" no es de ejemplo: requiere la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.` : null;
+}
 
 /** Strict per-verb parser (`--flag value` or `--flag=value`). Returns null for an unknown verb or flag, or a missing value. */
 export function parseArgs(verb: string | undefined, argv: string[]) {
@@ -62,6 +78,15 @@ export function isLocalDatabase(url: string | undefined): boolean {
   }
 }
 
+/** The folder's own name plus, when it exists, the name of what it really is (symlinks resolved). */
+function folderNames(from: string): string[] {
+  try {
+    return [basename(from), basename(realpathSync(from))];
+  } catch {
+    return [basename(from)]; // missing or dangling: nothing to resolve, and nothing will be read either
+  }
+}
+
 /** Expands `~` and `~/…` only; `~user` is left alone. */
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
 /** Relative `--from` values resolve against where the user ran the command (pnpm sets INIT_CWD), not the package dir. */
@@ -94,8 +119,14 @@ function markerNames(path: string, brandId: string): boolean {
   }
 }
 
-/** Top-level entries that are never imported by design, so they do not count as left-behind data. */
+/**
+ * Top-level folder entries that are never imported by design, so they do not count as left-behind data:
+ * the machine-local config (`config.local.yaml` and its variants), our own cutover marker, and macOS `.DS_Store`.
+ */
 const BY_DESIGN = /^(config\.local\.yaml.*|\.storage-cutover|\.DS_Store)$/;
+
+/** Data a cutover would strand: everything not imported or skipped, minus what is never imported by design. */
+const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped];
 
 function describe(report: ImportReport): string[] {
   const c = report.counts;
@@ -124,16 +155,22 @@ async function cutover(repos: ImportRepos, slug: string, from: string, author: s
   const already = (how: string): CliResult => ({ lines: [`La marca "${slug}" ya estaba cortada a storage (marcador ${how}).`], exitCode: 0 });
   const existing = await repos.brands.getBySlug(slug).catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
   const present = markerExists(marker);
-  if (existing?.value.cutoverAt) return already(present || write(existing.id, existing.value.cutoverAt) === "exists" ? "presente" : "restituido");
+  if (existing?.value.cutoverAt) {
+    // A marker already there must name this brand; anything else is left untouched and reported.
+    if (present && !markerNames(marker, existing.id)) return { lines: [`El ${CUTOVER_MARKER} de ${from} no corresponde a la marca "${slug}": revísalo; no se tocó.`], exitCode: 1 };
+    // Side effect: a missing marker is restored here (created exclusively, never overwriting).
+    const restored = !present && write(existing.id, existing.value.cutoverAt) === "written";
+    return already(restored ? "restituido" : "presente");
+  }
   if (present) return { lines: [`Ya hay un ${CUTOVER_MARKER} en ${from}, pero la marca no está cortada: revísalo antes de continuar.`], exitCode: 1 };
 
   // Data the importer does not carry yet would be stranded by a cutover, so it must be acknowledged with --partial.
   const plan = await importBrand(repos, { from, dryRun: true, author });
-  const left = [...plan.notImported.filter((f) => !BY_DESIGN.test(f)), ...plan.skipped];
-  if (left.length && !partial) {
-    return { lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: 1 };
-  }
+  const refuse = (left: string[]): CliResult => ({ lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: 1 });
+  if (leftBehind(plan).length && !partial) return refuse(leftBehind(plan));
   const report = await importBrand(repos, { from, dryRun: false, author });
+  // The real pass can see more than the plan did (the folder may have changed in between): check it too.
+  if (leftBehind(report).length && !partial) return refuse(leftBehind(report));
   const mismatched = await verifyBrand(repos, from);
   if (report.counts.conflict || mismatched.length) {
     return { lines: [...describe(report), `No se corta: verificación sucia (${[...report.items.filter((i) => i.outcome === "conflict").map((i) => i.key), ...mismatched].join(", ")}).`], exitCode: 1 };
@@ -160,10 +197,15 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   const dryRun = args.flags.has("dry-run");
   const author = `cli:${env.USER ?? "unknown"}`;
   let from: string;
-  if (verb === "import") from = fromCwd(args.values.get("from")!, env);
-  else {
+  if (verb === "import") {
+    from = fromCwd(args.values.get("from")!, env);
+    const refused = ownerRefusal(folderNames(from), env, args.values.get("owner-opt-in"));
+    if (refused) return { lines: [refused], exitCode: 1 };
+  } else {
     if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: 1 };
     from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
+    const refused = ownerRefusal([slug!, ...folderNames(from)], env, args.values.get("owner-opt-in"));
+    if (refused) return { lines: [refused], exitCode: 1 };
     if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: 1 };
   }
 

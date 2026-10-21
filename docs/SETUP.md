@@ -248,6 +248,14 @@ pnpm --filter @personal-brand/storage brand import --from profiles/example
 pnpm --filter @personal-brand/storage brand cutover example --confirm example --partial
 ```
 
+These commands only accept the fictional example brands (slug `example` or
+`example-*`). Any other brand is refused, `--dry-run` included, before the
+database or the folder is touched. Only the owner can lift that, by hand and
+for one brand at a time, after approving that brand's source: set
+`BRAND_OWNER_OPT_IN=<slug>` **and** pass `--owner-opt-in <slug>` (same slug,
+never a wildcard). Agents and automation must never set either. This is a
+speed bump against mistakes, not a security boundary.
+
 Run these from the repo root, with `DATABASE_URL` set to a `brand_owner`
 connection (the importer writes guidance and import runs, which are
 owner-only).
@@ -267,7 +275,7 @@ owner-only).
   marks the brand cut over and writes `.storage-cutover` in its folder (the
   folder is not deleted). It refuses while anything the importer does not carry
   yet (assets, carousels, reels, ideas, content...) is left in the folder, so
-  nothing is stranded; `--partial` acknowledges that. Until S7b lands, the
+  nothing is stranded; `--partial` acknowledges that. Until S7b2 lands, the
   example brands are cut over with `--partial`. Without `--from`, the folder is
   `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
 

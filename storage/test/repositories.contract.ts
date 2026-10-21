@@ -581,7 +581,12 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       const second = await h.owner.importRuns.record(run(2));
       assert.notEqual(first.id, second.id);
       assert.deepEqual(second.report, { n: 2 });
-      if (h.rawSql) assert.equal((await h.rawSql`SELECT count(*)::int AS n FROM import_runs WHERE brand_id = ${a.id}`)[0].n, 2, "the app role can read them");
+      assert.deepEqual((await r.importRuns.list(a.id)).map((x) => x.id), [second.id, first.id], "newest first");
+      const tied = [await h.owner.importRuns.record({ ...run(9), startedAt: "2099-02-01T00:00:00Z", finishedAt: "2099-02-01T00:00:01Z" }), await h.owner.importRuns.record({ ...run(10), startedAt: "2099-02-01T00:00:00Z", finishedAt: "2099-02-01T00:00:01Z" })];
+      assert.equal(tied[0].startedAt, "2099-02-01T00:00:00.000Z", "instants come back normalized");
+      assert.deepEqual((await r.importRuns.list(a.id)).slice(0, 2).map((x) => x.id), tied.map((x) => x.id).sort(), "full ties break by id ascending");
+      assert.deepEqual(await r.importRuns.list("00000000-0000-4000-8000-000000000000"), []);
+      if (h.rawSql) assert.equal((await h.rawSql`SELECT count(*)::int AS n FROM import_runs WHERE brand_id = ${a.id}`)[0].n, 4, "the app role can read them");
       await assert.rejects(() => h.owner.importRuns.record({ ...run(3), brandId: "00000000-0000-4000-8000-000000000000" }), NotFoundError);
     },
 

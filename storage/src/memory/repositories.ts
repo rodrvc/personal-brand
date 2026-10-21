@@ -20,6 +20,7 @@ import {
   type RunArtifact,
   type RunArtifactRepository,
   type ExportRepository,
+  type ImportRun,
   type ImportRunRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
@@ -598,11 +599,16 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  // Rows are not kept yet: S7b must store them when it adds `list()`.
+  const importRunRows: ImportRun[] = [];
   const importRuns: ImportRunRepository = {
     async record(input) {
       if (!brands.has(input.brandId)) throw new NotFoundError(`brand ${input.brandId}`);
-      return { ...structuredClone(input), id: randomUUID() };
+      const row = { ...structuredClone(input), startedAt: parseInstant(input.startedAt, "startedAt")!.toISOString(), finishedAt: parseInstant(input.finishedAt, "finishedAt")!.toISOString(), id: randomUUID() };
+      importRunRows.push(row);
+      return structuredClone(row);
+    },
+    async list(brandId) {
+      return structuredClone(importRunRows.filter((r) => r.brandId === brandId).sort((a, b) => cmp(b.startedAt, a.startedAt) || cmp(b.finishedAt, a.finishedAt) || cmp(a.id, b.id)));
     },
   };
 
