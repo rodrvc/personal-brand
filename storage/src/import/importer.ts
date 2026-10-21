@@ -7,6 +7,7 @@ import { AlreadyExistsError, InvalidInputError, VersionConflictError, type BlobS
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectAssets } from "./assets.ts";
+import { collectRuns } from "./runs.ts";
 import { canon, found, readRegular, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
 export type { ImportRepos };
@@ -149,7 +150,7 @@ function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[];
     });
   }
   const ctx = { dir, root, repos, blobs, skipped, handled };
-  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx));
+  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx));
   const notImported = readdirSync(dir).filter((f) => !handled.has(f)).sort();
   return { items, notImported, skipped, proposals };
 }
@@ -168,7 +169,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
 }
 
 /**
- * Imports documents, templates, guidance, recipes, content, carousels and assets (blobs) of a brand folder (slug = folder name). Idempotent per item via the
+ * Imports documents, templates, guidance, recipes, content, carousels, assets (blobs) and recipe runs of a brand folder (slug = folder name). Idempotent per item via the
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */

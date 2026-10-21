@@ -49,7 +49,12 @@ export function collectAssets(ctx: CollectContext): Item[] {
   handled.add("assets");
   const files = walk(base);
   const read = (rel: string, expected = false) => readRegular(root, join(base, rel), `assets/${rel}`, skipped, expected);
-  const dims = new Map(((asObject(read("index.json")) as { entries?: unknown } | null)?.entries as Array<Record<string, unknown>> | undefined)?.map((e) => [e.id, e]) ?? []);
+  // `index.json` is a cache the editor rewrites: a malformed or wrongly-shaped one is ignored (and reported), never fatal.
+  const rawIndex = read("index.json");
+  const entries = asObject(rawIndex)?.entries;
+  if (rawIndex && !Array.isArray(entries)) skipped.push("assets/index.json (unreadable cache: ignored)");
+  const dims = new Map<unknown, Record<string, unknown>>();
+  for (const e of Array.isArray(entries) ? entries : []) if (e && typeof e === "object" && !Array.isArray(e)) dims.set((e as Record<string, unknown>).id, e as Record<string, unknown>);
   const bookkeeping = (rel: string) => rel === "index.json" || /^(meta|generated)\/[^/]+\.json$/.test(rel) || rel.endsWith(".meta.json");
   const assetFiles = files.filter((rel) => !bookkeeping(rel) && !rel.endsWith(".json"));
   for (const rel of files.filter((r) => r.endsWith(".json") && !bookkeeping(r))) skipped.push(`assets/${rel} (not an asset: unrecognised .json file)`);
@@ -92,21 +97,25 @@ export function collectAssets(ctx: CollectContext): Item[] {
     const [width, height] = [size(dims.get(id)?.w), size(dims.get(id)?.h)];
     const mime = mimeOf(bytes, rel);
     const generation = asObject(raws.generation);
-    const row = { sha256: sha, kind, mime, bytes: bytes.length, origin, status, tags, width, height, family: family ?? null, generation };
+    // width/height are best-effort: filled from the cache at registration only, never compared afterwards (not in the
+    // payload, the item hash or the update check), so cache drift can neither conflict nor dirty verification.
+    const row = { sha256: sha, kind, mime, bytes: bytes.length, origin, status, tags, family: family ?? null, generation };
     items.push({
       key: `asset:${id}`, entityType: "brand_asset",
-      hash: sha256([sha, ...Object.values(raws).map((r) => (r ? sha256(r) : "")), `${width}x${height}`].join("\n")),
+      hash: sha256([sha, ...Object.values(raws).map((r) => (r ? sha256(r) : ""))].join("\n")),
       payload: row,
       read: async (brandId) => {
         const a = await found(repos.assets.get(brandId, id));
-        return a && { id: a.id, version: a.version, value: { sha256: a.value.sha256, kind: a.value.kind, mime: a.value.mime, bytes: a.value.bytes, origin: a.value.origin, status: a.value.status, tags: a.value.tags, width: a.value.width, height: a.value.height, family: a.value.family, generation: a.value.generation } };
+        return a && { id: a.id, version: a.version, value: { sha256: a.value.sha256, kind: a.value.kind, mime: a.value.mime, bytes: a.value.bytes, origin: a.value.origin, status: a.value.status, tags: a.value.tags, family: a.value.family, generation: a.value.generation } };
       },
       write: async (brandId, expectedVersion, meta) => {
         if (expectedVersion !== null) {
-          // Only what a user can reclassify moves. Everything else is fixed at registration, so a difference is reported
-          // instead of stored: the item hash would otherwise move without the row and verification would stay dirty.
+          // Only what a user can reclassify moves (keep this list in step with `AssetPatch`, contracts/repositories.ts).
+          // Everything else is fixed at registration, so a difference is reported instead of stored: the item hash would
+          // otherwise move without the row and verification would stay dirty. That includes `origin` and `mime`: moving
+          // a file into references/ or generated/, or renaming its extension, is a conflict by design.
           const current = (await repos.assets.get(brandId, id)).value as unknown as Record<string, unknown>;
-          const fixed: Record<string, unknown> = { sha256: sha, mime, bytes: bytes.length, origin, width, height, generation };
+          const fixed: Record<string, unknown> = { sha256: sha, mime, bytes: bytes.length, origin, generation };
           const changed = [...Object.keys(fixed).filter((k) => canon(current[k] ?? null) !== canon(fixed[k] ?? null)), ...(current.family && !family ? ["family"] : [])];
           if (changed.length) throw new InvalidInputError(`asset ${id}: ${changed.join(", ")} changed in the folder; registered fields cannot be updated`);
           return repos.assets.update(brandId, id, { kind, tags, status, ...(family ? { family } : {}) }, { ...meta, expectedVersion });
