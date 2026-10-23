@@ -1,11 +1,11 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { effectiveVoice, narrationCacheKey, type VoiceSettings } from "@personal-brand/core/narration";
 import { parse as parseYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
-import { blobKey, InvalidInputError, ObjectNotFoundError, type BlobStore, type RunArtifactInput } from "../contracts/index.ts";
+import { blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type RunArtifactInput } from "../contracts/index.ts";
 import { readRegular, sha256, type CollectContext, type ImportRepos, type Item } from "./shared.ts";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,7 +45,8 @@ interface RunPlan {
   storyboard: Record<string, unknown> | null;
   /** Every source file the run is made of, for the item hash. */
   raws: Buffer[];
-  audio: Array<RunArtifactInput & { bytes: Buffer; mime: string; seconds: number; voice: VoiceSettings }>;
+  /** Audio takes (card order) first, then clips: the order `run_artifacts.current` returns them in. */
+  artifacts: Array<RunArtifactInput & { bytes: Buffer; mime: string; take?: { seconds: number; voice: VoiceSettings } }>;
 }
 
 type StoredRun = Awaited<ReturnType<ImportRepos["runs"]["get"]>>;
@@ -105,7 +106,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
       skipped.push(`${rel} (no run: not a carousel input with every slide dated within one week)`);
       continue;
     }
-    plans.push({ path: rel, recipe: "weekly-roundup", period, derived: { recipe: "flat carousels/*.json are weekly-roundup inputs", period: "the Monday-to-Sunday week holding every slide date" }, source: json, storyboard: null, raws: [raw], audio: [] });
+    plans.push({ path: rel, recipe: "weekly-roundup", period, derived: { recipe: "flat carousels/*.json are weekly-roundup inputs", period: "the Monday-to-Sunday week holding every slide date" }, source: json, storyboard: null, raws: [raw], artifacts: [] });
   }
 
   const reels = join(dir, "reels");
@@ -121,8 +122,8 @@ export function collectRuns(ctx: CollectContext): Item[] {
     const inputWeek = singleWeek(inputItems.map((i) => asObject(i)?.date));
     if (folders.length === 0 && input.raw) {
       if (input.json && inputWeek) {
-        plans.push({ path: "reels/week-input.json", recipe: "reel-week", period: inputWeek, derived: { recipe: "reels are reel-week inputs", period: "the Monday-to-Sunday week holding every item date" }, source: input.json, storyboard: null, raws: [input.raw], audio: [] });
-      } else skipped.push("reels/week-input.json (no run: items undated or spanning several weeks)");
+        plans.push({ path: "reels/week-input.json", recipe: "reel-week", period: inputWeek, derived: { recipe: "reels are reel-week inputs", period: "the Monday-to-Sunday week holding every item date" }, source: input.json, storyboard: null, raws: [input.raw], artifacts: [] });
+      } else skipped.push(input.json ? "reels/week-input.json (no run: items undated or spanning several weeks)" : "reels/week-input.json (not a JSON object)");
     } else if (input.raw && !input.json) skipped.push("reels/week-input.json (not a JSON object)");
     else if (input.json && !folders.some((f) => weekHolding(f)!.start === inputWeek?.start)) {
       // The one root input belongs to the folder of its own week; with period folders present it is never guessed onto another.
@@ -144,7 +145,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
       }
       const period = weekHolding(folder)!;
       const ownInput = input.json && inputWeek?.start === period.start ? input : null;
-      const plan: RunPlan = { path: `${rel}/storyboard.yaml`, recipe: "reel-week", period, derived: { recipe: "a storyboard is a reel-week input", period: "the Monday-to-Sunday week holding the folder date" }, source: ownInput?.json ?? {}, storyboard, raws: [sb, ...(ownInput?.raw ? [ownInput.raw] : [])], audio: [] };
+      const plan: RunPlan = { path: `${rel}/storyboard.yaml`, recipe: "reel-week", period, derived: { recipe: "a storyboard is a reel-week input", period: "the Monday-to-Sunday week holding the folder date" }, source: ownInput?.json ?? {}, storyboard, raws: [sb, ...(ownInput?.raw ? [ownInput.raw] : [])], artifacts: [] };
       for (const name of readdirSync(join(dir, rel)).sort()) if (name !== "storyboard.yaml" && name !== "audio") skipped.push(`${rel}/${name} (not part of a run)`);
       collectAudio(ctx, plan, rel, recipeRaw);
       plans.push(plan);
@@ -152,7 +153,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
   }
 
   const runs = runIndex(repos);
-  return plans.map((plan) => toItem(plan, repos, runs, blobs));
+  return plans.map((plan) => toItem(plan, repos, runs, ctx.notices, blobs));
 }
 
 /** Audio of one storyboard folder: only narrations whose hash can be recomputed to the sidecar's become tts takes. */
@@ -160,6 +161,10 @@ function collectAudio(ctx: CollectContext, plan: RunPlan, rel: string, recipeRaw
   const { dir, root, blobs, skipped } = ctx;
   const audioDir = join(dir, rel, "audio");
   if (!existsSync(audioDir)) return;
+  if (!statSync(audioDir).isDirectory()) {
+    skipped.push(`${rel}/audio (not a directory)`);
+    return;
+  }
   const files = readdirSync(audioDir).sort();
   if (!blobs) {
     skipped.push(`${rel}/audio (no blob store configured: nothing imported)`);
@@ -193,54 +198,81 @@ function collectAudio(ctx: CollectContext, plan: RunPlan, rel: string, recipeRaw
       return;
     }
     plan.raws.push(mp3, sidecarRaw);
-    plan.audio.push({ kind: "audio", cardIndex, cardId: id, sha256: sha256(mp3), inputsHash: sidecar.hash, bytes: mp3, mime: "audio/mpeg", seconds: sidecar.seconds, voice });
+    plan.artifacts.push({ kind: "audio", cardIndex, cardId: id, sha256: sha256(mp3), inputsHash: sidecar.hash, bytes: mp3, mime: "audio/mpeg", take: { seconds: sidecar.seconds, voice } });
   });
   for (const name of files) if (!claimed.has(name)) skipped.push(`${rel}/audio/${name} (not the audio of a storyboard card)`);
 }
 
-function toItem(plan: RunPlan, repos: ImportRepos, runs: RunIndex, blobs?: BlobStore): Item {
-  const json = { ...plan.source, _imported: { from: plan.path, recipe: plan.derived.recipe, period: plan.derived.period, audio: plan.audio.map((a) => ({ cardIndex: a.cardIndex, sha256: a.sha256 })) } };
-  const audio = plan.audio.map(({ kind, cardIndex, cardId, sha256: sha, inputsHash }) => ({ kind, cardIndex, cardId, sha256: sha, inputsHash }));
+/** The `kind:cardIndex` slots a stored run's `_imported.artifacts` claims: the only ones the import owns. */
+const slotOf = (a: { kind: string; cardIndex: number | null }) => `${a.kind}:${a.cardIndex}`;
+function claimedSlots(input: unknown): Map<string, string> {
+  const recorded = asObject(identity(input)._imported)?.artifacts;
+  return new Map((Array.isArray(recorded) ? (recorded as Array<{ kind: string; cardIndex: number | null; sha256: string }>) : []).map((r) => [slotOf(r), r.sha256] as const));
+}
+
+function toItem(plan: RunPlan, repos: ImportRepos, runs: RunIndex, notices: string[], blobs?: BlobStore): Item {
+  const json = { ...plan.source, _imported: { from: plan.path, recipe: plan.derived.recipe, period: plan.derived.period, artifacts: plan.artifacts.map(({ kind, cardIndex, sha256: sha }) => ({ kind, cardIndex, sha256: sha })) } };
+  const shape = ({ kind, cardIndex, cardId, sha256: sha, inputsHash }: RunArtifactInput) => ({ kind, cardIndex, cardId, sha256: sha, inputsHash });
+  const artifacts = plan.artifacts.map(shape);
   return {
     key: `run:${plan.path}`, entityType: "recipe_run",
     hash: sha256(plan.raws.map(sha256).join("\n")),
-    payload: { recipe: plan.recipe, periodStart: plan.period.start, periodEnd: plan.period.end, input: json, storyboard: plan.storyboard, audio },
+    payload: { recipe: plan.recipe, periodStart: plan.period.start, periodEnd: plan.period.end, input: json, storyboard: plan.storyboard, artifacts },
     read: async (brandId) => {
       const run = (await runs(brandId)).get(plan.path);
       if (!run) return null;
-      const current = await repos.runArtifacts.current(run.id, { kind: "audio" });
-      const stored = current.map(({ kind, cardIndex, cardId, sha256: sha, inputsHash }) => ({ kind, cardIndex, cardId, sha256: sha, inputsHash }));
-      return { id: run.id, version: run.version, value: { recipe: run.value.recipe, periodStart: run.value.periodStart, periodEnd: run.value.periodEnd, input: run.value.input, storyboard: run.value.storyboard, audio: stored } };
+      // Only the slots the import owns (planned now, or claimed by the last import) are compared: a card that left the plan
+      // is dropped from `_imported.artifacts` by the next write, so its old take stays in history but is no longer claimed.
+      const owned = new Set([...plan.artifacts.map(slotOf), ...claimedSlots(run.value.input).keys()]);
+      const stored = (await repos.runArtifacts.current(run.id)).filter((a) => owned.has(slotOf(a))).map(shape);
+      return { id: run.id, version: run.version, value: { recipe: run.value.recipe, periodStart: run.value.periodStart, periodEnd: run.value.periodEnd, input: run.value.input, storyboard: run.value.storyboard, artifacts: stored } };
     },
     write: async (brandId, expectedVersion, meta) => {
       const existing = expectedVersion === null ? null : ((await runs(brandId)).get(plan.path) ?? null);
       // The period is fixed when the run is created; a source that now derives another one is reported, not moved.
       if (existing && existing.value.periodStart !== plan.period.start) throw new InvalidInputError(`run ${plan.path}: period changed in the folder from ${existing.value.periodStart} to ${plan.period.start}; a run's period cannot be updated`);
-      // Never overwrite a take someone else produced: a slot whose current take is neither the planned one nor the one
-      // the last import recorded in `_imported.audio` was changed in storage, so the run is left alone and reported.
+      // Never overwrite an artifact someone else produced: a slot whose current one is neither the planned one nor the one
+      // the last import recorded in `_imported.artifacts` was changed in storage, so the run is left alone and reported.
       // (Before cutover the importer is the only artifact writer; this guard keeps that true if it ever stops being so.)
       if (existing) {
-        const recorded = asObject(identity(existing.value.input)._imported)?.audio;
-        const lastImported = new Map((Array.isArray(recorded) ? (recorded as Array<{ cardIndex: number | null; sha256: string }>) : []).map((r) => [r.cardIndex, r.sha256] as const));
-        const now = new Map((await repos.runArtifacts.current(existing.id, { kind: "audio" })).map((a) => [a.cardIndex, a.sha256]));
-        for (const a of plan.audio) {
-          const sha = now.get(a.cardIndex);
-          if (sha !== undefined && sha !== a.sha256 && sha !== lastImported.get(a.cardIndex)) throw new InvalidInputError(`run ${plan.path}: audio of card ${a.cardId} was changed in storage since the last import; not overwritten`);
+        const lastImported = claimedSlots(existing.value.input);
+        const currentNow = await repos.runArtifacts.current(existing.id);
+        const now = new Map(currentNow.map((a) => [slotOf(a), a.sha256] as const));
+        for (const a of plan.artifacts) {
+          const sha = now.get(slotOf(a));
+          if (sha !== undefined && sha !== a.sha256 && sha !== lastImported.get(slotOf(a))) throw new InvalidInputError(`run ${plan.path}: ${a.kind} of card ${a.cardId} was changed in storage since the last import; not overwritten`);
+        }
+        // A card imported before that no longer has an artifact in the plan (narration edited after synthesis, file removed):
+        // it is released, not deleted. Its take stays in history and the run stops claiming it.
+        const planned = new Set(plan.artifacts.map(slotOf));
+        for (const a of currentNow) {
+          if (!lastImported.has(slotOf(a)) || planned.has(slotOf(a))) continue;
+          notices.push(`${plan.path}: ${a.kind} of card ${a.cardId} is no longer in the source; its stored take is kept in history and no longer claimed by the import`);
         }
       }
-      for (const a of plan.audio) {
+      for (const a of plan.artifacts) {
         await putBlob(blobs as BlobStore, brandId, a.bytes, a.mime);
-        await repos.tts.record(brandId, a.inputsHash, { sha256: a.sha256, seconds: a.seconds, voice: a.voice as unknown as Record<string, unknown> });
+        if (a.take) await repos.tts.record(brandId, a.inputsHash, { sha256: a.sha256, seconds: a.take.seconds, voice: a.take.voice as unknown as Record<string, unknown> });
       }
       const body = { json, schemaVersion: 1 };
       // A run has no unique source key: two importers creating the same new run at once would both create it (one importer at a time, as with carousels).
-      const run = existing
-        ? await repos.runs.save(existing.id, { input: body, storyboard: plan.storyboard }, { ...meta, expectedVersion })
-        : await repos.runs.create(brandId, { recipe: plan.recipe, periodStart: plan.period.start, periodEnd: plan.period.end, input: body, ...(plan.storyboard ? { storyboard: plan.storyboard } : {}) }, { ...meta, expectedVersion: null });
-      for (const a of audio) await repos.runArtifacts.record(run.id, a);
+      // The item hash only reaches storage with the LAST revisioned write, after the artifacts are recorded: an interrupted
+      // pass is then never classified `unchanged` with artifacts missing (a new run's first write carries a derived hash).
+      if (existing) {
+        if (existing.version !== expectedVersion) throw new VersionConflictError(existing.version);
+        for (const a of artifacts) await repos.runArtifacts.record(existing.id, a);
+        await repos.runs.save(existing.id, { input: body, storyboard: plan.storyboard }, { ...meta, expectedVersion });
+      } else {
+        const fields = { recipe: plan.recipe, periodStart: plan.period.start, periodEnd: plan.period.end, input: body, ...(plan.storyboard ? { storyboard: plan.storyboard } : {}) };
+        const made = await repos.runs.create(brandId, fields, { ...meta, expectedVersion: null, ...(artifacts.length ? { sourceHash: `${meta.sourceHash}:doc` } : {}) });
+        if (artifacts.length) {
+          for (const a of artifacts) await repos.runArtifacts.record(made.id, a);
+          await repos.runs.save(made.id, { input: body, storyboard: plan.storyboard }, { ...meta, expectedVersion: made.version });
+        }
+      }
     },
     verifyBlobs: async (brandId) => {
-      for (const a of plan.audio) {
+      for (const a of plan.artifacts) {
         try {
           if (sha256((await (blobs as BlobStore).get(blobKey(brandId, a.sha256))).body) !== a.sha256) return false;
         } catch (error) {

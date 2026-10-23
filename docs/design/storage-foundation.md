@@ -443,7 +443,7 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved); `index.json` is a rebuildable cache and is not imported (S7b2a) |
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
 | `carousels/*.json` (flat), `reels/week-input.json`, `reels/<date>/storyboard.yaml` | `recipe_runs`; recipe and period are derived and recorded on the run (S7b2b1, §14 Q-S7b2b) |
-| reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b2) |
+| reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b3a) |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
 | `content/**`, anything else | blob keyed by content (`blobKey(sha256)`), with the path -> sha256 manifest in that run's `import_runs.report` (nothing lost; S7b2b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
@@ -590,14 +590,58 @@ hash).
    skipped (reported, kept as a plain file) when the recipe has no voice or the
    hash recomputed from the recipe voice and the storyboard override differs
    from the sidecar's; a narration edited after synthesis therefore stops being
-   imported as that card's current audio. The audio of a folder without a blob
+   imported as that card's current audio. For a card already imported that
+   leaves the plan this way (or whose mp3 is removed), nothing is deleted: the
+   next import drops the slot from `_imported.artifacts` and reports it, the
+   old take stays in the artifact history, and the run is compared only over
+   the slots it claims, so the import after that is a no-op. The audio of a folder without a blob
    store is reported like assets.
+
+   *As built in S7b2b2:* legacy. Everything no collector used is a legacy file,
+   but only known content: the `notImported` entries and the paths of `skipped`
+   entries (their reason stays, and an unreadable file inside is reported too),
+   written with `putBlob`. The pass is an ALLOWLIST (`allowlist.ts`): png, jpg,
+   jpeg, webp, gif, svg, mp4, mov, webm, mp3, wav, m4a, pdf, ttf, otf, woff,
+   woff2, json, yaml, yml, md, txt. Nothing outside it, and nothing that looks
+   like a secret, is ever read into a blob, and the refusals come in two
+   classes. *Proven secrets* are dotfiles and `.git` at any depth,
+   `node_modules`, keys and certificates (`*.pem`, `*.key`, `*.p12`,
+   `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`), a nested `config.local.*`, and text
+   with a precise secret signature in its content (PEM/PGP private key,
+   credentials inside a URL, AKIA..., gh*_..., sk-..., xox*...): listed in `ImportReport.refused`
+   ("Rechazados, nunca importados"), deliberate like the top-level
+   `config.local.yaml`, and they never count as left behind. *Guesses* are
+   unknown types (html, css, csv, srt, psd, zip, scripts...) and names with
+   credential, secret, password, api key or the whole word `token`
+   (`deploy-token.txt`; `tokens.json` and `design-tokens/` are brand tokens and
+   are not flagged), dot-directories other than `.git` (e.g. `.archive/`) and
+   text with a generic `key: value` assignment (`password: ...`; a token JSON
+   such as `{"accentToken": "var(--brand-accent)"}` matches it and is brand
+   content): they may be real brand content, so they are listed in
+   `ImportReport.unimported` ("Sin importar") and are left-behind data that
+   blocks a cutover without `--partial`. The commit gate holds no secret
+   patterns (it checks brand literals), so `allowlist.ts` is their one home.
+   A link or other non-file is reported as `(not a regular file)` whatever its
+   name, so it blocks too. "No longer in the source" is a `notices` entry, never
+   blocking. The manifest is `import_runs.report.legacy`, and a re-run lists the
+   paths new or different since the latest manifest. Machine-local config and the
+   cutover marker are never kept. A cutover does not count an entry whose file is
+   kept as left behind; unreadable data (a symlink, a path leaving the folder)
+   and the guesses block it without `--partial`. `verifyBrand` re-downloads the
+   legacy blobs too (`legacy:<path> (blob)`).
+
+   *Moved to S7b2b3a:* the outputs root (resolved like the engine does:
+   `BRAND_OUTPUTS_ROOT/<slug>`, else `outputs.base_dir` from `config.local.yaml`
+   over `config.yaml`; read as a second root, confined to its real path, with
+   `@outputs/<path>` legacy paths) and clips as `clip` artifacts of the matching
+   storyboard card (`inputs_hash = import:sha256:<mp4 sha>`). Editor exports
+   (`exports` rows) are S7b2b3b.
 
    **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
    Postgres rows alone; S7b2 is everything that needs blobs. S7b2a (above)
    is the follow-ups plus assets. S7b2b is the rest; its open questions were
    settled as technical decisions (§14, Q-S7b2b) and it is built as S7b2b1 (runs
-   and TTS) and S7b2b2 (clips, exports, legacy). Together they add flat `carousels/*.json` and
+   and TTS) and S7b2b2 (legacy); S7b2b3a adds the second outputs root and clips, S7b2b3b exports and hardening. Together they add flat `carousels/*.json` and
    `reels/**/week-input.json` + `storyboard.yaml` as `recipe_runs`, TTS mp3 +
    sidecars and existing clips as blobs with `tts_cache` / `run_artifacts`,
    `outputs/**` as `exports` + export keys, and every other file as a
@@ -671,8 +715,10 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7b1b | Importer part 2a: templates, rule proposals (reported), carousels + revisions + chat, ideas/drafts/published -> `content_items`, with tests on a temp example copy | ~460 | S7b1, S6a, S6b | examples import, read back clean and re-import as a no-op |
 | S7b2a | S7b1b review follow-ups (`conflicts` reasons, create-race, simpler carousel writes, shared frontmatter split, plural refusal, deferred tests) + importer part 2b-1: `assets/**` + sidecars -> blobs + `assets` rows, `BlobStore` wiring in the CLI, blob-level verification of assets | ~560 | S7b1b, S5 | example assets import, verify re-downloads each blob, an example without reels cuts over with no `--partial` |
 | S7b2b1 | Importer part 2b-2a: `narrationCacheKey` and the voice merge move into `core/` (shared with the engine, not copied); flat `carousels/*.json` and `reels/**` -> `recipe_runs` (recipe and period derived and recorded); TTS cache -> blobs + `tts_cache` + `audio` artifacts | ~560 | S7b2a, S6c | examples import their runs, read back clean, re-import as a no-op; a card whose hash cannot be recomputed is reported, not imported |
-| S7b2b2 | Importer part 2b-2b: second root for `outputs.base_dir`; reel clips -> `clip` artifacts; editor exports -> `exports` + keys; everything else -> content-keyed legacy blobs with a path -> sha256 manifest in the import report; blob verification for those | ~580 | S7b2b1 | verification clean on examples; `cutover` of an example needs no `--partial` at all |
-| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2b2 | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
+| S7b2b2 | Importer part 2b-2b: everything no collector imported -> content-keyed legacy blobs with a path -> sha256 manifest in the import report, behind an allowlist and a two-class refusal policy (proven secrets never block a cutover; unknown types and suspicious names do, without `--partial`); a card that leaves a run's plan is released, never deleted; blob verification for the legacy blobs | ~590 | S7b2b1 | verification clean on examples; a `.env` does not block a cutover, a `.html` or `deploy-token.txt` does; `tokens.json` is kept |
+| S7b2b3a | Importer part 2b-2c: second root for `outputs.base_dir` (`BRAND_OUTPUTS_ROOT`, confined reads, `@outputs/` legacy paths, the outputs path in the report); reel clips -> `clip` artifacts (prepared as a patch on top of S7b2b2) | ~280 | S7b2b2 | clips import and verify; the second root is read confined, with its refusals reported |
+| S7b2b3b | Importer part 2b-2d: editor exports -> `exports` rows + keys (numeric `v<N>` order) and the hardening deferred from the S7b2b2 review (§14, Q-S7b2b3; prepared as a patch on top of S7b2b3a) | ~200 | S7b2b3a | exports import and verify; every item of §14 Q-S7b2b3 has a test |
+| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2b3b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
@@ -755,3 +801,16 @@ when S7a lands.
 8. `brand_owner` credentials: owner only; an editor UI for rules/guidance comes later.
 9. `author`: free text for now.
 10. `app/`: retired formally (S11b).
+
+**Q-S7b2b3 (deferred from the S7b2b2 review; nothing here is optional).**
+1. Editor exports -> `exports` rows, `v<N>` folders in numeric order (test: v2, v10).
+2. The legacy pass walks the whole folder minus `used`; collectors fill `used`.
+3. Refuse an outputs root that is `$HOME` or holds other brands' folders; stream
+   and hash instead of reading everything into memory.
+4. Share the outputs resolver with the engine, or fail on an unreadable
+   `config.local.yaml`; a symlinked `outputs` directory counts as the second
+   root; confinement tests for the second root.
+5. A released take (its card left the plan) must not look foreign when the card
+   returns with a new mp3: record `_imported.released`, accept it as the last
+   import (test: card leaves, returns, updates cleanly).
+6. An aborted run's legacy manifest: "changed" is relative to the last complete run.

@@ -30,6 +30,8 @@ export interface CollectContext {
   /** Where blobs go; without it the items that need blobs are passed over and reported. */
   blobs?: BlobStore;
   skipped: string[];
+  /** Informational lines that are not left-behind data. */
+  notices: string[];
   /** Top-level folder entries some collector took responsibility for; the rest are reported as not imported. */
   handled: Set<string>;
 }
