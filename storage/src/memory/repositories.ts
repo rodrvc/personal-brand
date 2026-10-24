@@ -3,9 +3,14 @@ import { randomUUID } from "node:crypto";
 import {
   NotFoundError,
   AlreadyExistsError,
+  InvalidInputError,
   VersionConflictError,
   type Brand,
+  type Asset,
+  type AssetRepository,
   type BrandDocumentRepository,
+  type TtsCacheRepository,
+  type TtsEntry,
   type BrandRepository,
   type BrandRule,
   type BrandRuleRepository,
@@ -19,7 +24,8 @@ import {
   type Versioned,
   type WriteMeta,
 } from "../contracts/index.ts";
-import { assertEnvelope, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { blobKey } from "../contracts/keys.ts";
+import { assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -28,6 +34,8 @@ export interface MemoryRepositories {
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
   recipes: RecipeRepository;
+  assets: AssetRepository;
+  tts: TtsCacheRepository;
 }
 
 interface DocRow {
@@ -229,5 +237,76 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes };
+  const assetRows = new Map<string, Versioned<Asset> & { brandId: string }>();
+  const findAsset = (brandId: string, assetId: string) => [...assetRows.values()].find((a) => a.brandId === brandId && a.value.assetId === assetId);
+  const assetOut = (a: Versioned<Asset>): Versioned<Asset> => structuredClone({ id: a.id, value: a.value, version: a.version, updatedAt: a.updatedAt });
+
+  const assets: AssetRepository = {
+    async list(brandId, filter) {
+      return [...assetRows.values()]
+        .filter((a) => a.brandId === brandId && (!filter?.kind || a.value.kind === filter.kind) && (!filter?.status || a.value.status === filter.status) && (!filter?.origin || a.value.origin === filter.origin))
+        .sort((a, b) => cmp(a.value.createdAt, b.value.createdAt) || cmp(a.value.assetId, b.value.assetId))
+        .map(assetOut);
+    },
+    async get(brandId, assetId) {
+      const found = isAssetId(assetId) ? findAsset(brandId, assetId) : undefined;
+      if (!found) throw new NotFoundError(`asset ${assetId}`);
+      return assetOut(found);
+    },
+    async register(brandId, input, meta) {
+      assertAsset(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const assetId = input.sha256.slice(0, 16);
+      const dup = findAsset(brandId, assetId);
+      if (dup && dup.value.sha256 !== input.sha256) throw new InvalidInputError(`asset id ${assetId} collides with a different sha256`);
+      if (dup) throw new AlreadyExistsError(`asset ${assetId}`, dup.version);
+      const at = now().toISOString();
+      const row = {
+        id: randomUUID(), brandId, version: 1, updatedAt: at,
+        value: structuredClone({
+          assetId, sha256: input.sha256, blobKey: blobKey(brandId, input.sha256), kind: input.kind, mime: input.mime, width: input.width ?? null, height: input.height ?? null,
+          bytes: input.bytes, origin: input.origin, status: input.status, tags: input.tags ?? [], family: input.family ?? null, generation: input.generation ?? null, createdAt: at,
+        }),
+      };
+      assetRows.set(row.id, row);
+      record({ brandId, entityType: "brand_asset", entityId: row.id, version: 1, body: row.value, bodyText: null }, meta);
+      return assetOut(row);
+    },
+    async update(brandId, assetId, patch, meta) {
+      assertAsset(patch, false);
+      const cur = isAssetId(assetId) ? findAsset(brandId, assetId) : undefined;
+      if (!cur) throw new NotFoundError(`asset ${assetId}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      const next = { ...cur, value: structuredClone({ ...cur.value, ...defined }), version: cur.version + 1, updatedAt: now().toISOString() };
+      assetRows.set(cur.id, next);
+      record({ brandId, entityType: "brand_asset", entityId: cur.id, version: next.version, body: next.value, bodyText: null }, meta);
+      return assetOut(next);
+    },
+  };
+
+  const ttsRows = new Map<string, TtsEntry[]>();
+  const tts: TtsCacheRepository = {
+    async get(brandId, narrationHash) {
+      const found = ttsRows.get(`${brandId}/${narrationHash}`)?.at(-1);
+      if (!found) throw new NotFoundError(`tts ${narrationHash}`);
+      return structuredClone(found);
+    },
+    async takes(brandId, narrationHash) {
+      return structuredClone(ttsRows.get(`${brandId}/${narrationHash}`) ?? []);
+    },
+    async record(brandId, narrationHash, entry) {
+      assertTts(narrationHash, entry);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const list = ttsRows.get(`${brandId}/${narrationHash}`) ?? [];
+      const cur = list.find((t) => t.sha256 === entry.sha256);
+      if (cur) return structuredClone(cur);
+      const row: TtsEntry = structuredClone({ ...entry, createdAt: now().toISOString() });
+      ttsRows.set(`${brandId}/${narrationHash}`, [...list, row]);
+      return structuredClone(row);
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts };
 }

@@ -3,9 +3,14 @@ import type postgres from "postgres";
 import {
   NotFoundError,
   AlreadyExistsError,
+  InvalidInputError,
   VersionConflictError,
   type Brand,
+  type Asset,
+  type AssetRepository,
   type BrandDocumentRepository,
+  type TtsCacheRepository,
+  type TtsEntry,
   type BrandRepository,
   type BrandRule,
   type BrandRuleRepository,
@@ -17,7 +22,8 @@ import {
   type RevisionRepository,
   type WriteMeta,
 } from "../contracts/index.ts";
-import { assertEnvelope, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { blobKey } from "../contracts/keys.ts";
+import { assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -30,6 +36,8 @@ export interface PgRepositories {
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
   recipes: RecipeRepository;
+  assets: AssetRepository;
+  tts: TtsCacheRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -48,6 +56,18 @@ const toRule = (r: Row): Versioned<BrandRule> => ({
   version: r.version,
   updatedAt: iso(r.updated_at)!,
 });
+
+const toAsset = (r: Row) => ({
+  id: r.id as string,
+  value: {
+    assetId: r.asset_id, sha256: r.sha256, blobKey: r.blob_key, kind: r.kind, mime: r.mime, width: r.width, height: r.height, bytes: Number(r.bytes),
+    origin: r.origin, status: r.status, tags: r.tags, family: r.family, generation: r.generation, createdAt: iso(r.created_at)!,
+  } as Asset,
+  version: r.version as number,
+  updatedAt: iso(r.updated_at)!,
+});
+
+const toTts = (r: Row): TtsEntry => ({ sha256: r.sha256, seconds: r.seconds, voice: r.voice, createdAt: iso(r.created_at)! });
 
 const toRevision = (r: Row): Revision => ({
   brandId: r.brand_id,
@@ -291,5 +311,85 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes };
+  const assets: AssetRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM assets WHERE brand_id = ${brandId}
+                             ${filter?.kind ? sql`AND kind = ${filter.kind}` : sql``} ${filter?.status ? sql`AND status = ${filter.status}` : sql``}
+                             ${filter?.origin ? sql`AND origin = ${filter.origin}` : sql``} ORDER BY created_at, asset_id COLLATE "C"`;
+      return rows.map(toAsset);
+    },
+    async get(brandId, assetId) {
+      const [row] = isUuid(brandId) && isAssetId(assetId) ? await sql`SELECT * FROM assets WHERE brand_id = ${brandId} AND asset_id = ${assetId}` : [];
+      if (!row) throw new NotFoundError(`asset ${assetId}`);
+      return toAsset(row);
+    },
+    async register(brandId, input, meta) {
+      assertAsset(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const [row] = await tx`INSERT INTO assets (brand_id, asset_id, sha256, blob_key, kind, mime, width, height, bytes, origin, status, tags, family, generation, created_at, updated_at)
+                               VALUES (${brandId}, ${input.sha256.slice(0, 16)}, ${input.sha256}, ${blobKey(brandId, input.sha256)}, ${input.kind}, ${input.mime},
+                                       ${input.width ?? null}, ${input.height ?? null}, ${input.bytes}, ${input.origin}, ${input.status}, ${input.tags ?? []},
+                                       ${input.family ?? null}, ${input.generation ? json(tx, input.generation) : null}, ${now()}, ${now()})
+                               ON CONFLICT DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version, sha256 FROM assets WHERE brand_id = ${brandId} AND asset_id = ${input.sha256.slice(0, 16)}`;
+          if (cur && cur.sha256 !== input.sha256) throw new InvalidInputError(`asset id ${input.sha256.slice(0, 16)} collides with a different sha256`);
+          throw cur ? new AlreadyExistsError(`asset ${input.sha256.slice(0, 16)}`, cur.version) : new VersionConflictError(null);
+        }
+        const asset = toAsset(row);
+        await appendRevision(tx, { brandId, entityType: "brand_asset", entityId: asset.id, version: 1, body: asset.value, bodyText: null }, meta);
+        return asset;
+      });
+    },
+    async update(brandId, assetId, patch, meta) {
+      assertAsset(patch, false);
+      if (!isUuid(brandId) || !isAssetId(assetId)) throw new NotFoundError(`asset ${assetId}`);
+      return sql.begin(async (tx) => {
+        const [row] = await tx`UPDATE assets SET kind = COALESCE(${patch.kind ?? null}, kind), status = COALESCE(${patch.status ?? null}, status),
+                                      tags = COALESCE(${patch.tags ?? null}, tags), family = COALESCE(${patch.family ?? null}, family),
+                                      updated_at = ${now()}, version = version + 1
+                               WHERE brand_id = ${brandId} AND asset_id = ${assetId} AND version = ${meta.expectedVersion} RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM assets WHERE brand_id = ${brandId} AND asset_id = ${assetId}`;
+          throw cur ? new VersionConflictError(cur.version) : new NotFoundError(`asset ${assetId}`);
+        }
+        const asset = toAsset(row);
+        await appendRevision(tx, { brandId, entityType: "brand_asset", entityId: asset.id, version: asset.version, body: asset.value, bodyText: null }, meta);
+        return asset;
+      });
+    },
+  };
+
+  const tts: TtsCacheRepository = {
+    async get(brandId, narrationHash) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} ORDER BY seq DESC LIMIT 1` : [];
+      if (!row) throw new NotFoundError(`tts ${narrationHash}`);
+      return toTts(row);
+    },
+    async takes(brandId, narrationHash) {
+      if (!isUuid(brandId)) return [];
+      return (await sql`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} ORDER BY seq`).map(toTts);
+    },
+    async record(brandId, narrationHash, entry) {
+      assertTts(narrationHash, entry);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const [row] = await tx`INSERT INTO tts_cache (brand_id, narration_hash, sha256, seconds, voice, created_at)
+                               VALUES (${brandId}, ${narrationHash}, ${entry.sha256}, ${entry.seconds}, ${json(tx, entry.voice)}, ${now()})
+                               ON CONFLICT (brand_id, narration_hash, sha256) DO NOTHING RETURNING *`;
+        if (row) return toTts(row);
+        const [cur] = await tx`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} AND sha256 = ${entry.sha256}`;
+        return toTts(cur);
+      });
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts };
 }

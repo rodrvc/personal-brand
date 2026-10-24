@@ -1,7 +1,7 @@
 import { RuleParamsError, validateRule, validateRuleParams, type Rule } from "@personal-brand/core/checks";
 
 import { InvalidInputError } from "./contracts/errors.ts";
-import type { BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
+import type { AssetInput, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
 
 /** An autosave within this window by the same author folds into the previous revision. */
 export const AUTOSAVE_WINDOW_MS = 10 * 60 * 1000;
@@ -57,4 +57,39 @@ export const MAX_GUIDANCE_BYTES = 32 * 1024;
 export function assertGuidance(input: { description: string; body: string }): void {
   if (typeof input.description !== "string" || typeof input.body !== "string") throw new InvalidInputError("description and body must be strings");
   if (Buffer.byteLength(input.body) > MAX_GUIDANCE_BYTES) throw new InvalidInputError(`guidance body exceeds ${MAX_GUIDANCE_BYTES} bytes`);
+}
+
+const ASSET_KINDS = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
+const ASSET_ORIGINS = ["manual", "ai", "reference"];
+const ASSET_STATUSES = ["candidate", "approved", "hidden"];
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/** Mirrors the `assets` CHECK constraints so both implementations reject identically. */
+export function assertAsset(input: Partial<AssetInput>, complete = true): void {
+  const bad = (what: string): never => {
+    throw new InvalidInputError(`invalid asset ${what}`);
+  };
+  const oneOf = (list: string[], value: string | undefined, what: string, optional: boolean) => {
+    if (!(optional && value === undefined) && !list.includes(value ?? "")) bad(what);
+  };
+  if (complete) {
+    if (!SHA256.test(input.sha256 ?? "")) bad("sha256");
+    if (!input.mime) bad("mime");
+    if (!Number.isInteger(input.bytes) || input.bytes! < 0) bad("bytes");
+    oneOf(ASSET_ORIGINS, input.origin, "origin", false);
+  }
+  oneOf(ASSET_KINDS, input.kind, "kind", !complete);
+  oneOf(ASSET_STATUSES, input.status, "status", !complete);
+  for (const dim of [input.width, input.height]) if (dim !== undefined && (!Number.isInteger(dim) || dim < 1)) bad("dimensions");
+  if (input.tags !== undefined && !input.tags.every((t) => typeof t === "string")) bad("tags");
+  if (input.generation !== undefined && (typeof input.generation !== "object" || input.generation === null || Array.isArray(input.generation))) bad("generation");
+}
+
+export const isAssetId = (value: string): boolean => /^[0-9a-f]{16}$/.test(value);
+
+export function assertTts(narrationHash: string, entry: { sha256: string; seconds: number; voice: unknown }): void {
+  if (!narrationHash) throw new InvalidInputError("narration hash must not be empty");
+  if (!SHA256.test(entry.sha256)) throw new InvalidInputError("invalid sha256");
+  if (!Number.isFinite(entry.seconds) || entry.seconds < 0) throw new InvalidInputError("invalid seconds");
+  assertParams(entry.voice, 1);
 }
