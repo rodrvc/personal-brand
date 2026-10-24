@@ -26,7 +26,7 @@ const parseDoc = (raw: Buffer): Record<string, unknown> | null => {
  * `carousels/<id>/carousel.json` + `versions/*.json` + `chat.jsonl` become one carousel (slug = id), one revision per
  * internal snapshot (oldest first, reason `import`, so history survives), the current document last, and the chat log
  * as insert-only messages. Status is stored once, in its column. Flat `carousels/*.json` files are recipe inputs,
- * not carousels: they are reported, and move with the runs in a later stage.
+ * not carousels: `collectRuns` imports them.
  */
 export function collectCarousels(ctx: CollectContext): Item[] {
   const { dir, root, repos, skipped, handled } = ctx;
@@ -36,10 +36,7 @@ export function collectCarousels(ctx: CollectContext): Item[] {
     handled.add("carousels");
     const rel = `carousels/${id}`;
     const folder = join(base, id);
-    if (id.endsWith(".json")) {
-      skipped.push(`${rel} (recipe input, imported with the runs in a later stage)`);
-      continue;
-    }
+    if (id.endsWith(".json")) continue; // a recipe input: `collectRuns` imports it (or reports it)
     if (!/^[a-z0-9-]+$/.test(id)) {
       skipped.push(`${rel} (not a valid carousel id)`);
       continue;

@@ -92,7 +92,6 @@ brands/<brandId>/blobs/sha256/<hh>/<sha256>                       content-addres
 brands/<brandId>/exports/carousels/<carouselId>/v<NNN>/<nn>.png   deliverable, immutable
 brands/<brandId>/exports/carousels/<carouselId>/v<NNN>/manifest.json
 brands/<brandId>/exports/reels/<runId>/v<NNN>/reel.mp4
-brands/<brandId>/legacy/<importRunId>/<original relative path>    importer: files with no mapping (nothing lost)
 ```
 
 `<brandId>`, `<carouselId>` and `<runId>` are the rows' UUIDs, never slugs,
@@ -443,11 +442,11 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `skills/*/SKILL.md` | `brand_guidance` |
 | `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved); `index.json` is a rebuildable cache and is not imported (S7b2a) |
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
-| `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
-| reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
+| `carousels/*.json` (flat), `reels/week-input.json`, `reels/<date>/storyboard.yaml` | `recipe_runs`; recipe and period are derived and recorded on the run (S7b2b1, §14 Q-S7b2b) |
+| reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b2) |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
-| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; S7b2b). `content/drafts` and `content/published` become `content_items` in S7b1b |
+| `content/**`, anything else | blob keyed by content (`blobKey(sha256)`), with the path -> sha256 manifest in that run's `import_runs.report` (nothing lost; S7b2b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -566,7 +565,14 @@ hash).
    name; `meta/<id>.json` (the user's choice) overrides kind, tags and status;
    mime comes from the bytes (PNG / JPEG / WebP) then the extension; width and
    height are borrowed from `index.json` when it has them, else null (the
-   importer does not parse image headers). Same bytes at two paths are one
+   importer does not parse image headers). Because the cache is rewritten by
+   the editor, they are best-effort: filled only when the asset is registered
+   and never compared afterwards (not in the item hash, the update check or
+   `verifyBrand`), so cache drift is neither a conflict nor a dirty
+   verification; a malformed or wrongly-shaped `index.json` is ignored and
+   reported. `origin` and `mime` are fixed at registration too: moving an
+   imported file into `references/` or `generated/`, or renaming its
+   extension, is a conflict by design. Same bytes at two paths are one
    asset (first path in sorted order wins, the other is reported); a stray
    `.json` is reported. Blobs go through `putBlob`, then `assets.register`;
    a changed sidecar later `update`s kind, tags, status and family. Without a
@@ -575,16 +581,27 @@ hash).
    sha256 (`<key> (blob)` when missing or different), and `cutover` passes the
    store to it.
 
+   *As built in S7b2b1:* runs. `core/narration` holds the narration hash and
+   the voice merge, and `system/ig-reel/storyboard.ts` re-exports them. A run
+   is one item keyed by its source path (`run:<path>`) and found again by the
+   `input._imported.from` it carries, so a re-import saves the same run instead
+   of creating another; its `audio` artifacts are part of what is compared, so
+   verification re-reads them and re-downloads their blobs. A card's audio is
+   skipped (reported, kept as a plain file) when the recipe has no voice or the
+   hash recomputed from the recipe voice and the storyboard override differs
+   from the sidecar's; a narration edited after synthesis therefore stops being
+   imported as that card's current audio. The audio of a folder without a blob
+   store is reported like assets.
+
    **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
    Postgres rows alone; S7b2 is everything that needs blobs. S7b2a (above)
-   is the follow-ups plus assets. S7b2b is the rest and needs owner
-   decisions first (see §14, Q-S7b2b). It adds
-   `assets/**` (+ `index.json`, sidecars) as blobs through `putBlob` and
-   `assets` rows with preserved ids, flat `carousels/*.json` and
+   is the follow-ups plus assets. S7b2b is the rest; its open questions were
+   settled as technical decisions (§14, Q-S7b2b) and it is built as S7b2b1 (runs
+   and TTS) and S7b2b2 (clips, exports, legacy). Together they add flat `carousels/*.json` and
    `reels/**/week-input.json` + `storyboard.yaml` as `recipe_runs`, TTS mp3 +
    sidecars and existing clips as blobs with `tts_cache` / `run_artifacts`,
-   `outputs/**` as `exports` + export keys, and every other file as a blob
-   under `brands/<id>/legacy/<importRunId>/<path>` listed in the report. Its
+   `outputs/**` as `exports` + export keys, and every other file as a
+   content-keyed blob listed in the report. Its
    verification pass re-downloads each blob and compares sha256 (the row-level
    pass already exists). After it, the examples cut over without `--partial`.
 5. S12 removes the folder path and the resolver once every real brand is cut
@@ -653,8 +670,9 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7b1 | Owner guard for non-example brands (`import`/`cutover`, dry run included); S7a2 review follow-ups (`--partial` re-check, marker validation, readability); `import_runs.list` | ~240 | S7a2 | non-example brands are refused before any DB or folder access; runs read back newest first |
 | S7b1b | Importer part 2a: templates, rule proposals (reported), carousels + revisions + chat, ideas/drafts/published -> `content_items`, with tests on a temp example copy | ~460 | S7b1, S6a, S6b | examples import, read back clean and re-import as a no-op |
 | S7b2a | S7b1b review follow-ups (`conflicts` reasons, create-race, simpler carousel writes, shared frontmatter split, plural refusal, deferred tests) + importer part 2b-1: `assets/**` + sidecars -> blobs + `assets` rows, `BlobStore` wiring in the CLI, blob-level verification of assets | ~560 | S7b1b, S5 | example assets import, verify re-downloads each blob, an example without reels cuts over with no `--partial` |
-| S7b2b | Importer part 2b-2 (blocked on owner answers, §14): flat `carousels/*.json`, `reels/**` -> `recipe_runs`; reel TTS cache and clips -> blobs + `tts_cache` / `run_artifacts`; `outputs/**` -> `exports` + keys; everything else -> `legacy/<importRunId>/` blobs; blob verification for those | ~450 | S7b2a, S6c | verification clean on examples; `cutover` of an example needs no `--partial` at all |
-| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2 | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
+| S7b2b1 | Importer part 2b-2a: `narrationCacheKey` and the voice merge move into `core/` (shared with the engine, not copied); flat `carousels/*.json` and `reels/**` -> `recipe_runs` (recipe and period derived and recorded); TTS cache -> blobs + `tts_cache` + `audio` artifacts | ~560 | S7b2a, S6c | examples import their runs, read back clean, re-import as a no-op; a card whose hash cannot be recomputed is reported, not imported |
+| S7b2b2 | Importer part 2b-2b: second root for `outputs.base_dir`; reel clips -> `clip` artifacts; editor exports -> `exports` + keys; everything else -> content-keyed legacy blobs with a path -> sha256 manifest in the import report; blob verification for those | ~580 | S7b2b1 | verification clean on examples; `cutover` of an example needs no `--partial` at all |
+| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2b2 | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
@@ -676,19 +694,45 @@ when S7a lands.
 
 ## 14. Risks and open questions for the owner
 
-**Q-S7b2b (blocks S7b2b; the design above does not settle these).**
-(1) `recipe_runs.recipe` and period for the flat `carousels/*.json` and
-`reels/week-input.json`: neither file names its recipe nor its dates, so
-which recipe slug, and which `period_start/end` (the `reels/<date>/` folder
-name, the earliest item date, the file's mtime)? (2) Where TTS mp3 + sidecar
-and rendered clips sit inside a brand folder, and how a clip's `inputs_hash`
-and a `narration_hash` are recomputed without importing engine code.
-(3) `outputs/**` to `exports`: exports belong to a carousel and a version
-(`carouselExportKey`), so which carousel does a loose output file belong to,
-and are unattributable files `legacy/` blobs? (4) `legacy/<importRunId>/`
-needs the run id before the run is recorded, while a re-run must stay
-idempotent: pre-generate the id and accept a new prefix per run, or key
-legacy blobs by content instead?
+**Q-S7b2b (resolved 2026-10-21 as technical decisions; built in S7b2b1 and S7b2b2).**
+1. *Recipe and period.* Neither input names them, so they are derived and the
+   derivation is recorded on the run (`input._imported = { from, recipe, period }`,
+   `from` being the folder-relative source path). `reels/<date>/storyboard.yaml`
+   is a `reel-week` run for the Monday-to-Sunday week holding the folder date
+   (the engine names the folder after the period start); its input is the root
+   `reels/week-input.json`. Without a storyboard, `reels/week-input.json` alone
+   is a `reel-week` run for the week holding all its item dates. A flat
+   `carousels/*.json` whose slides are all dated inside one Monday-to-Sunday
+   week is a `weekly-roundup` run for that week. Undated or multi-week inputs
+   get no invented run: they are reported and kept as legacy blobs. A run is
+   identified by its source path; a source that now derives another period is a
+   conflict, never a move.
+2. *TTS and clips.* TTS lives at `reels/<periodStart>/audio/<card-id>.mp3` with
+   `<card-id>.json` = `{hash, seconds}`; clips at
+   `<outputs.base_dir>/<outputs.reels>/<periodStart>/clips/<n>-<card-id>.mp4`
+   (base from `config.local.yaml` over `config.yaml`, or `BRAND_OUTPUTS_ROOT`).
+   A base outside the brand folder is read as a second root confined by
+   realpath, and its resolved path is printed in the report. `narration_hash`
+   is the sidecar hash as is. `tts_cache.voice` (NOT NULL) is rebuilt from the
+   recipe voice plus the storyboard override and stored only when recomputing
+   the hash gives the sidecar's value; otherwise the pair is not imported as
+   audio and is reported (legacy). The hash and the merge are the engine's own
+   code, moved into `core/narration` and shared. Imported clips get
+   `inputs_hash = import:sha256:<mp4 sha>`.
+3. *Outputs.* Editor exports
+   (`<outputs>/<outputs.editor>/<carousel-slug>/v<N>/` + `manifest.json`) become
+   `exports` rows (carousel by slug, `version_no = N`, `done`, manifest stored)
+   with files under `carouselExportKey`; a version without a manifest and the
+   `.reserved` markers are legacy. Reel outputs become `run_artifacts` of that
+   period's reel run. Weekly renders (`<year>/<mon>-<dd>/`) would be artifacts of
+   that week's `weekly-roundup` run, but `run_artifacts` only accepts `clip`,
+   `audio` and `timeline`, so they are legacy. Everything else is legacy,
+   always reported.
+4. *Legacy blobs.* Keyed by content: `putBlob` to `blobKey(sha256)` (idempotent,
+   never overwrites), so no run id is needed before the run is recorded. The
+   path -> sha256 manifest goes into that run's `import_runs.report`; a re-run
+   compares with the latest report and lists the paths that changed.
+   This replaces the old `legacy/<importRunId>/<path>` layout.
 
 **Risks** (mitigations are in the sections cited)
 
