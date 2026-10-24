@@ -5,7 +5,7 @@ import { parse as parseYaml } from "yaml";
 
 import type { ContentStage } from "../contracts/index.ts";
 import { resolvePublishedAt } from "../revision-policy.ts";
-import { found, readRegular, sha256, slugify, type CollectContext, type Item } from "./shared.ts";
+import { found, readRegular, sha256, slugify, splitFrontmatter, type CollectContext, type Item } from "./shared.ts";
 
 /** What a content item must read back as (everything but the slug, which is its key). */
 interface ContentPayload {
@@ -19,7 +19,6 @@ interface ContentPayload {
 }
 
 const IDEA_LINE = /^\s*[-*]\s+(?:\[([ xX])\]\s+)?(.+?)\s*$/;
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 const DATE_PREFIX = /^(\d{4}-\d{2}-\d{2})(?:-|$)/;
 
 const first = (data: Record<string, unknown>, ...keys: string[]) => keys.map((k) => data[k]).find((v) => typeof v === "string" && v.trim()) as string | undefined;
@@ -35,6 +34,7 @@ function instant(value: string | undefined): string | null {
  * backlog line (`[x]`) becomes stage `archived` (neutral; nothing is discarded or deleted) and an unchecked or plain
  * bullet becomes `idea`. Anything else a file carries (its frontmatter, the checked flag) is kept verbatim in `meta`,
  * so "approved by the owner" lives there and is not a stage of its own. The folder a piece sits in decides its stage.
+ * A published piece's date is read from its frontmatter key `publicado`, `published_at`, `publishedAt` or `fecha`.
  */
 export function collectContent(ctx: CollectContext): Item[] {
   const { dir, root, repos, skipped, handled } = ctx;
@@ -52,6 +52,7 @@ export function collectContent(ctx: CollectContext): Item[] {
       read: async (id) => {
         const row = await found(repos.content.get(id, slug));
         if (!row) return null;
+        // `get` overlays the stage column into `meta`; the payload carries the stage as its own field, so it is not part of `meta`.
         const { stage: _stage, ...meta } = row.value.meta;
         const v = row.value;
         return { id: row.id, version: row.version, value: { title: v.title, stage: v.stage, channel: v.channel, format: v.format, bodyMd: v.bodyMd, meta, publishedAt: v.publishedAt } };
@@ -102,18 +103,17 @@ export function collectContent(ctx: CollectContext): Item[] {
         if (!raw) continue;
         const text = raw.toString("utf-8");
         let data: Record<string, unknown> = {};
-        let body = text;
-        const m = FRONTMATTER.exec(text);
+        const { yaml, body } = splitFrontmatter(text);
         try {
-          const parsed = m ? parseYaml(m[1]) : null;
+          const parsed = yaml === null ? null : parseYaml(yaml);
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed as Record<string, unknown>;
-          if (m) body = m[2];
         } catch {
           skipped.push(`${rel} (unreadable frontmatter)`);
           continue;
         }
         const stem = basename(file, ".md");
-        // A published piece needs a date: its frontmatter, else the `YYYY-MM-DD-` prefix of its name. No guessing beyond that.
+        // A published piece needs a date: its frontmatter (`publicado`, `published_at`, `publishedAt` or `fecha`, first one set wins),
+        // else the `YYYY-MM-DD-` prefix of its name. No guessing beyond that.
         const publishedAt = stage === "published" ? instant(first(data, "publicado", "published_at", "publishedAt", "fecha")) ?? instant(DATE_PREFIX.exec(stem)?.[1]) : null;
         if (stage === "published" && !publishedAt) {
           skipped.push(`${rel} (no publication date: add \`publicado: YYYY-MM-DD\` to its frontmatter)`);

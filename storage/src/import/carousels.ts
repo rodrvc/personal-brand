@@ -1,7 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { VersionConflictError, type CarouselStatus, type WriteMeta } from "../contracts/index.ts";
+import { assertCarousel } from "../revision-policy.ts";
+import { InvalidInputError, VersionConflictError, type CarouselStatus, type WriteMeta } from "../contracts/index.ts";
 import { canon, found, readRegular, sha256, type CollectContext, type Item } from "./shared.ts";
 
 const STATUSES: CarouselStatus[] = ["draft", "exported", "scheduled", "published"];
@@ -70,11 +71,13 @@ export function collectCarousels(ctx: CollectContext): Item[] {
     });
 
     const status = STATUSES.includes(doc.status as CarouselStatus) ? (doc.status as CarouselStatus) : "draft";
+    // The document as it reads back: the status column overlaid on the source document. Written and compared in this one shape.
+    const document = { ...doc, status };
     const schemaOf = (d: Record<string, unknown>) => (Number.isInteger(d.schemaVersion) && (d.schemaVersion as number) >= 1 ? (d.schemaVersion as number) : 1);
     const hash = sha256([...snapshots.map((s) => s.hash), sha256(current), chatRaw ? sha256(chatRaw) : ""].join("\n"));
     items.push({
       key: `carousel:${id}`, entityType: "carousel", hash,
-      payload: { title: doc.title, status, document: { ...doc, status }, chat },
+      payload: { title: doc.title, status, document, chat },
       read: async (brandId) => {
         const row = await found(repos.carousels.get(brandId, id, identity));
         if (!row) return null;
@@ -82,52 +85,51 @@ export function collectCarousels(ctx: CollectContext): Item[] {
         return { id: row.id, version: row.version, value: { title: row.value.title, status: row.value.status, document: row.value.document, chat: messages } };
       },
       write: async (brandId, expectedVersion, meta: WriteMeta) => {
+        // The repository's own rule, checked before any write: a refused status leaves the row untouched.
+        assertCarousel({ status });
         const existing = expectedVersion === null ? null : await repos.carousels.get(brandId, id, identity);
         // The row changed since classify judged it: report a conflict instead of writing over that edit.
         if (existing && existing.version !== expectedVersion) throw new VersionConflictError(existing.version);
         const stored = existing ? (await repos.chat.list(existing.id)).map((m) => m.body) : [];
         // The chat log is append-only: if what is stored is not a prefix of the source, the two diverged.
-        if (stored.length > chat.length || stored.some((b, i) => canon(b) !== canon(chat[i]))) throw new VersionConflictError(existing!.version);
+        if (stored.length > chat.length || stored.some((b, i) => canon(b) !== canon(chat[i]))) throw new InvalidInputError("chat log diverged from storage");
         const seen = new Set((existing ? await repos.revisions.list("carousel", existing.id) : []).filter((r) => r.source === "import").map((r) => r.sourceHash));
-        // Snapshots not imported yet go first (oldest first), then the current document. Only the LAST revisioned write
-        // (the current document, or the status move after it) carries the item hash, so an interrupted pass is never
-        // classified `unchanged`; the writes before it carry a derived hash.
-        const steps = [...snapshots.filter((s) => !seen.has(s.hash)).map((s) => ({ doc: s.doc, sourceHash: s.hash })), { doc, sourceHash: hash }];
-        const final = steps.pop()!;
+        // Snapshots not imported yet go first (oldest first), then the current document (`last`). Only the LAST revisioned
+        // write (the current document, or the status move after it) carries the item hash, so an interrupted pass is never
+        // classified `unchanged`; snapshots carry their own hash and the current document a derived one while something follows.
+        const last = { doc: document, sourceHash: hash };
+        const steps = [...snapshots.filter((s) => !seen.has(s.hash)).map((s) => ({ doc: s.doc, sourceHash: s.hash })), last];
         const derived = `${hash}:doc`;
         const input = (s: { doc: Record<string, unknown> }) => ({ title: s.doc.title as string, document: { json: s.doc, schemaVersion: schemaOf(s.doc) } });
         let at!: { id: string; version: number; status: CarouselStatus };
-        const saveDoc = async (s: { doc: Record<string, unknown> }, sourceHash: string) => {
-          const saved = await repos.carousels.save(at.id, input(s), { ...meta, expectedVersion: at.version, sourceHash });
-          at = { ...at, version: saved.version };
-        };
         const appendChat = async () => {
           for (const body of chat.slice(stored.length)) await repos.chat.append(at.id, body);
         };
-        const create = async (s: { doc: Record<string, unknown> }, sourceHash: string) => {
-          const made = await repos.carousels.create(brandId, { slug: id, ...input(s) }, { ...meta, expectedVersion: null, sourceHash });
-          at = { id: made.id, version: made.version, status: made.value.status };
-        };
+        const setStatus = async (sourceHash: string) => void (await repos.carousels.setStatus(at.id, { status }, { ...meta, expectedVersion: at.version, sourceHash }));
         if (existing) at = { id: existing.id, version: existing.version, status: existing.value.status };
-        else if (steps.length) {
-          const head = steps.shift()!;
-          await create(head, head.sourceHash);
-        }
         else {
-          // A new carousel with one document: when chat or a status move still follows, the create carries the derived hash.
-          const plain = status === "draft" && !chat.length;
-          await create(final, plain ? hash : derived);
-          if (plain) return;
-          await appendChat();
-          if (at.status !== status) await repos.carousels.setStatus(at.id, { status }, { ...meta, expectedVersion: at.version, sourceHash: hash });
-          else await saveDoc(final, hash);
-          return;
+          // A new carousel starts from its first document, created in its final status when that document is the current one.
+          const first = steps.shift()!;
+          const alone = first === last;
+          const closes = alone && chat.length === 0;
+          const made = await repos.carousels.create(brandId, { slug: id, ...input(first), status: alone ? status : "draft" }, { ...meta, expectedVersion: null, sourceHash: closes ? hash : alone ? derived : first.sourceHash });
+          at = { id: made.id, version: made.version, status: made.value.status };
+          if (closes) return;
+          if (alone) {
+            // Only the chat follows the create, so a status write (a no-op move) closes the pass instead of saving the document again.
+            await appendChat();
+            return void (await setStatus(hash));
+          }
         }
-        for (const s of steps) await saveDoc(s, s.sourceHash);
+        const save = async (s: { doc: Record<string, unknown> }, sourceHash: string) => {
+          const saved = await repos.carousels.save(at.id, input(s), { ...meta, expectedVersion: at.version, sourceHash });
+          at = { ...at, version: saved.version };
+        };
+        for (const s of steps.filter((x) => x !== last)) await save(s, s.sourceHash);
         await appendChat();
         const moves = at.status !== status;
-        await saveDoc(final, moves ? derived : hash);
-        if (moves) await repos.carousels.setStatus(at.id, { status }, { ...meta, expectedVersion: at.version, sourceHash: hash });
+        await save(last, moves ? derived : hash);
+        if (moves) await setStatus(hash);
       },
     });
   }

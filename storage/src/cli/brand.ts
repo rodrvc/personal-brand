@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { NotFoundError } from "../contracts/index.ts";
+import { S3ObjectStore } from "../blob/index.ts";
+import { NotFoundError, type BlobStore } from "../contracts/index.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories } from "../pg/index.ts";
@@ -39,7 +40,16 @@ const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
 function ownerRefusal(names: string[], env: NodeJS.ProcessEnv, flag: string | undefined): string | null {
   const blocked = [...new Set(names)].filter((n) => !EXAMPLE_BRAND.test(n) && !(/^[a-z0-9-]+$/.test(n) && env.BRAND_OWNER_OPT_IN === n && flag === n));
   const many = blocked.length > 1;
-  return blocked.length ? `${many ? "Las marcas" : "La marca"} ${blocked.map((n) => `"${n}"`).join(", ")} ${many ? "no son" : "no es"} de ejemplo: requiere la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.` : null;
+  return blocked.length ? `${many ? "Las marcas" : "La marca"} ${blocked.map((n) => `"${n}"`).join(", ")} ${many ? "no son" : "no es"} de ejemplo: ${many ? "requieren" : "requiere"} la aprobación explícita del dueño (BRAND_OWNER_OPT_IN=<marca> y --owner-opt-in <marca>). No se hizo nada.` : null;
+}
+
+/**
+ * The bucket the importer writes blobs to, from the same `S3_*` variables as the editor (`S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+ * `S3_SECRET_ACCESS_KEY`, optional `S3_ENDPOINT`, `S3_REGION`, `S3_FORCE_PATH_STYLE`); undefined when they are not all set.
+ */
+export function blobStoreFromEnv(env: NodeJS.ProcessEnv): BlobStore | undefined {
+  if (!env.S3_BUCKET || !env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY) return undefined;
+  return new S3ObjectStore({ bucket: env.S3_BUCKET, endpoint: env.S3_ENDPOINT, region: env.S3_REGION || "us-east-1", accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY, forcePathStyle: env.S3_FORCE_PATH_STYLE !== "false" });
 }
 
 /** Strict per-verb parser (`--flag value` or `--flag=value`). Returns null for an unknown verb or flag, or a missing value. */
@@ -135,13 +145,14 @@ function describe(report: ImportReport): string[] {
     `Marca "${report.slug}"${report.dryRun ? " (simulacro: no se escribió nada)" : ""}`,
     ...report.items.map((i) => `  ${i.outcome} ${i.key}`),
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
+    ...(report.conflicts.length ? [`Conflictos: ${report.conflicts.join(", ")}.`] : []),
     ...(report.notImported.length ? [`Fuera de esta etapa, no importado: ${report.notImported.join(", ")}.`] : []),
     ...report.proposals.map((p) => `Propuesta de regla (no creada): ${p.kind} ${JSON.stringify(p.params)} desde ${p.from}.`),
     ...(report.skipped.length ? [`Omitidos: ${report.skipped.join(", ")}.`] : []),
   ];
 }
 
-async function cutover(repos: ImportRepos, slug: string, from: string, author: string, partial: boolean): Promise<CliResult> {
+async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, slug: string, from: string, author: string, partial: boolean): Promise<CliResult> {
   const marker = join(from, CUTOVER_MARKER);
   // Exclusive create: never overwrites or follows anything already at the marker path. A concurrent cutover that
   // already wrote the same brand's marker (EEXIST) counts as success; any other failure is the caller's to report.
@@ -167,13 +178,13 @@ async function cutover(repos: ImportRepos, slug: string, from: string, author: s
   if (present) return { lines: [`Ya hay un ${CUTOVER_MARKER} en ${from}, pero la marca no está cortada: revísalo antes de continuar.`], exitCode: 1 };
 
   // Data the importer does not carry yet would be stranded by a cutover, so it must be acknowledged with --partial.
-  const plan = await importBrand(repos, { from, dryRun: true, author });
+  const plan = await importBrand(repos, { from, dryRun: true, author, blobs });
   const refuse = (left: string[]): CliResult => ({ lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: 1 });
   if (leftBehind(plan).length && !partial) return refuse(leftBehind(plan));
-  const report = await importBrand(repos, { from, dryRun: false, author });
+  const report = await importBrand(repos, { from, dryRun: false, author, blobs });
   // The real pass can see more than the plan did (the folder may have changed in between): check it too.
   if (leftBehind(report).length && !partial) return refuse(leftBehind(report));
-  const mismatched = await verifyBrand(repos, from);
+  const mismatched = await verifyBrand(repos, from, blobs);
   if (report.counts.conflict || mismatched.length) {
     return { lines: [...describe(report), `No se corta: verificación sucia (${[...report.items.filter((i) => i.outcome === "conflict").map((i) => i.key), ...mismatched].join(", ")}).`], exitCode: 1 };
   }
@@ -189,9 +200,11 @@ async function cutover(repos: ImportRepos, slug: string, from: string, author: s
 
 /**
  * `repos` is injected by tests; otherwise the Postgres repositories are opened from `DATABASE_URL`
- * (an owner-capable role: guidance and import runs are owner-only). Output lines are user-facing Spanish.
+ * (an owner-capable role: guidance and import runs are owner-only). `blobs` is injected by tests; otherwise the bucket
+ * comes from the `S3_*` variables, and without one the assets of a folder are reported, not imported.
+ * Output lines are user-facing Spanish.
  */
-export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: ImportRepos): Promise<CliResult> {
+export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: ImportRepos, blobs: BlobStore | undefined = repos ? undefined : blobStoreFromEnv(env)): Promise<CliResult> {
   const [verb, ...rest] = argv;
   const args = parseArgs(verb, rest);
   const slug = args?.positionals[0];
@@ -222,8 +235,8 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   try {
     if (!repos) sql = connect(env);
     const r = repos ?? createPgRepositories(sql!);
-    if (verb === "cutover") return await cutover(r, slug!, from, author, args.flags.has("partial"));
-    const report = await importBrand(r, { from, dryRun, author });
+    if (verb === "cutover") return await cutover(r, blobs, slug!, from, author, args.flags.has("partial"));
+    const report = await importBrand(r, { from, dryRun, author, blobs });
     return { lines: describe(report), exitCode: report.counts.conflict ? 1 : 0 };
   } catch (error) {
     if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: 1 };
