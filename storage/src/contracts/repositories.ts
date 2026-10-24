@@ -376,7 +376,9 @@ export interface ImportRun {
   report: Record<string, unknown>;
 }
 
-/** Insert-only log of real (non dry-run) import passes; owner role only. Reading it back lands in S7b. */
+/** Insert-only log of real (non dry-run) import passes; written by the owner role, readable by the app and reader roles. */
 export interface ImportRunRepository {
   record(input: Omit<ImportRun, "id">): Promise<ImportRun>;
+  /** A brand's runs, newest first (by `startedAt`, then `finishedAt`, then `id` ascending); empty for a brand with none. */
+  list(brandId: string): Promise<ImportRun[]>;
 }

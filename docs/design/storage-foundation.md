@@ -499,8 +499,24 @@ hash).
    S8. `cutover` refuses while the importer has left anything behind
    (`notImported` or `skipped`, minus files that are never imported by
    design) unless `--partial` is passed; the examples are cut over with
-   `--partial` until S7b. A concurrent cutover that already wrote the same
+   `--partial` until S7b2. A concurrent cutover that already wrote the same
    brand's marker counts as success.
+   *As built in S7b1:* `cutover` re-checks the real pass report against
+   `--partial`, and a marker that does not name the brand is refused, not
+   trusted. `import_runs.list(brandId)` reads runs back, newest first.
+
+   **Owner guard (owner decision).** `import` and `cutover` refuse any brand
+   whose slug does not match `^example(-[a-z0-9-]+)?$` (the tracked
+   `profiles/example*`), `--dry-run` included, before any database connection
+   or folder read. The only way past it is two parts that must both name that
+   exact slug: `BRAND_OWNER_OPT_IN=<slug>` in the environment and
+   `--owner-opt-in <slug>` on the command line (one brand per run; a wildcard
+   never matches). A folder is judged by its own name and, when it exists,
+   by its real name, so a symlink called `example-x` that points at a real
+   brand is refused too. Only the owner sets it, by hand, per brand, after approving
+   that brand's source; agents and automation never do. This is a speed bump
+   against mistakes, not a security boundary: anyone who can run the CLI can
+   set an env var.
 5. S12 removes the folder path and the resolver once every real brand is cut
    over.
 
@@ -564,8 +580,10 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S6d | `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~300 | S6c | usage/verify tests on memory storage |
 | S7a | CLI skeleton (bin, `runCli`, strict per-verb flag parser from #116) + `import` verb with the backup gate; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs` (record only) | ~520 | S3, S4 | example brands import, re-run is a no-op, conflicts are reported and never overwritten |
 | S7a2 | `cutover` verb + `.storage-cutover` marker + `markCutover`; `resolveBrandSource`; `resolveProfileDir` refusal; `verifyBrand` (re-read and compare); `--partial` guard | ~480 | S7a | cutover writes marker + `cutover_at`, legacy readers refuse it |
-| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass; ideas backlog -> `content_items`; `import_runs.list` | ~590 | S7a, S5, S6c | verification clean on examples |
-| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
+| S7b1 | Owner guard for non-example brands (`import`/`cutover`, dry run included); S7a2 review follow-ups (`--partial` re-check, marker validation, readability); `import_runs.list` | ~240 | S7a2 | non-example brands are refused before any DB or folder access; runs read back newest first |
+| S7b1b | Importer part 2a: templates, rule proposals (reported), carousels + revisions + chat, ideas/drafts/published -> `content_items`, with tests on a temp example copy | ~460 | S7b1, S6a, S6b | examples import, read back clean and re-import as a no-op |
+| S7b2 | Importer part 2b: `assets/**` + `index.json` + sidecars -> blobs + `assets`; flat `carousels/*.json`, `reels/**` -> `recipe_runs`; reel TTS cache and clips -> blobs + `tts_cache` / `run_artifacts`; `outputs/**` -> `exports` + keys; everything else -> `legacy/<importRunId>/` blobs; blob-level verification pass (re-download, compare sha256) | ~500 | S7b1b, S5, S6c | verification clean on examples; `cutover` of an example needs no `--partial` |
+| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2 | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
@@ -575,7 +593,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
-18 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
+20 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
 lines, and merging the S9 or S11 pairs would break the budget). A slice that
 grows is split, not compressed.
 

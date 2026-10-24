@@ -165,6 +165,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
 /**
  * Imports documents, guidance and recipes of a brand folder (slug = folder name). Idempotent per item via the
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
+ * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
 export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; now?: () => Date }): Promise<ImportReport> {
   const dir = resolve(opts.from);

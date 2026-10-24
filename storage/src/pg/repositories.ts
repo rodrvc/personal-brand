@@ -751,6 +751,10 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
         .catch((e) => Promise.reject((e as { code?: string }).code === "23503" ? new NotFoundError(`brand ${input.brandId}`) : e));
       return toImportRun(row);
     },
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      return (await sql`SELECT * FROM import_runs WHERE brand_id = ${brandId} ORDER BY started_at DESC, finished_at DESC, id`).map(toImportRun);
+    },
   };
 
   return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns };
