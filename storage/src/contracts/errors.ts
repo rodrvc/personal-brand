@@ -17,7 +17,11 @@ export class PreconditionFailedError extends Error {
   }
 }
 
-/** A row write lost an optimistic-concurrency race. `currentVersion` is null when the row does not exist. */
+/**
+ * A row write lost an optimistic-concurrency race. `currentVersion` is null when the row does not exist.
+ * HTTP mapping: a missing brand is `NotFoundError` (404); a document put with an `expectedVersion` for a
+ * document that does not exist is `VersionConflictError(null)` (409).
+ */
 export class VersionConflictError extends Error {
   constructor(readonly currentVersion: number | null) {
     super(`Version conflict (current version: ${currentVersion ?? "none"})`);
@@ -30,5 +34,22 @@ export class NotFoundError extends Error {
   constructor(what: string) {
     super(`Not found: ${what}`);
     this.name = "NotFoundError";
+  }
+}
+
+/** A create hit an existing slug or document key; `currentVersion` is the existing row's version. */
+export class AlreadyExistsError extends VersionConflictError {
+  constructor(what: string, currentVersion: number) {
+    super(currentVersion);
+    this.name = "AlreadyExistsError";
+    this.message = `Already exists: ${what} (current version: ${currentVersion})`;
+  }
+}
+
+/** Input rejected before reaching storage (bad slug, malformed body envelope). */
+export class InvalidInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidInputError";
   }
 }
