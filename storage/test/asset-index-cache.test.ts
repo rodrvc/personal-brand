@@ -47,7 +47,7 @@ for (const [label, bad] of [["invalid JSON", "{not json"], ["entries is an objec
   assert.match(out.text, /assets\/index\.json \(unreadable cache: ignored\)/, label);
   assert.match(out.text, /conflictos 0/, label);
   assert.equal((await t.repos.assets.get(t.brandId, idOf(added))).value.sha256, createHash("sha256").update(added).digest("hex"), `${label}: the new asset is created`);
-  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs), [], label);
+  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs, {}), [], label);
 }
 // The S7b2a crash path: an entries array holding non-objects. It is still an array, so nothing is reported as ignored.
 {
@@ -59,7 +59,7 @@ for (const [label, bad] of [["invalid JSON", "{not json"], ["entries is an objec
   assert.equal(out.code, 0, out.text);
   assert.match(out.text, /conflictos 0/);
   assert.doesNotMatch(out.text, /unreadable cache/);
-  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs), []);
+  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs, {}), []);
 }
 
 // 2a. Index cache drift (sizes) neither conflicts nor leaves anything dirty, and settles into a no-op.
@@ -69,7 +69,7 @@ for (const [label, bad] of [["invalid JSON", "{not json"], ["entries is an objec
   const drifted = await t.run();
   assert.equal(drifted.code, 0, drifted.text);
   assert.match(drifted.text, /actualizados 0,.*conflictos 0/, "sizes are outside the item hash, not just outside the conflict check");
-  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs), []);
+  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs, {}), []);
   const settled = await t.run();
   assert.equal(settled.code, 0, settled.text);
   assert.match(settled.text, /actualizados 0,.*conflictos 0/, "a further re-import is a no-op");
@@ -89,7 +89,7 @@ for (const [label, bad] of [["invalid JSON", "{not json"], ["entries is an objec
   const healed = await t.run();
   assert.equal(healed.code, 0, healed.text);
   assert.match(healed.text, /actualizados 1,.*conflictos 0/, "the stale hash is rewritten, not reported");
-  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs), []);
+  assert.deepEqual(await verifyBrand(t.repos, t.dir, t.blobs, {}), []);
   const again = await t.run();
   assert.match(again.text, /actualizados 0,.*conflictos 0/, "the next re-import is a no-op");
   assert.equal(again.code, 0);

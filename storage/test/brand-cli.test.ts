@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { narrationCacheKey } from "@personal-brand/core/narration";
 import postgres from "postgres";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { resolveBrandSource } from "../src/brand-source.ts";
 import { FakeObjectStore } from "../src/blob/index.ts";
 import { blobKey } from "../src/contracts/index.ts";
 import { blobStoreFromEnv, isLocalDatabase, runCli } from "../src/cli/brand.ts";
+import { contentRefusal } from "../src/import/allowlist.ts";
 import { verifyBrand } from "../src/import/importer.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
@@ -291,7 +292,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   writeFileSync(join(rich, "content", "published", "2026-02-01-launch.md"), "---\ntitulo: Launch\ncanal: linkedin\naprobado: true\npublicado: 2026-03-05\n---\nBody\n");
   assert.match((await run("import", "--from", rich)).lines.join("\n"), /actualizados 1,/);
   assert.equal((await repos.content.get(rid, "2026-02-01-launch")).value.publishedAt, "2026-03-05T00:00:00.000Z");
-  assert.deepEqual(await verifyBrand(repos, rich), [], "nothing differs after the date moved");
+  assert.deepEqual(await verifyBrand(repos, rich, undefined, env), [], "nothing differs after the date moved");
 
   // An interrupted pass (the second save throws) re-runs as `updated`, then settles as `unchanged`, with history intact.
   writeFileSync(join(car, "versions", "2026-01-04T00-00-00-000Z.json"), doc("Sixth", "draft"));
@@ -371,8 +372,8 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const fonts = (await repos.assets.list(lid, { kind: "font" })).map((a) => [a.value.family, a.value.mime]).sort();
   assert.deepEqual(fonts, [["Other Family", "font/woff2"], ["Sample", "font/woff2"]]);
   assert.deepEqual((await blobs.get(blobKey(lid, sha(logo)))).body, logo);
-  assert.deepEqual(await verifyBrand(repos, lib, blobs), []);
-  const bare = await verifyBrand(repos, lib, new FakeObjectStore());
+  assert.deepEqual(await verifyBrand(repos, lib, blobs, env), []);
+  const bare = await verifyBrand(repos, lib, new FakeObjectStore(), env);
   assert.equal(bare.filter((k) => k.startsWith("asset:")).length, 8);
   assert.ok(bare.every((k) => /^(asset:[0-9a-f]{16}|legacy:.+) \(blob\)$/.test(k)), "a missing blob is a dirty verification, legacy files included");
   assert.match((await run("import", "--from", lib)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 20, conflictos 0/);
@@ -380,7 +381,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: ["ink:light"], status: "approved" }));
   assert.match((await run("import", "--from", lib)).lines.join("\n"), /actualizados 1,/);
   assert.deepEqual((await asset(logoId)).tags, ["ink:light"]);
-  assert.deepEqual(await verifyBrand(repos, lib, blobs), [], "a re-imported reclassification verifies clean");
+  assert.deepEqual(await verifyBrand(repos, lib, blobs, env), [], "a re-imported reclassification verifies clean");
   const logoRow = await repos.assets.get(lid, logoId);
   await repos.assets.update(lid, logoId, { status: "hidden" }, { expectedVersion: logoRow.version, author: "editor", source: "editor", reason: "save" });
   put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: [], status: "approved" }));
@@ -412,20 +413,20 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.doesNotMatch(resized.lines.join("\n"), new RegExp(`${lateId}.*changed in the folder`));
   assert.deepEqual(await asset(lateId).then((a) => [a.width, a.height]), [null, null], "a size is only borrowed at registration");
   assert.deepEqual(await asset(logoId).then((a) => [a.width, a.height]), [120, 40]);
-  assert.deepEqual(await verifyBrand(repos, lib, blobs), [`asset:${logoId}`], "cache drift adds nothing to the dirty list (the hidden logo is the earlier, deliberate conflict)");
+  assert.deepEqual(await verifyBrand(repos, lib, blobs, env), [`asset:${logoId}`], "cache drift adds nothing to the dirty list (the hidden logo is the earlier, deliberate conflict)");
   for (const bad of ["{not json", JSON.stringify({ entries: { a: 1 } }), JSON.stringify([1])]) {
     put("index.json", bad);
     const broken = await run("import", "--from", lib);
     assert.equal(broken.exitCode, 1, "the earlier conflict remains, nothing new");
     assert.match(broken.lines.join("\n"), /assets\/index\.json \(unreadable cache: ignored\)/);
   }
-  assert.deepEqual(await verifyBrand(repos, lib, blobs), [`asset:${logoId}`]);
+  assert.deepEqual(await verifyBrand(repos, lib, blobs, env), [`asset:${logoId}`]);
 
   // A font family edited in its sidecar is a reclassification: it updates, and nothing new turns dirty.
   put("fonts/Other-Bold.meta.json", JSON.stringify({ family: "Renamed Family" }));
   assert.match((await run("import", "--from", lib)).lines.join("\n"), /actualizados 1,/);
   assert.ok((await repos.assets.list(lid, { kind: "font" })).some((a) => a.value.family === "Renamed Family"));
-  assert.deepEqual(await verifyBrand(repos, lib, blobs), [`asset:${logoId}`], "only the conflicted, user-hidden logo is dirty");
+  assert.deepEqual(await verifyBrand(repos, lib, blobs, env), [`asset:${logoId}`], "only the conflicted, user-hidden logo is dirty");
 
   // Runs: the recipe and period are derived (never named by the files) and recorded on the run; the TTS cache is imported only
   // when its hash can be recomputed; undated or multi-week inputs get no run.
@@ -456,7 +457,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.deepEqual(audio.map((a) => a.cardId), sb.cards.filter((_, i) => i !== 1).map((c) => c.id), "the card whose hash does not match is not imported");
   assert.equal((await repos.tts.get(runBrand, hashes[0])).seconds, 2.5);
   assert.deepEqual((await blobs.get(blobKey(runBrand, audio[0].sha256))).body, Buffer.from(`audio-${sb.cards[0].id}`));
-  assert.deepEqual(await verifyBrand(repos, runShop, blobs), []);
+  assert.deepEqual(await verifyBrand(repos, runShop, blobs, env), []);
   assert.match((await run("import", "--from", runShop)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios 15, conflictos 0/);
   assert.equal((await repos.runs.list(runBrand)).length, 2, "a re-import never creates another run");
   writeFileSync(join(folder, "storyboard.yaml"), readFileSync(join(folder, "storyboard.yaml"), "utf-8").replace("min_seconds: 6", "min_seconds: 7"));
@@ -480,7 +481,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   rmSync(join(inputOnly, "reels", "2026-08-10"), { recursive: true });
   assert.match((await run("import", "--from", inputOnly)).lines.join("\n"), /created run:reels\/week-input\.json/);
   assert.deepEqual((await repos.runs.list((await repos.brands.getBySlug("example-input-shop")).id)).map((r) => [r.value.recipe, r.value.periodStart]), [["reel-week", "2026-08-10"], ["weekly-roundup", "2026-07-27"]]);
-  assert.ok((await verifyBrand(repos, runShop, new FakeObjectStore())).includes("run:reels/2026-08-10/storyboard.yaml (blob)"), "a run whose audio blob is missing is a dirty verification");
+  assert.ok((await verifyBrand(repos, runShop, new FakeObjectStore(), env)).includes("run:reels/2026-08-10/storyboard.yaml (blob)"), "a run whose audio blob is missing is a dirty verification");
 
   // A foreign take in a slot (neither the planned nor the last imported one) is never overwritten: the run is a conflict.
   const foreign = "f".repeat(64);
@@ -510,7 +511,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     assert.equal(dropped.exitCode, 0, dropped.lines.join("\n"));
     assert.match(dropped.lines.join("\n"), new RegExp(`audio of card ${sb.cards[0].id} is no longer in the source; its stored take is kept in history`), name);
     assert.match((await run("import", "--from", shop)).lines.join("\n"), /actualizados 0,.*conflictos 0/, `${name}: the following import is a no-op`);
-    assert.deepEqual(await verifyBrand(repos, shop, blobs), [], name);
+    assert.deepEqual(await verifyBrand(repos, shop, blobs, env), [], name);
     assert.deepEqual((await repos.runArtifacts.history(shopRun.id, "audio", 0)).map((a) => a.sha256), [before.sha256], `${name}: the old take is kept in history`);
     assert.ok(await blobs.get(blobKey(shopBrand, before.sha256)), "its blob is kept");
     assert.match(dropped.lines.join("\n"), /Avisos: /, `${name}: told as a notice`);
@@ -569,6 +570,147 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(linked.exitCode, 1);
   assert.match(linked.lines[0], /linked-dir \(not a regular file\)/);
 
+  // Outputs root (S7b2b3a): `outputs.base_dir` is a second root, confined by realpath. Clips become `clip` artifacts of their card; the
+  // rest goes through the same allowlist and two-class policy as the folder, so secrets there are refused and never uploaded.
+  const outShop = fixture(label, "example-outputs-shop");
+  cpSync(join(runShop, "reels"), join(outShop, "reels"), { recursive: true });
+  const outRoot = join(work, label, "outputs-second-root");
+  writeFileSync(join(outShop, "config.local.yaml"), `outputs:\n  base_dir: ${outRoot}\n`);
+  const fakeSecrets: Record<string, string> = {
+    ".env": "A=1", ".env.local": "B=2", ".hidden.txt": "dot", ".git/config": "git", "node_modules/x.js": "js", "cert.pem": "pem", "keys/server.key": "key", "keys/id_rsa": "rsa",
+    "stripe.txt": `sk_live_${"0".repeat(24)}`, "restricted.md": `rk_live_${"1".repeat(24)}`, "slack.txt": `xoxb-${"2".repeat(12)}`, "google.json": `{"k":"AIza${"A".repeat(35)}"}`,
+    "jwt.txt": `eyJ${"a".repeat(10)}.eyJ${"b".repeat(10)}.${"c".repeat(10)}`, "openssh.txt": "-----BEGIN OPENSSH PRIVATE KEY-----\nPLACEHOLDER", "wide.txt": "-----BEGIN RSA PRIVATE KEY-----",
+  };
+  const outGuesses: Record<string, string | Buffer> = {
+    "credentials.json": "{}", "deploy-token.txt": "tok", "padded.txt": Buffer.from("\ufeff-----BEGIN RSA PRIVATE KEY-----", "utf16le"), "nul.txt": Buffer.from("ok\0data"),
+  };
+  // With three cards the engine writes unpadded indexes, so `01-<id>.mp4` is not a clip name; a second file for a card is not either.
+  const clipNames = [`0-${sb.cards[0].id}.mp4`, `1-${sb.cards[1].id}.mp4`, `01-${sb.cards[1].id}.mp4`];
+  const outFiles: Record<string, string | Buffer> = { ...fakeSecrets, ...outGuesses, "reels/2026-08-10/clips/other.mp4": "loose", "2026/slide.png": "slide", "ok.json": "{\"a\":1}" };
+  clipNames.forEach((n, i) => (outFiles[`reels/2026-08-10/clips/${n}`] = `clip-${i}`));
+  const seedOut = (root: string, files: Record<string, string | Buffer>) => Object.entries(files).forEach(([rel, data]) => (mkdirSync(dirname(join(root, rel)), { recursive: true }), writeFileSync(join(root, rel), data)));
+  seedOut(outRoot, outFiles);
+  symlinkSync(join(work, "outside-guard.txt"), join(outRoot, "linked.txt"));
+  const outRun = await run("import", "--from", outShop);
+  assert.equal(outRun.exitCode, 0, outRun.lines.join("\n"));
+  assert.ok(outRun.lines.includes(`Carpeta de salidas leída (fuera de la marca): ${realpathSync(outRoot)}.`), "the resolved outputs path is printed");
+  const outBrand = (await repos.brands.getBySlug("example-outputs-shop")).id;
+  const outRunRow = (await repos.runs.list(outBrand, { recipe: "reel-week" }))[0];
+  const clips = await repos.runArtifacts.current(outRunRow.id, { kind: "clip" });
+  assert.deepEqual(clips.map((c) => [c.cardIndex, c.cardId, c.inputsHash === `import:sha256:${c.sha256}`]), [[0, sb.cards[0].id, true], [1, sb.cards[1].id, true]], "only the names the engine writes are clips");
+  assert.deepEqual((await blobs.get(blobKey(outBrand, clips[0].sha256))).body, Buffer.from("clip-0"));
+  const outRefused = outRun.lines.find((l) => l.startsWith("Rechazados"))!;
+  for (const rel of Object.keys(fakeSecrets).map((k) => (k.includes("/") && /^(\.git|node_modules)\//.test(k) ? `${k.split("/")[0]}/` : k))) assert.ok(outRefused.includes(`@outputs/${rel} (`), `@outputs/${rel} is refused`);
+  const outUnimported = outRun.lines.find((l) => l.startsWith("Sin importar"))!;
+  for (const rel of ["padded.txt", "nul.txt"]) assert.ok(outUnimported.includes(`@outputs/${rel} (suspicious content: not plain UTF-8 text)`), `${rel} (UTF-16 or NUL) is a guess, never uploaded`);
+  assert.ok(outUnimported.includes("@outputs/credentials.json (suspicious name)") && outUnimported.includes("@outputs/deploy-token.txt (suspicious name)"), "suspicious names in the second root are guesses");
+  assert.match(outRun.lines.join("\n"), /@outputs\/linked\.txt \(not a regular file\)/, "a link in the second root is reported, never read");
+  const outManifest = Object.keys(((await repos.importRuns.list(outBrand))[0].report.legacy as { manifest: Record<string, string> }).manifest).filter((k) => k.startsWith("@outputs/")).sort();
+  assert.deepEqual(outManifest, ["@outputs/2026/slide.png", "@outputs/ok.json", `@outputs/reels/2026-08-10/clips/${clipNames[2]}`, "@outputs/reels/2026-08-10/clips/other.mp4"], "what no collector claimed and the allowlist accepts is kept, with its path");
+  for (const data of [...Object.values(fakeSecrets), ...Object.values(outGuesses)]) await assert.rejects(() => blobs.get(blobKey(outBrand, sha(Buffer.from(data)))), "no refused content was uploaded");
+  assert.deepEqual(await verifyBrand(repos, outShop, blobs, env), [], "verify reads the same second root");
+  const outCut = await run("cutover", "example-outputs-shop", "--confirm", "example-outputs-shop", "--from", outShop);
+  assert.equal(outCut.exitCode, 1, "the guesses and the link in the second root block a cutover");
+  for (const reason of ["@outputs/credentials.json (suspicious name)", "@outputs/deploy-token.txt (suspicious name)", "@outputs/padded.txt (suspicious content", "@outputs/nul.txt (suspicious content", "@outputs/linked.txt (not a regular file)"]) assert.ok(outCut.lines[0].includes(reason), `${reason} blocks the cutover`);
+  assert.doesNotMatch(outCut.lines[0], /\.env|cert\.pem|id_rsa|stripe|jwt/, "proven secrets in the second root do not block");
+  // Clips: a re-import is a no-op; a re-rendered clip is an update that keeps the old take in history; a foreign clip in storage is a conflict.
+  assert.match((await run("import", "--from", outShop)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios \d+, conflictos 0\./);
+  writeFileSync(join(outRoot, "reels", "2026-08-10", "clips", clipNames[0]), "clip-0-rerendered");
+  assert.match((await run("import", "--from", outShop)).lines.join("\n"), /Creados 0, actualizados 1,/);
+  assert.deepEqual((await repos.runArtifacts.history(outRunRow.id, "clip", 0)).map((a) => a.sha256).sort(), [sha(Buffer.from("clip-0")), sha(Buffer.from("clip-0-rerendered"))].sort(), "the old take stays in history");
+  await repos.runArtifacts.record(outRunRow.id, { kind: "clip", cardIndex: 1, cardId: sb.cards[1].id, sha256: "f".repeat(64), inputsHash: `import:sha256:${"f".repeat(64)}` });
+  writeFileSync(join(outRoot, "reels", "2026-08-10", "clips", clipNames[1]), "clip-1-rerendered");
+  const clipClash = await run("import", "--from", outShop);
+  assert.match(clipClash.lines.join("\n"), /conflictos 1/);
+  assert.equal((await repos.runArtifacts.current(outRunRow.id, { kind: "clip" })).find((a) => a.cardIndex === 1)!.sha256, "f".repeat(64), "the foreign clip stays current");
+
+  // The engine pads clip indexes to the width of the last index (11+ cards): padded names are clips there, unpadded ones are legacy.
+  const wide = fixture(label, "example-wide-shop");
+  cpSync(join(runShop, "reels"), join(wide, "reels"), { recursive: true });
+  rmSync(join(wide, "reels", "2026-08-10", "audio"), { recursive: true });
+  const wideSb = parseYaml(readFileSync(join(wide, "reels", "2026-08-10", "storyboard.yaml"), "utf-8")) as { cards: Array<Record<string, unknown>> };
+  wideSb.cards = Array.from({ length: 11 }, (_, i) => ({ ...wideSb.cards[0], id: `card-${i}` }));
+  writeFileSync(join(wide, "reels", "2026-08-10", "storyboard.yaml"), stringifyYaml(wideSb));
+  const wideRoot = join(work, label, "outputs-wide");
+  writeFileSync(join(wide, "config.local.yaml"), `outputs:\n  base_dir: ${wideRoot}\n`);
+  seedOut(wideRoot, { "reels/2026-08-10/clips/01-card-1.mp4": "w1", "reels/2026-08-10/clips/2-card-2.mp4": "w2", "reels/2026-08-10/clips/10-card-10.mp4": "w10" });
+  assert.equal((await run("import", "--from", wide)).exitCode, 0);
+  const wideBrand = (await repos.brands.getBySlug("example-wide-shop")).id;
+  const wideClips = await repos.runArtifacts.current((await repos.runs.list(wideBrand, { recipe: "reel-week" }))[0].id, { kind: "clip" });
+  assert.deepEqual(wideClips.map((c) => [c.cardIndex, c.cardId]), [[1, "card-1"], [10, "card-10"]], "padded names are the clips of an 11-card storyboard");
+  assert.deepEqual(Object.keys(((await repos.importRuns.list(wideBrand))[0].report.legacy as { manifest: Record<string, string> }).manifest).filter((k) => k.startsWith("@outputs/")), ["@outputs/reels/2026-08-10/clips/2-card-2.mp4"], "an unpadded name is not a clip there");
+
+  // A brand-folder entry named `@...` could be mistaken for the second root's label, so it is a guess; the report's `@outputs/` skips
+  // are never re-walked against the brand folder.
+  const atShop = fixture(label, "example-at-shop");
+  seedOut(atShop, { "@outputs/linked.txt": "in the folder" });
+  const atRoot = join(work, label, "outputs-at");
+  mkdirSync(atRoot, { recursive: true });
+  symlinkSync(join(work, "outside-guard.txt"), join(atRoot, "linked.txt"));
+  writeFileSync(join(atShop, "config.local.yaml"), `outputs:\n  base_dir: ${atRoot}\n`);
+  const atOut = (await run("import", "--from", atShop)).lines.join("\n");
+  assert.match(atOut, /Sin importar .*: @outputs\/ \(name starts with @/);
+  assert.match(atOut, /@outputs\/linked\.txt \(not a regular file\)/);
+  const atManifest = Object.keys(((await repos.importRuns.list((await repos.brands.getBySlug("example-at-shop")).id))[0].report.legacy as { manifest: Record<string, string> }).manifest);
+  assert.equal(atManifest.some((k) => k.startsWith("@")), false, "nothing under the folder's `@outputs` reaches the manifest");
+
+  // Outputs-root problems are reported, never dropped: a missing configured root is a notice; "/", an ancestor of the folder, or an
+  // `outputs.reels` leaving the root are unusable and block a cutover; without a blob store an outside root is left behind whole.
+  const problem = (name: string, config: string) => {
+    const shop = fixture(label, name);
+    writeFileSync(join(shop, "config.local.yaml"), config);
+    return shop;
+  };
+  const missing = await run("import", "--from", problem("example-missing-out-shop", `outputs:\n  base_dir: ${join(work, label, "no-such-outputs")}\n`), "--dry-run");
+  assert.match(missing.lines.join("\n"), /Avisos: .*outputs root .*no-such-outputs does not exist/);
+  for (const [name, config, why] of [
+    ["example-slash-out-shop", "outputs:\n  base_dir: /\n", "is \"/\" or an ancestor of the brand folder"],
+    ["example-parent-out-shop", `outputs:\n  base_dir: ${join(work, label)}\n`, "is \"/\" or an ancestor of the brand folder"],
+    ["example-escape-out-shop", `outputs:\n  base_dir: ${outRoot}\n  reels: ../elsewhere\n`, "leaves the outputs root"],
+  ] as const) {
+    const shop = problem(name, config);
+    const out = (await run("import", "--from", shop, "--dry-run")).lines.join("\n");
+    assert.ok(out.includes("@outputs/ (outputs") && out.includes(why), `${name} is reported as skipped`);
+    const cut = await run("cutover", name, "--confirm", name, "--from", shop);
+    assert.equal(cut.exitCode, 1, `${name} blocks a cutover`);
+    assert.match(cut.lines[0], /@outputs\/ \(outputs/);
+  }
+  assert.match((await runCli(["import", "--from", outShop, "--dry-run"], env, spied)).lines.join("\n"), /Omitidos: .*@outputs\/ \(no blob store\)/);
+  // A root that cannot be resolved for any reason but "not there" (here EACCES: its parent is not searchable) is unusable, so it blocks
+  // a cutover. Skipped as root: root ignores the mode bits.
+  if (process.getuid?.() !== 0) {
+    const sealed = join(work, label, "sealed-outputs");
+    mkdirSync(join(sealed, "inner"), { recursive: true });
+    const sealedShop = problem("example-sealed-out-shop", `outputs:\n  base_dir: ${join(sealed, "inner")}\n`);
+    chmodSync(sealed, 0o000);
+    try {
+      const cut = await run("cutover", "example-sealed-out-shop", "--confirm", "example-sealed-out-shop", "--from", sealedShop);
+      assert.equal(cut.exitCode, 1);
+      assert.match(cut.lines[0], /@outputs\/ \(outputs root .* cannot be resolved \(EACCES\)/);
+    } finally {
+      chmodSync(sealed, 0o755);
+    }
+  }
+
+  // `outputs` in the folder linking to the outputs root is that root, not a link to report; BRAND_OUTPUTS_ROOT/<slug> replaces the
+  // configured folder and its files are imported.
+  const linkedOut = fixture(label, "example-linked-out-shop");
+  const linkedRoot = join(work, label, "outputs-linked");
+  seedOut(linkedRoot, { "kept.png": "kept" });
+  symlinkSync(linkedRoot, join(linkedOut, "outputs"));
+  const linkedRun = (await run("import", "--from", linkedOut)).lines.join("\n");
+  assert.doesNotMatch(linkedRun, /outputs \(not a regular file\)/);
+  assert.match(linkedRun, /Guardados como legado/);
+  const envShop = fixture(label, "example-env-root-shop");
+  const envOutputs = { ...env, BRAND_OUTPUTS_ROOT: join(work, label, "env-outputs") };
+  seedOut(join(envOutputs.BRAND_OUTPUTS_ROOT, "example-env-root-shop"), { "keep.json": "{\"a\":1}" });
+  const envRun = await runCli(["import", "--from", envShop], envOutputs, spied, blobs);
+  assert.ok(envRun.lines.includes(`Carpeta de salidas leída (fuera de la marca): ${realpathSync(join(envOutputs.BRAND_OUTPUTS_ROOT, "example-env-root-shop"))}.`));
+  const envManifest = Object.keys(((await repos.importRuns.list((await repos.brands.getBySlug("example-env-root-shop")).id))[0].report.legacy as { manifest: Record<string, string> }).manifest);
+  assert.ok(envManifest.includes("@outputs/keep.json"), "a file in the env root is imported");
+  assert.deepEqual(await verifyBrand(repos, envShop, blobs, envOutputs), []);
+  assert.equal(contentRefusal("a.json", Buffer.from("{\"eyJ\":\"a.b.c\",\"sk_live\":\"x\"}")), null);
+
   // B3: a file that cannot be read inside a skipped folder is reported, so it counts as left behind at cutover.
   const strayShop = fixture(label, "example-stray-reel-shop");
   cpSync(join(runShop, "reels"), join(strayShop, "reels"), { recursive: true });
@@ -607,7 +749,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match(healedRun, /updated run:reels\/2026-08-10\/storyboard\.yaml/);
   assert.equal((await repos.runArtifacts.current(crashRun.id, { kind: "audio" })).length, sb.cards.length - 1, "the next pass records the missing artifacts");
   assert.match((await run("import", "--from", crashShop)).lines.join("\n"), /actualizados 0,.*conflictos 0/, "and the pass after that is a no-op");
-  assert.deepEqual(await verifyBrand(repos, crashShop, blobs), []);
+  assert.deepEqual(await verifyBrand(repos, crashShop, blobs, env), []);
 
   // A week input that is not JSON, with no period folder, is reported as such (not as undated items).
   const badInput = fixture(label, "example-bad-input-shop");

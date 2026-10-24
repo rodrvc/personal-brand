@@ -16,6 +16,7 @@
  * disk — `render-reel-week.ts` is the only caller that touches any of those.
  */
 
+import { clipFileName as sharedClipFileName } from "@personal-brand/core/clips";
 import { FPS, type Scene } from "./remotion/src/timeline.js";
 
 /** One clip: a frame range of the full `Reel` composition, tied to its card. */
@@ -68,10 +69,9 @@ export function clipRangesFor(scenes: readonly Scene[], cardIds: readonly string
   });
 }
 
-/** Index + card id ("0-cover", "1-item-1"), zero-padded once 10+ cards — sorts in scene order on disk. */
+/** Index + card id as a clip file name; the padding rule is documented on the shared `clipFileName` (`@personal-brand/core/clips`). */
 export function clipFileName(range: ClipRange, total: number): string {
-  const width = String(total - 1).length;
-  return `${String(range.index).padStart(width, "0")}-${range.cardId}.mp4`;
+  return sharedClipFileName(range.index, range.cardId, total);
 }
 
 /**

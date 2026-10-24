@@ -630,11 +630,17 @@ hash).
    and the guesses block it without `--partial`. `verifyBrand` re-downloads the
    legacy blobs too (`legacy:<path> (blob)`).
 
-   *Moved to S7b2b3a:* the outputs root (resolved like the engine does:
+   *Built in S7b2b3a:* the outputs root (resolved like the engine does:
    `BRAND_OUTPUTS_ROOT/<slug>`, else `outputs.base_dir` from `config.local.yaml`
    over `config.yaml`; read as a second root, confined to its real path, with
    `@outputs/<path>` legacy paths) and clips as `clip` artifacts of the matching
-   storyboard card (`inputs_hash = import:sha256:<mp4 sha>`). Editor exports
+   storyboard card, accepted only under the name `clipFileName` gives (shared with
+   the engine, zero-padded from 11 cards) (`inputs_hash = import:sha256:<mp4 sha>`). Whatever no collector
+   claims in the second root goes through the same allowlist and two-class
+   refusal policy as the folder (labelled `@outputs/<path>`), and the CLI prints
+   the resolved path. The content signatures also cover Stripe live keys, Google
+   API keys and JWTs, and text with NUL bytes or a UTF-16 BOM is a guess
+   (`unknown`), since a UTF-8 decode cannot see secrets in it. Editor exports
    (`exports` rows) are S7b2b3b.
 
    **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
@@ -716,7 +722,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7b2a | S7b1b review follow-ups (`conflicts` reasons, create-race, simpler carousel writes, shared frontmatter split, plural refusal, deferred tests) + importer part 2b-1: `assets/**` + sidecars -> blobs + `assets` rows, `BlobStore` wiring in the CLI, blob-level verification of assets | ~560 | S7b1b, S5 | example assets import, verify re-downloads each blob, an example without reels cuts over with no `--partial` |
 | S7b2b1 | Importer part 2b-2a: `narrationCacheKey` and the voice merge move into `core/` (shared with the engine, not copied); flat `carousels/*.json` and `reels/**` -> `recipe_runs` (recipe and period derived and recorded); TTS cache -> blobs + `tts_cache` + `audio` artifacts | ~560 | S7b2a, S6c | examples import their runs, read back clean, re-import as a no-op; a card whose hash cannot be recomputed is reported, not imported |
 | S7b2b2 | Importer part 2b-2b: everything no collector imported -> content-keyed legacy blobs with a path -> sha256 manifest in the import report, behind an allowlist and a two-class refusal policy (proven secrets never block a cutover; unknown types and suspicious names do, without `--partial`); a card that leaves a run's plan is released, never deleted; blob verification for the legacy blobs | ~590 | S7b2b1 | verification clean on examples; a `.env` does not block a cutover, a `.html` or `deploy-token.txt` does; `tokens.json` is kept |
-| S7b2b3a | Importer part 2b-2c: second root for `outputs.base_dir` (`BRAND_OUTPUTS_ROOT`, confined reads, `@outputs/` legacy paths, the outputs path in the report); reel clips -> `clip` artifacts (prepared as a patch on top of S7b2b2) | ~280 | S7b2b2 | clips import and verify; the second root is read confined, with its refusals reported |
+| S7b2b3a | Importer part 2b-2c: second root for `outputs.base_dir` (`BRAND_OUTPUTS_ROOT`, confined reads, `@outputs/` legacy paths, the outputs path in the report); reel clips -> `clip` artifacts (names from the shared `core/clips` `clipFileName`, as the engine writes them); the second root goes through the same allowlist and refusals; wider secret signatures, NUL/UTF-16 text is `unknown` | ~550 | S7b2b2 | clips import and verify; the second root is read confined, with its refusals reported and tested |
 | S7b2b3b | Importer part 2b-2d: editor exports -> `exports` rows + keys (numeric `v<N>` order) and the hardening deferred from the S7b2b2 review (§14, Q-S7b2b3; prepared as a patch on top of S7b2b3a) | ~200 | S7b2b3a | exports import and verify; every item of §14 Q-S7b2b3 has a test |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2b3b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
@@ -806,10 +812,18 @@ when S7a lands.
 1. Editor exports -> `exports` rows, `v<N>` folders in numeric order (test: v2, v10).
 2. The legacy pass walks the whole folder minus `used`; collectors fill `used`.
 3. Refuse an outputs root that is `$HOME` or holds other brands' folders; stream
-   and hash instead of reading everything into memory.
+   and hash instead of reading everything into memory. Known limit of S7b2b3a,
+   scheduled for S7b2b3b: the whole outputs root is read into memory, and a
+   cutover reads it three times (plan, real pass, verify).
 4. Share the outputs resolver with the engine, or fail on an unreadable
    `config.local.yaml`; a symlinked `outputs` directory counts as the second
-   root; confinement tests for the second root.
+   root. (Done in S7b2b3a: confinement tests for the second root, and an `outputs` link
+   whose real path is the outputs root is that root, not a link to report. An
+   unusable root, `/` or an ancestor of the folder, or an `outputs.reels` leaving
+   the root, is reported in `skipped` and blocks a cutover; a configured root
+   that does not exist is a notice; any other `realpath` failure, such as
+   EACCES or ELOOP, is unusable.) Still open for S7b2b3b: a `config.local.yaml`
+   that is unreadable or unparseable is ignored silently.
 5. A released take (its card left the plan) must not look foreign when the card
    returns with a new mp3: record `_imported.released`, accept it as the last
    import (test: card leaves, returns, updates cleanly).

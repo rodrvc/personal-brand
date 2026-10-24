@@ -1,8 +1,9 @@
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { BlobStore } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal } from "./allowlist.ts";
+import type { OutputsRoot } from "./outputs.ts";
 import { readRegular, sha256 } from "./shared.ts";
 
 /**
@@ -11,76 +12,101 @@ import { readRegular, sha256 } from "./shared.ts";
  */
 export const BY_DESIGN = /^(config\.local\.yaml.*|\.storage-cutover|\.DS_Store)$/;
 
-/** A file nothing else imported, kept as a content-keyed blob. `path` is folder-relative. */
+/** A file nothing else imported, kept as a content-keyed blob. `path` is folder-relative, or `@outputs/<path>` under the second root. */
 export interface LegacyFile {
   path: string;
   bytes: Buffer;
   sha256: string;
 }
 
+const realOrNull = (path: string): string | null => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null; // a dangling link: reported as a link by the caller
+  }
+};
+
 /**
  * Everything no collector imported becomes a legacy file, but only known content (see `allowlist.ts`): the folder entries
  * left in `notImported`, the paths named by `skipped` entries (the entry stays in `skipped` with its reason; `isKept` tells
- * it apart from data that is really left behind).
+ * it apart from data that is really left behind), and every file of the second outputs root that no collector used, through
+ * the same allowlist and refusal policy.
  * Nothing refused is ever read into a blob, in two classes (see `Refusal`): proven secrets are listed in `refused`
  * (deliberate, like `BY_DESIGN`, so they never block a cutover); unknown types and merely suspicious names are listed in
  * `unimported`, which is left-behind data and blocks a cutover without `--partial`. Nothing is kept without a blob store. A file that cannot be read safely
  * (a symlink, a path leaving the root) is reported in `skipped` and never read. Returns the files and the lists as they remain.
  */
-export function planLegacy(ctx: { root: string; blobs?: BlobStore; notImported: string[]; skipped: string[] }) {
-  const { root, blobs } = ctx;
+export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; used: Set<string>; blobs?: BlobStore; notImported: string[]; skipped: string[] }) {
+  const { root, outputs, used, blobs } = ctx;
   const refused = new Set<string>();
   const unimported = new Set<string>();
   // Only the ENOENT/ENOTDIR of a path that vanished mid-walk is tolerated; any other failure is real.
   const vanished = (error: unknown) => ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
-  if (!blobs) return { files: [] as LegacyFile[], notImported: ctx.notImported, skipped: ctx.skipped, refused: [] as string[], unimported: [] as string[] };
+  if (!blobs) {
+    // Nothing can be kept, so a second root outside the folder is left behind whole and must block a cutover.
+    if (outputs && !outputs.inside) ctx.skipped.push("@outputs/ (no blob store)");
+    return { files: [] as LegacyFile[], notImported: ctx.notImported, skipped: ctx.skipped, refused: [] as string[], unimported: [] as string[] };
+  }
   const files = new Map<string, LegacyFile>();
-  // Every file under `rel` (itself, when it is one), `/`-separated and sorted, minus what is refused. A link or other
-  // non-file is reported in `sink` whatever its name, so it is never taken for a refusal.
-  const walk = (rel: string, sink: string[]): string[] => {
+  const origin = new Map<string, string>(); // label -> base it was read from
+  // Every file under `rel` of `base` (itself, when it is one), `/`-separated and sorted, minus what a collector used or is
+  // refused (labelled with `prefix`). A link or other non-file is reported in `sink` whatever its name, so it is never taken for a refusal.
+  const walk = (base: string, rel: string, prefix: string, sink: string[]): string[] => {
     let stat;
     try {
-      stat = lstatSync(join(root, rel));
+      stat = lstatSync(join(base, rel));
     } catch (error) {
       if (vanished(error)) return [];
       throw error;
     }
-    if (rel && BY_DESIGN.test(rel)) return [];
+    if (rel && (used.has(join(base, rel)) || (base === root && BY_DESIGN.test(rel)))) return [];
+    // A link to the outputs root is that root, which is read as the second root: not a link to report.
+    if (base === root && outputs && !outputs.inside && stat.isSymbolicLink() && realOrNull(join(base, rel)) === outputs.real) return [];
     if (stat.isSymbolicLink() || !(stat.isFile() || stat.isDirectory())) {
-      sink.push(`${rel} (not a regular file)`);
+      sink.push(`${prefix}${rel} (not a regular file)`);
       return [];
     }
     const dir = stat.isDirectory();
+    if (base === root && rel.startsWith("@")) {
+      unimported.add(`${rel}${dir ? "/" : ""} (name starts with @: could be mistaken for the outputs root)`);
+      return [];
+    }
     const why = rel ? nameRefusal(basename(rel), dir) : null;
     if (why) {
-      (why.kind === "secret" ? refused : unimported).add(`${rel}${dir ? "/" : ""} (${why.why})`);
+      (why.kind === "secret" ? refused : unimported).add(`${prefix}${rel}${dir ? "/" : ""} (${why.why})`);
       return [];
     }
     if (!dir) return [rel];
     try {
-      return readdirSync(join(root, rel)).sort().flatMap((name) => walk(rel ? `${rel}/${name}` : name, sink));
+      return readdirSync(join(base, rel)).sort().flatMap((name) => walk(base, rel ? `${rel}/${name}` : name, prefix, sink));
     } catch (error) {
       if (vanished(error)) return [];
       throw error;
     }
   };
-  const take = (rel: string, sink: string[]) => {
-    if (files.has(rel)) return;
-    const bytes = readRegular(root, join(root, rel), rel, sink);
+  const take = (base: string, rel: string, label: string, sink: string[]) => {
+    if (files.has(label)) {
+      if (origin.get(label) !== base) sink.push(`${label} (same label in two roots: not imported)`);
+      return;
+    }
+    const bytes = readRegular(base, join(base, rel), label, sink);
     const why = bytes && contentRefusal(basename(rel), bytes);
-    if (why) (why.kind === "secret" ? refused : unimported).add(`${rel} (${why.why})`);
-    else if (bytes) files.set(rel, { path: rel, bytes, sha256: sha256(bytes) });
+    if (why) (why.kind === "secret" ? refused : unimported).add(`${label} (${why.why})`);
+    else if (bytes) (files.set(label, { path: label, bytes, sha256: sha256(bytes) }), origin.set(label, base));
   };
   const notImported = ctx.notImported.filter((entry) => {
     if (BY_DESIGN.test(entry)) return true;
-    walk(entry, ctx.skipped).forEach((rel) => take(rel, ctx.skipped));
+    walk(root, entry, "", ctx.skipped).forEach((rel) => take(root, rel, rel, ctx.skipped));
     return false;
   });
   // A skipped entry keeps its reason in the report; its files are kept all the same (see `isKept`). What cannot be read
   // inside it is reported too, so a symlink in a skipped folder is never taken for kept data.
   const again: string[] = [];
-  for (const entry of ctx.skipped.slice()) walk(entryPath(entry), again).forEach((f) => take(f, again));
+  for (const entry of ctx.skipped.filter((e) => !e.startsWith("@outputs/"))) walk(root, entryPath(entry), "", again).forEach((f) => take(root, f, f, again));
   const skipped = [...ctx.skipped, ...again.filter((e) => !ctx.skipped.includes(e))];
+  // The second root is walked whole: what a collector used is left out, the rest goes through the same policy as the folder.
+  if (outputs && !outputs.inside) walk(outputs.real, "", "@outputs/", skipped).forEach((rel) => take(outputs.real, rel, `@outputs/${rel}`, skipped));
   return { files: [...files.values()], notImported, skipped, refused: [...refused].sort(), unimported: [...unimported].sort() };
 }
 

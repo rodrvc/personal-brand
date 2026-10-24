@@ -25,6 +25,9 @@ const CONTENT = [
   /\bgh[pousr]_[A-Za-z0-9]{30,}/,
   /\bsk-[A-Za-z0-9_-]{20,}/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/,
+  /\b[sr]k_live_[A-Za-z0-9]{16,}/, // Stripe secret and restricted live keys
+  /\bAIza[0-9A-Za-z_-]{35}/, // Google API key
+  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, // JWT: header and payload are both base64url JSON (`eyJ`), so ordinary JSON never matches
 ];
 // A guess, not a proof: a `key: value` assignment may be a brand token (`"accentToken": "var(--brand-accent)"`, `data-token="..."`).
 const ASSIGNMENT = /(secret|api[_-]?key|password|passwd|token)["']?\s*[:=]\s*["']?[^\s"',]{8,}/i;
@@ -42,6 +45,8 @@ export function nameRefusal(name: string, isDir: boolean): Refusal | null {
 /** Why a file's content is refused: a precise secret signature (`secret`) or a generic assignment guess (`unknown`), or null. */
 export function contentRefusal(name: string, bytes: Buffer): Refusal | null {
   if (!TEXT.has(name.split(".").pop()?.toLowerCase() ?? "")) return null;
+  // UTF-16 text (BOM) or any NUL byte hides every pattern below from a UTF-8 decode: unreadable here, so a guess, never uploaded.
+  if (bytes.includes(0) || (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) return { kind: "unknown", why: "suspicious content: not plain UTF-8 text" };
   const text = bytes.toString("utf-8");
   if (CONTENT.some((p) => p.test(text))) return { kind: "secret", why: "secret-like: secret pattern in content" };
   return ASSIGNMENT.test(text) ? { kind: "unknown", why: "suspicious content: key-value assignment" } : null;
