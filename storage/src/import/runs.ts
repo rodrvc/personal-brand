@@ -1,11 +1,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { clipFileName } from "@personal-brand/core/clips";
 import { effectiveVoice, narrationCacheKey, type VoiceSettings } from "@personal-brand/core/narration";
 import { parse as parseYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type RunArtifactInput } from "../contracts/index.ts";
+import { nameRefusal } from "./allowlist.ts";
 import { readRegular, sha256, type CollectContext, type ImportRepos, type Item } from "./shared.ts";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -148,6 +150,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
       const plan: RunPlan = { path: `${rel}/storyboard.yaml`, recipe: "reel-week", period, derived: { recipe: "a storyboard is a reel-week input", period: "the Monday-to-Sunday week holding the folder date" }, source: ownInput?.json ?? {}, storyboard, raws: [sb, ...(ownInput?.raw ? [ownInput.raw] : [])], artifacts: [] };
       for (const name of readdirSync(join(dir, rel)).sort()) if (name !== "storyboard.yaml" && name !== "audio") skipped.push(`${rel}/${name} (not part of a run)`);
       collectAudio(ctx, plan, rel, recipeRaw);
+      collectClips(ctx, plan);
       plans.push(plan);
     }
   }
@@ -201,6 +204,29 @@ function collectAudio(ctx: CollectContext, plan: RunPlan, rel: string, recipeRaw
     plan.artifacts.push({ kind: "audio", cardIndex, cardId: id, sha256: sha256(mp3), inputsHash: sidecar.hash, bytes: mp3, mime: "audio/mpeg", take: { seconds: sidecar.seconds, voice } });
   });
   for (const name of files) if (!claimed.has(name)) skipped.push(`${rel}/audio/${name} (not the audio of a storyboard card)`);
+}
+
+/**
+ * Rendered clips of the period, `<outputs.reels>/<periodStart>/clips/<name>.mp4` under the outputs root, where `<name>` is
+ * exactly what the engine writes for the storyboard card at that index (`clipFileName`, zero-padded from 11 cards): any other
+ * name is left to the legacy pass. Their `inputs_hash` is `import:sha256:<mp4 sha>`: how they were rendered is not known.
+ */
+function collectClips(ctx: CollectContext, plan: RunPlan): void {
+  const { outputs, blobs, skipped, used } = ctx;
+  const dir = outputs && join(outputs.real, outputs.reels, plan.period.start, "clips");
+  if (!outputs || !dir || !blobs || !existsSync(dir)) return;
+  const ids = (Array.isArray(plan.storyboard?.cards) ? (plan.storyboard!.cards as unknown[]) : []).map((c) => asObject(c)?.id);
+  const names = new Set(readdirSync(dir));
+  ids.forEach((id, index) => {
+    const name = typeof id === "string" ? clipFileName(index, id, ids.length) : "";
+    // A card id the name policy refuses (a suspicious word) is not guessed into a clip: the legacy pass reports it.
+    if (!names.has(name) || nameRefusal(name, false)) return;
+    used.add(join(dir, name)); // claimed even when the read fails, so the legacy pass does not report it a second time
+    const bytes = readRegular(outputs.real, join(dir, name), `@outputs/${outputs.reels}/${plan.period.start}/clips/${name}`, skipped);
+    if (!bytes) return;
+    plan.raws.push(bytes);
+    plan.artifacts.push({ kind: "clip", cardIndex: index, cardId: id as string, sha256: sha256(bytes), inputsHash: `import:sha256:${sha256(bytes)}`, bytes, mime: "video/mp4" });
+  });
 }
 
 /** The `kind:cardIndex` slots a stored run's `_imported.artifacts` claims: the only ones the import owns. */

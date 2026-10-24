@@ -8,6 +8,7 @@ import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectAssets } from "./assets.ts";
 import { planLegacy, type LegacyFile } from "./legacy.ts";
+import { resolveOutputs } from "./outputs.ts";
 import { collectRuns } from "./runs.ts";
 import { putBlob } from "../blob/put-blob.ts";
 import { canon, found, readRegular, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
@@ -48,6 +49,8 @@ export interface ImportReport {
   refused: string[];
   /** Files it would not upload on a guess (unknown type, suspicious name): never uploaded, but left-behind data that blocks a cutover without `--partial`. */
   unimported: string[];
+  /** Real path of the outputs root when it lies outside the brand folder (a second root, read confined to it); null otherwise. */
+  outputsRoot: string | null;
   /** One `<key> (<reason>)` per item counted as `conflict`: why it was left alone. */
   conflicts: string[];
   /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
@@ -69,7 +72,7 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[] } {
+function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
   const items: Item[] = [];
   const skipped: string[] = [];
   const notices: string[] = [];
@@ -163,10 +166,13 @@ function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[];
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
-  const ctx = { dir, root, repos, blobs, skipped, notices, handled };
+  const { outputs, notice, unusable } = resolveOutputs(dir, root, basename(dir), env);
+  if (notice) notices.push(notice);
+  if (unusable) skipped.push(`@outputs/ (${unusable})`);
+  const ctx = { dir, root, repos, blobs, outputs, used: new Set<string>(), skipped, notices, handled };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx));
-  const left = planLegacy({ root, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
-  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files };
+  const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
 }
 
 /**
@@ -187,14 +193,14 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
-export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; now?: () => Date }): Promise<ImportReport> {
+export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date }): Promise<ImportReport> {
   const dir = resolve(opts.from);
   const slug = basename(dir);
   const now = opts.now ?? (() => new Date());
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy } = collect(dir, repos, opts.blobs);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
 
   if (!opts.dryRun && !brand) {
@@ -205,7 +211,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
   const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [],
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot,
     legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),
@@ -250,11 +256,11 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
  * an item that owns blobs is also re-downloaded and hashed (reported as `<key> (blob)`). Without `blobs`, such items
  * cannot be verified and are not listed by the collector, which reports them in `skipped` instead.
  */
-export async function verifyBrand(repos: Repos, from: string, blobs?: BlobStore): Promise<string[]> {
+export async function verifyBrand(repos: Repos, from: string, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv): Promise<string[]> {
   const dir = resolve(from);
   const brand = await repos.brands.getBySlug(basename(dir));
   const bad: string[] = [];
-  const { items, legacy } = collect(dir, repos, blobs);
+  const { items, legacy } = collect(dir, repos, blobs, env);
   for (const f of legacy) {
     const intact = await blobs!.get(blobKey(brand.id, f.sha256)).then((b) => sha256(b.body) === f.sha256, (e) => (e instanceof ObjectNotFoundError ? false : Promise.reject(e)));
     if (!intact) bad.push(`legacy:${f.path} (blob)`);

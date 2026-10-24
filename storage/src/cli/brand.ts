@@ -144,6 +144,7 @@ function describe(report: ImportReport): string[] {
     ...report.items.map((i) => `  ${i.outcome} ${i.key}`),
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
     ...(report.conflicts.length ? [`Conflictos: ${report.conflicts.join(", ")}.`] : []),
+    ...(report.outputsRoot ? [`Carpeta de salidas leída (fuera de la marca): ${report.outputsRoot}.`] : []),
     ...(report.legacy.count ? [`Guardados como legado, por contenido: ${report.legacy.count} archivo(s)${report.legacy.changed.length ? `; nuevos o cambiados desde la última importación: ${report.legacy.changed.join(", ")}` : ""}.`] : []),
     ...(report.refused.length ? [`Rechazados, nunca importados: ${report.refused.join(", ")}.`] : []),
     ...(report.unimported.length ? [`Sin importar (tipo no reconocido o nombre sospechoso): ${report.unimported.join(", ")}.`] : []),
@@ -154,7 +155,7 @@ function describe(report: ImportReport): string[] {
   ];
 }
 
-async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, slug: string, from: string, author: string, partial: boolean): Promise<CliResult> {
+async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, slug: string, from: string, author: string, partial: boolean): Promise<CliResult> {
   const marker = join(from, CUTOVER_MARKER);
   // Exclusive create: never overwrites or follows anything already at the marker path. A concurrent cutover that
   // already wrote the same brand's marker (EEXIST) counts as success; any other failure is the caller's to report.
@@ -180,13 +181,13 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, slug: s
   if (present) return { lines: [`Ya hay un ${CUTOVER_MARKER} en ${from}, pero la marca no está cortada: revísalo antes de continuar.`], exitCode: 1 };
 
   // Data the importer does not carry yet would be stranded by a cutover, so it must be acknowledged with --partial.
-  const plan = await importBrand(repos, { from, dryRun: true, author, blobs });
+  const plan = await importBrand(repos, { from, dryRun: true, author, blobs, env });
   const refuse = (left: string[]): CliResult => ({ lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: 1 });
   if (leftBehind(plan).length && !partial) return refuse(leftBehind(plan));
-  const report = await importBrand(repos, { from, dryRun: false, author, blobs });
+  const report = await importBrand(repos, { from, dryRun: false, author, blobs, env });
   // The real pass can see more than the plan did (the folder may have changed in between): check it too.
   if (leftBehind(report).length && !partial) return refuse(leftBehind(report));
-  const mismatched = await verifyBrand(repos, from, blobs);
+  const mismatched = await verifyBrand(repos, from, blobs, env);
   if (report.counts.conflict || mismatched.length) {
     return { lines: [...describe(report), `No se corta: verificación sucia (${[...report.items.filter((i) => i.outcome === "conflict").map((i) => i.key), ...mismatched].join(", ")}).`], exitCode: 1 };
   }
@@ -237,8 +238,8 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   try {
     if (!repos) sql = connect(env);
     const r = repos ?? createPgRepositories(sql!);
-    if (verb === "cutover") return await cutover(r, blobs, slug!, from, author, args.flags.has("partial"));
-    const report = await importBrand(r, { from, dryRun, author, blobs });
+    if (verb === "cutover") return await cutover(r, blobs, env, slug!, from, author, args.flags.has("partial"));
+    const report = await importBrand(r, { from, dryRun, author, blobs, env });
     return { lines: describe(report), exitCode: report.counts.conflict ? 1 : 0 };
   } catch (error) {
     if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: 1 };

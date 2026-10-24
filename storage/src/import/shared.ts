@@ -4,6 +4,7 @@ import { sep } from "node:path";
 
 import { NotFoundError, type BlobStore, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
 import type { MemoryRepositories } from "../memory/index.ts";
+import type { OutputsRoot } from "./outputs.ts";
 
 /** The Postgres and memory repository sets are structurally identical, so the importer is typed once against the memory one. */
 export type ImportRepos = MemoryRepositories;
@@ -29,6 +30,10 @@ export interface CollectContext {
   repos: ImportRepos;
   /** Where blobs go; without it the items that need blobs are passed over and reported. */
   blobs?: BlobStore;
+  /** Where `outputs.base_dir` resolves to (null when it does not exist); read as a second root when it lies outside the folder. */
+  outputs: OutputsRoot | null;
+  /** Absolute paths already imported by a collector; the legacy pass leaves them out. */
+  used: Set<string>;
   skipped: string[];
   /** Informational lines that are not left-behind data. */
   notices: string[];
