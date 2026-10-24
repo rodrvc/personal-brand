@@ -176,6 +176,6 @@ export interface TtsCacheRepository {
   get(brandId: string, narrationHash: string): Promise<TtsEntry>;
   /** Every take, oldest first. */
   takes(brandId: string, narrationHash: string): Promise<TtsEntry[]>;
-  /** A new (hash, sha256) becomes the current take; an existing one is returned unchanged and does not move. */
+  /** A new (hash, sha256) becomes the current take (latest recorded wins). Recording an existing take returns it and never changes which take is current. */
   record(brandId: string, narrationHash: string, entry: Omit<TtsEntry, "createdAt">): Promise<TtsEntry>;
 }

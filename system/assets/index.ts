@@ -57,7 +57,18 @@ export const assetEntrySchema = z.object({
   createdAt: z.string(),
   family: z.string().optional(),
 });
-export type AssetEntry = z.infer<typeof assetEntrySchema>;
+/** A folder-library entry: the bytes are the file at `path` under the profile dir. */
+export type AssetEntry = z.infer<typeof assetEntrySchema> & { blobKey?: never; sha256?: never };
+
+/** A storage-library entry: the bytes are the bucket blob at `blobKey`, and there is no `path`. */
+export const storageAssetEntrySchema = assetEntrySchema.omit({ path: true }).extend({
+  blobKey: z.string().min(1),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type StorageAssetEntry = z.infer<typeof storageAssetEntrySchema> & { path?: never };
+
+/** What `AssetLibrary` returns: exactly one of `path` (folder) / `blobKey` (storage) is set, so callers must handle both. */
+export type LibraryAssetEntry = AssetEntry | StorageAssetEntry;
 
 export const assetIndexSchema = z.object({
   entries: z.array(assetEntrySchema),
@@ -474,6 +485,10 @@ export interface RegisterOptions {
   /** Relative destination under assets/ when registering a Buffer (ignored
    * for a source file path, which keeps its own location). */
   destRelPath?: string;
+  /** Generated-piece details (prompt, model, ...). Stored on the row by the storage library; the folder library keeps them in a sidecar written by the caller. */
+  generation?: Record<string, unknown>;
+  /** Font family. The folder library keeps it in a sidecar written by the caller; the storage library stores it on the row. */
+  family?: string;
 }
 
 /**
@@ -567,4 +582,26 @@ export function updateEntry(
   Object.assign(entry, changes);
   writeIndex(profileDir, index);
   return entry;
+}
+
+/** What callers need, whichever backs it: the folder library (until cutover) or `storage-library.ts`. */
+export interface AssetLibrary {
+  list(): Promise<LibraryAssetEntry[]>;
+  register(content: Buffer, options?: RegisterOptions): Promise<LibraryAssetEntry>;
+  update(id: string, changes: Partial<Pick<AssetEntry, "kind" | "tags" | "status">>): Promise<LibraryAssetEntry>;
+  
+  read(id: string): Promise<Buffer>;
+}
+
+export function folderAssetLibrary(profileDir: string): AssetLibrary {
+  return {
+    list: async () => loadIndex(profileDir).entries,
+    register: async (content, options) => registerFile(profileDir, content, options),
+    update: async (id, changes) => updateEntry(profileDir, id, changes),
+    read: async (id) => {
+      const entry = loadIndex(profileDir).entries.find((e) => e.id === id);
+      if (!entry) throw new Error(`read: no asset with id "${id}" in ${profileDir}`);
+      return readFileSync(join(profileDir, entry.path));
+    },
+  };
 }
