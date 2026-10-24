@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 
 import type { BlobStore } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal } from "./allowlist.ts";
-import type { OutputsRoot } from "./outputs.ts";
+import { OUTPUTS_LABEL, type OutputsRoot } from "./outputs.ts";
 import { readRegular, sha256 } from "./shared.ts";
 
 /**
@@ -12,11 +12,15 @@ import { readRegular, sha256 } from "./shared.ts";
  */
 export const BY_DESIGN = /^(config\.local\.yaml.*|\.storage-cutover|\.DS_Store)$/;
 
-/** A file nothing else imported, kept as a content-keyed blob. `path` is folder-relative, or `@outputs/<path>` under the second root. */
+/**
+ * A file nothing else imported, kept as a content-keyed blob. `path` is folder-relative, or `@outputs/<path>` under the second
+ * root. Only its hash is held: the bytes are read again from `file` (confined to `base`) when it is uploaded, one file at a time.
+ */
 export interface LegacyFile {
   path: string;
-  bytes: Buffer;
   sha256: string;
+  base: string;
+  file: string;
 }
 
 const realOrNull = (path: string): string | null => {
@@ -45,7 +49,7 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
   const vanished = (error: unknown) => ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
   if (!blobs) {
     // Nothing can be kept, so a second root outside the folder is left behind whole and must block a cutover.
-    if (outputs && !outputs.inside) ctx.skipped.push("@outputs/ (no blob store)");
+    if (outputs && !outputs.inside) ctx.skipped.push(`${OUTPUTS_LABEL} (no blob store)`);
     return { files: [] as LegacyFile[], notImported: ctx.notImported, skipped: ctx.skipped, refused: [] as string[], unimported: [] as string[] };
   }
   const files = new Map<string, LegacyFile>();
@@ -82,7 +86,10 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
       return readdirSync(join(base, rel)).sort().flatMap((name) => walk(base, rel ? `${rel}/${name}` : name, prefix, sink));
     } catch (error) {
       if (vanished(error)) return [];
-      throw error;
+      // A folder that exists but cannot be listed (EACCES...) is reported, never a crash and never taken for empty.
+      const note = `${prefix}${rel} (not a readable directory)`;
+      if (!sink.includes(note)) sink.push(note);
+      return [];
     }
   };
   const take = (base: string, rel: string, label: string, sink: string[]) => {
@@ -93,7 +100,10 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
     const bytes = readRegular(base, join(base, rel), label, sink);
     const why = bytes && contentRefusal(basename(rel), bytes);
     if (why) (why.kind === "secret" ? refused : unimported).add(`${label} (${why.why})`);
-    else if (bytes) (files.set(label, { path: label, bytes, sha256: sha256(bytes) }), origin.set(label, base));
+    else if (bytes) {
+      files.set(label, { path: label, sha256: sha256(bytes), base, file: join(base, rel) });
+      origin.set(label, base);
+    }
   };
   const notImported = ctx.notImported.filter((entry) => {
     if (BY_DESIGN.test(entry)) return true;
@@ -103,10 +113,10 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
   // A skipped entry keeps its reason in the report; its files are kept all the same (see `isKept`). What cannot be read
   // inside it is reported too, so a symlink in a skipped folder is never taken for kept data.
   const again: string[] = [];
-  for (const entry of ctx.skipped.filter((e) => !e.startsWith("@outputs/"))) walk(root, entryPath(entry), "", again).forEach((f) => take(root, f, f, again));
+  for (const entry of ctx.skipped.filter((e) => !e.startsWith(OUTPUTS_LABEL))) walk(root, entryPath(entry), "", again).forEach((f) => take(root, f, f, again));
   const skipped = [...ctx.skipped, ...again.filter((e) => !ctx.skipped.includes(e))];
   // The second root is walked whole: what a collector used is left out, the rest goes through the same policy as the folder.
-  if (outputs && !outputs.inside) walk(outputs.real, "", "@outputs/", skipped).forEach((rel) => take(outputs.real, rel, `@outputs/${rel}`, skipped));
+  if (outputs && !outputs.inside) walk(outputs.real, "", OUTPUTS_LABEL, skipped).forEach((rel) => take(outputs.real, rel, `${OUTPUTS_LABEL}${rel}`, skipped));
   return { files: [...files.values()], notImported, skipped, refused: [...refused].sort(), unimported: [...unimported].sort() };
 }
 

@@ -49,7 +49,7 @@ import {
 import { resolveOutputBaseDir, resolveOutputSubfolder, resolveProfileDir } from "../ig-carousel/profile.js";
 import {
   assertRangesTileComposition,
-  clipFileName,
+  clipFileForRange,
   clipRangesFor,
   concatListContents,
   framesArg,
@@ -194,7 +194,7 @@ function assembleClips(
   expectedSeconds: number,
 ): void {
   const existing: ExistingClip[] = ranges.map((range) => {
-    const path = join(clipsDir, clipFileName(range, ranges.length));
+    const path = join(clipsDir, clipFileForRange(range, ranges.length));
     const exists = existsSync(path);
     return {
       cardId: range.cardId,
@@ -558,7 +558,7 @@ async function main(): Promise<void> {
       mkdirSync(clipsDir, { recursive: true });
       console.log(`Rendering ${wanted.length} clip(s)…`);
       for (const range of wanted) {
-        const clipPath = join(clipsDir, clipFileName(range, ranges.length));
+        const clipPath = join(clipsDir, clipFileForRange(range, ranges.length));
         console.log(`  ${range.cardId}: frames ${framesArg(range)} → ${clipPath}`);
         execFileSync(
           "npx",
@@ -594,7 +594,7 @@ async function main(): Promise<void> {
       console.log(`\n${wanted.length} clip(s) rendered under ${clipsDir}`);
       if (!wantsAllClips) {
         for (const range of wanted) {
-          console.log(`  ${range.cardId}: ${join(clipsDir, clipFileName(range, ranges.length))}`);
+          console.log(`  ${range.cardId}: ${join(clipsDir, clipFileForRange(range, ranges.length))}`);
         }
         console.log(`Output folder: ${resolve(clipsDir)}`);
         return;

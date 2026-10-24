@@ -10,10 +10,11 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { resolveBrandSource } from "../src/brand-source.ts";
 import { FakeObjectStore } from "../src/blob/index.ts";
-import { blobKey } from "../src/contracts/index.ts";
+import { blobKey, carouselExportKey } from "../src/contracts/index.ts";
 import { blobStoreFromEnv, isLocalDatabase, runCli } from "../src/cli/brand.ts";
 import { contentRefusal } from "../src/import/allowlist.ts";
 import { verifyBrand } from "../src/import/importer.ts";
+import { rereadChecked } from "../src/import/shared.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
@@ -32,7 +33,7 @@ function fixture(label: string, slug: string): string {
 }
 
 async function scenario(label: string, repos: MemoryRepositories): Promise<void> {
-  const env = { USER: "tester" };
+  const env = { USER: "tester", HOME: join(work, label, "home") }; // a temp home, so no test ever stats the real one
   let recorded = 0;
   const spied = { ...repos, importRuns: { ...repos.importRuns, record: (i: Parameters<typeof repos.importRuns.record>[0]) => (recorded++, repos.importRuns.record(i)) } };
   const blobs = new FakeObjectStore();
@@ -58,7 +59,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const dry = await run("import", "--from", dir, "--dry-run");
   assert.equal(dry.exitCode, 0);
   assert.match(dry.lines.join("\n"), /simulacro/);
-  assert.equal((await runCli(["import", `--from=example-coffee`, "--dry-run"], { INIT_CWD: join(work, label) }, repos)).exitCode, 0, "relative --from resolves against INIT_CWD");
+  assert.equal((await runCli(["import", `--from=example-coffee`, "--dry-run"], { INIT_CWD: join(work, label), HOME: env.HOME }, repos)).exitCode, 0, "relative --from resolves against INIT_CWD");
   assert.deepEqual(await repos.brands.list(), [], "a dry run writes nothing, not even the brand");
   assert.match((await runCli(["import", "--from", dir, "--dry-run"], env, spied)).lines.join("\n"), /Omitidos: .*assets \(no blob store configured: nothing imported\)/, "without a bucket the assets are reported, never silently dropped");
 
@@ -756,6 +757,175 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   rmSync(join(badInput, "reels", "2026-08-10"), { recursive: true });
   writeFileSync(join(badInput, "reels", "week-input.json"), "{not json");
   assert.match((await run("import", "--from", badInput)).lines.join("\n"), /reels\/week-input\.json \(not a JSON object\)/);
+
+  // Editor exports (S7b2b3b): one `exports` row per `v<N>` folder with a manifest, taken in NUMERIC order (v10 after v2), the gaps reserved
+  // as failed so each keeps its number; a stored export is never rewritten; a version without a manifest and a carousel the folder lacks stay legacy.
+  const expShop = fixture(label, "example-exports-shop");
+  mkdirSync(join(expShop, "carousels", "launch"));
+  writeFileSync(join(expShop, "carousels", "launch", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Launch", slides: [] }));
+  const expRoot = join(work, label, "outputs-exports");
+  writeFileSync(join(expShop, "config.local.yaml"), `outputs:\n  base_dir: ${expRoot}\n`);
+  seedOut(expRoot, {
+    "editor/launch/v10/manifest.json": JSON.stringify({ version: 10 }), "editor/launch/v10/01.png": "png-10",
+    // Refused files of a version are never claimed (so never uploaded under an export key); a manifest holding a secret leaves its whole version.
+    "editor/launch/v1/.env": "A=1", "editor/launch/v1/token.txt": "tok", "editor/launch/v1/id_rsa": "rsa", "editor/launch/v1/x.pem": "pem", "editor/launch/v1/01.png": "png-1",
+    "editor/launch/v12/manifest.json": JSON.stringify({ version: 12, k: `sk-${"a".repeat(24)}` }), "editor/launch/v12/01.png": "png-12",
+    "editor/launch/v2/manifest.json": JSON.stringify({ version: 2 }), "editor/launch/v2/01.png": "png-2", "editor/launch/v2/.reserved": "",
+    "editor/launch/v1/manifest.json": JSON.stringify({ version: 1 }),
+    "editor/launch/v11/01.png": "no manifest", "editor/ghost/v1/manifest.json": JSON.stringify({ version: 1 }),
+  });
+  const expRun = await run("import", "--from", expShop);
+  assert.equal(expRun.exitCode, 0, expRun.lines.join("\n"));
+  const expBrand = (await repos.brands.getBySlug("example-exports-shop")).id;
+  const launched = await repos.carousels.get(expBrand, "launch", identity);
+  assert.deepEqual((await repos.exports.list(launched.id)).map((e) => [e.versionNo, e.status]), [[1, "done"], [2, "done"], ...[3, 4, 5, 6, 7, 8, 9].map((n) => [n, "failed"]), [10, "done"]], "v2 comes before v10, and the gap keeps its numbers");
+  assert.deepEqual((await repos.exports.list(launched.id)).map((e) => e.manifest).filter(Boolean), [{ version: 1 }, { version: 2 }, { version: 10 }]);
+  assert.deepEqual((await blobs.get(carouselExportKey(expBrand, launched.id, 10, "01.png"))).body, Buffer.from("png-10"));
+  assert.deepEqual(Object.keys(((await repos.importRuns.list(expBrand))[0].report.legacy as { manifest: Record<string, string> }).manifest).filter((k) => k.startsWith("@outputs/")).sort(), ["@outputs/editor/ghost/v1/manifest.json", "@outputs/editor/launch/v11/01.png", "@outputs/editor/launch/v12/01.png"], "what is not an export stays legacy, under the normal policy");
+  const expRefused = expRun.lines.find((l) => l.startsWith("Rechazados"))!;
+  for (const f of ["v1/.env", "v1/id_rsa", "v1/x.pem", "v12/manifest.json"]) assert.ok(expRefused.includes(`@outputs/editor/launch/${f} (`), `${f} is refused`);
+  assert.ok(expRun.lines.find((l) => l.startsWith("Sin importar"))!.includes("@outputs/editor/launch/v1/token.txt (suspicious name)"));
+  const exportKeys = (await blobs.list(`brands/${expBrand}/exports/carousels/${launched.id}/`)).map((e) => e.key).sort();
+  assert.deepEqual(exportKeys, [1, 2, 10].flatMap((n) => ["01.png", "manifest.json"].map((f) => carouselExportKey(expBrand, launched.id, n, f))).sort(), "only allowlisted files of accepted versions are under an export key");
+  assert.deepEqual(await verifyBrand(repos, expShop, blobs, env), []);
+  assert.match((await run("import", "--from", expShop)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios \d+, conflictos 0\./);
+  writeFileSync(join(expRoot, "editor", "launch", "v10", "manifest.json"), JSON.stringify({ version: 10, edited: true }));
+  const expClash = await run("import", "--from", expShop);
+  assert.equal(expClash.exitCode, 1);
+  assert.match(expClash.lines.join("\n"), /Conflictos: export:launch\/v10 \(differs from storage; never rewritten\)/);
+  assert.deepEqual((await repos.exports.list(launched.id)).at(-1)!.manifest, { version: 10 }, "a stored export is never rewritten");
+
+  // An export interrupted after its number was reserved resumes (never a duplicate or a permanent conflict); a changed file is a conflict, both
+  // when the stored row is done (seen by the classification) and when a stored file would be overwritten with other bytes.
+  const resumeShop = fixture(label, "example-export-resume-shop");
+  mkdirSync(join(resumeShop, "carousels", "launch"));
+  writeFileSync(join(resumeShop, "carousels", "launch", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Launch", slides: [] }));
+  const resumeRoot = join(work, label, "outputs-resume");
+  writeFileSync(join(resumeShop, "config.local.yaml"), `outputs:\n  base_dir: ${resumeRoot}\n`);
+  seedOut(resumeRoot, { "editor/launch/v1/manifest.json": JSON.stringify({ version: 1 }), "editor/launch/v1/01.png": "png-a" });
+  let exportCut = true;
+  const breaking = { ...spied, exports: { ...repos.exports, complete: async (...a: Parameters<typeof repos.exports.complete>) => {
+    if (exportCut) {
+      exportCut = false;
+      throw new Error("interrupted before the export completed");
+    }
+    return repos.exports.complete(...a);
+  } } } as MemoryRepositories;
+  assert.match((await runCli(["import", "--from", resumeShop], env, breaking, blobs).catch((e: Error) => ({ exitCode: 1, lines: [e.message] }))).lines.join("\n"), /interrupted before the export completed/);
+  const resumeBrand = (await repos.brands.getBySlug("example-export-resume-shop")).id;
+  const resumeCarousel = await repos.carousels.get(resumeBrand, "launch", identity);
+  assert.deepEqual((await repos.exports.list(resumeCarousel.id)).map((e) => [e.versionNo, e.status]), [[1, "running"]]);
+  writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-b");
+  const changedFile = await run("import", "--from", resumeShop);
+  assert.equal(changedFile.exitCode, 1);
+  assert.match(changedFile.lines.join("\n"), /Conflictos: export:launch\/v1 \(.*already exists with different content/, "different bytes under a stored key are a reported conflict, not an aborted pass");
+  writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-a");
+  const resumed = await run("import", "--from", resumeShop);
+  assert.equal(resumed.exitCode, 0, resumed.lines.join("\n"));
+  assert.deepEqual((await repos.exports.list(resumeCarousel.id)).map((e) => [e.versionNo, e.status]), [[1, "done"]], "the interrupted export is completed, not duplicated");
+  assert.deepEqual(await verifyBrand(repos, resumeShop, blobs, env), []);
+  writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-c");
+  assert.match((await run("import", "--from", resumeShop)).lines.join("\n"), /Conflictos: export:launch\/v1 \(differs from storage; never rewritten\)/, "a changed file under the same manifest is not unchanged");
+
+  // A take whose card left the plan and came back with a new mp3 is the import's own (`_imported.released`), not "changed in storage".
+  const backShop = fixture(label, "example-returning-take-shop");
+  cpSync(join(runShop, "reels"), join(backShop, "reels"), { recursive: true });
+  const backMp3 = join(backShop, "reels", "2026-08-10", "audio", `${sb.cards[0].id}.mp3`);
+  assert.equal((await run("import", "--from", backShop)).exitCode, 0);
+  rmSync(backMp3);
+  assert.match((await run("import", "--from", backShop)).lines.join("\n"), /no longer in the source/);
+  writeFileSync(backMp3, "audio-returned");
+  const back = await run("import", "--from", backShop);
+  assert.equal(back.exitCode, 0, back.lines.join("\n"));
+  assert.match(back.lines.join("\n"), /actualizados 1,.*conflictos 0/);
+  const backBrand = (await repos.brands.getBySlug("example-returning-take-shop")).id;
+  const backRun = (await repos.runs.list(backBrand, { recipe: "reel-week" }))[0];
+  assert.equal((await repos.runArtifacts.current(backRun.id, { kind: "audio" })).find((a) => a.cardIndex === 0)!.sha256, sha(Buffer.from("audio-returned")));
+  assert.deepEqual(await verifyBrand(repos, backShop, blobs, env), []);
+  assert.match((await run("import", "--from", backShop)).lines.join("\n"), /actualizados 0,.*conflictos 0/);
+
+  // A run written under the old `_imported.audio` key (no kind) still claims its slots: a changed mp3 updates it cleanly.
+  const oldShop = fixture(label, "example-legacy-audio-shop");
+  cpSync(join(runShop, "reels"), join(oldShop, "reels"), { recursive: true });
+  assert.equal((await run("import", "--from", oldShop)).exitCode, 0);
+  const oldBrand = (await repos.brands.getBySlug("example-legacy-audio-shop")).id;
+  const oldRow = (await repos.runs.list(oldBrand, { recipe: "reel-week" }))[0];
+  const oldStored = await repos.runs.get(oldRow.id, identity);
+  const { artifacts: oldTakes, ...oldImported } = (oldStored.value.input as { _imported: { artifacts: Array<{ cardIndex: number; sha256: string }> } })._imported;
+  const asOldJson = { ...(oldStored.value.input as object), _imported: { ...oldImported, audio: oldTakes.map(({ cardIndex, sha256 }) => ({ cardIndex, sha256 })) } };
+  await repos.runs.save(oldRow.id, { input: { json: asOldJson, schemaVersion: 1 }, storyboard: oldStored.value.storyboard }, { expectedVersion: oldStored.version, author: "tester", source: "import", reason: "import", sourceHash: "old-format" });
+  assert.deepEqual(await verifyBrand(repos, oldShop, blobs, env), [], "an old-format run reads back as the source says");
+  writeFileSync(join(oldShop, "reels", "2026-08-10", "audio", `${sb.cards[0].id}.mp3`), "audio-new-take");
+  const oldAgain = await run("import", "--from", oldShop);
+  assert.equal(oldAgain.exitCode, 0, oldAgain.lines.join("\n"));
+  assert.match(oldAgain.lines.join("\n"), /conflictos 0/);
+  assert.equal((await repos.runArtifacts.current(oldRow.id, { kind: "audio" })).find((a) => a.cardIndex === 0)!.sha256, sha(Buffer.from("audio-new-take")));
+
+  // A file a collector skipped that the legacy pass refuses as a proven secret does not block a cutover (it is still reported).
+  const skipSecret = fixture(label, "example-skipped-secret-shop");
+  mkdirSync(join(skipSecret, "reels", "stray"), { recursive: true });
+  writeFileSync(join(skipSecret, "reels", "stray", ".env"), "A=1");
+  const skipCut = await run("cutover", "example-skipped-secret-shop", "--confirm", "example-skipped-secret-shop", "--from", skipSecret);
+  assert.equal(skipCut.exitCode, 0, skipCut.lines.join("\n"));
+  assert.match(skipCut.lines.join("\n"), /Rechazados, nunca importados: .*reels\/stray\/\.env/);
+
+  // An outputs root that is too broad is unusable: `~` is the home directory (faked here, never the real one), a folder that holds
+  // another brand's folder likewise; a folder inside the home is fine.
+  const fakeHome = join(work, label, "fake-home");
+  seedOut(fakeHome, { "notes.md": "private", "outputs/ok.json": "{}" });
+  const atHome = { ...env, HOME: fakeHome };
+  const homeShop = problem("example-home-out-shop", 'outputs:\n  base_dir: "~"\n');
+  const homeOut = (await runCli(["import", "--from", homeShop, "--dry-run"], atHome, spied, blobs)).lines.join("\n");
+  assert.match(homeOut, /@outputs\/ \(outputs root .* is the home directory or holds it/);
+  assert.equal((await runCli(["cutover", "example-home-out-shop", "--confirm", "example-home-out-shop", "--from", homeShop], atHome, spied, blobs)).exitCode, 1);
+  const homeSub = problem("example-home-sub-shop", "outputs:\n  base_dir: ~/outputs\n");
+  assert.match((await runCli(["import", "--from", homeSub, "--dry-run"], atHome, spied, blobs)).lines.join("\n"), /Carpeta de salidas leída/, "a folder inside the home is a usable root");
+  const holder = join(work, `${label}-holder`);
+  mkdirSync(join(holder, "other-brand"), { recursive: true });
+  symlinkSync(join(holder, "other-brand"), join(work, label, "example-linked-brand"));
+  const holdShop = problem("example-holder-out-shop", `outputs:\n  base_dir: ${holder}\n`);
+  assert.match((await run("import", "--from", holdShop, "--dry-run")).lines.join("\n"), /@outputs\/ \(outputs root .* is the home directory or holds it, the folder of the brands or another brand/);
+
+  // A `clips` path that is a file, or a folder that cannot be listed, is reported, never a crash.
+  const clipFile = fixture(label, "example-clips-file-shop");
+  cpSync(join(runShop, "reels"), join(clipFile, "reels"), { recursive: true });
+  const clipFileRoot = join(work, label, "outputs-clips-file");
+  seedOut(clipFileRoot, { "reels/2026-08-10/clips": "not a folder" });
+  writeFileSync(join(clipFile, "config.local.yaml"), `outputs:\n  base_dir: ${clipFileRoot}\n`);
+  const clipFileOut = await run("import", "--from", clipFile, "--dry-run");
+  assert.equal(clipFileOut.exitCode, 0, clipFileOut.lines.join("\n"));
+  assert.match(clipFileOut.lines.join("\n"), /@outputs\/reels\/2026-08-10\/clips \(not a readable directory\)/);
+  if (process.getuid?.() !== 0) {
+    const clipsPath = join(clipFileRoot, "reels", "2026-08-10", "clips");
+    rmSync(clipsPath);
+    mkdirSync(clipsPath);
+    chmodSync(clipsPath, 0o000);
+    try {
+      const sealedClips = await run("import", "--from", clipFile, "--dry-run");
+      assert.equal(sealedClips.exitCode, 0, sealedClips.lines.join("\n"));
+      assert.match(sealedClips.lines.join("\n"), /@outputs\/reels\/2026-08-10\/clips \(not a readable directory\)/);
+    } finally {
+      chmodSync(clipsPath, 0o755);
+    }
+  }
+
+  // Clips of an outputs root INSIDE the brand folder (the default `outputs` folder) are artifacts and are not kept a second time as legacy blobs.
+  const innerShop = fixture(label, "example-inner-outputs-shop");
+  cpSync(join(runShop, "reels"), join(innerShop, "reels"), { recursive: true });
+  seedOut(innerShop, { [`outputs/reels/2026-08-10/clips/${clipNames[0]}`]: "inner-clip-0", "outputs/reels/2026-08-10/clips/other.mp4": "loose" });
+  const innerRun = await run("import", "--from", innerShop);
+  assert.equal(innerRun.exitCode, 0, innerRun.lines.join("\n"));
+  assert.doesNotMatch(innerRun.lines.join("\n"), /Carpeta de salidas leída/, "an inner root is not a second root");
+  const innerBrand = (await repos.brands.getBySlug("example-inner-outputs-shop")).id;
+  assert.deepEqual((await repos.runArtifacts.current((await repos.runs.list(innerBrand, { recipe: "reel-week" }))[0].id, { kind: "clip" })).map((c) => c.cardIndex), [0]);
+  const innerManifest = Object.keys(((await repos.importRuns.list(innerBrand))[0].report.legacy as { manifest: Record<string, string> }).manifest).filter((k) => k.startsWith("outputs/"));
+  assert.deepEqual(innerManifest, ["outputs/reels/2026-08-10/clips/other.mp4"], "the claimed clip is not also a legacy blob");
+
+  // An unreadable or unparseable config file is a notice, not silence; a file that changed after it was hashed is not uploaded.
+  const badConfig = problem("example-bad-config-shop", "outputs: [unclosed\n");
+  assert.match((await run("import", "--from", badConfig, "--dry-run")).lines.join("\n"), /Omitidos: .*@outputs\/ \(config config\.local\.yaml unreadable: outputs root unknown\)/);
+  assert.equal((await run("cutover", "example-bad-config-shop", "--confirm", "example-bad-config-shop", "--from", badConfig)).exitCode, 1, "an unknown outputs root blocks a cutover");
+  assert.throws(() => rereadChecked(innerShop, join(innerShop, "profile.md"), "profile.md", "0".repeat(64)), /changed while the import was running/);
 
   // An example cuts over without --partial: everything is imported, or kept as a legacy blob, and blobs are verified.
   const whole = fixture(label, "example-whole-shop");
