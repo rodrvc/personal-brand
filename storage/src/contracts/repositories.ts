@@ -362,3 +362,19 @@ export interface RunArtifactRepository {
   /** Every artifact of one slot, oldest first. */
   history(runId: string, kind: RunArtifactKind, cardIndex: number | null): Promise<RunArtifact[]>;
 }
+
+export interface ImportRun {
+  id: string;
+  brandId: string;
+  sourceKind: "folder";
+  /** sha256 over the sorted per-item source hashes: equal roots mean an unchanged source. */
+  sourceRootHash: string;
+  startedAt: string;
+  finishedAt: string;
+  report: Record<string, unknown>;
+}
+
+/** Insert-only log of real (non dry-run) import passes; owner role only. Reading it back lands in S7b. */
+export interface ImportRunRepository {
+  record(input: Omit<ImportRun, "id">): Promise<ImportRun>;
+}

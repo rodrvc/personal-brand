@@ -240,6 +240,17 @@ tests need a superuser `DATABASE_URL`
 (`postgres://postgres:local-dev-only@localhost:5442/brands`), SKIP when it
 is unset or unreachable, and use a throwaway `test_<random>` schema.
 
+### The `brand` CLI
+
+```bash
+pnpm --filter @personal-brand/storage brand import --from profiles/example --dry-run
+pnpm --filter @personal-brand/storage brand import --from profiles/example
+```
+
+Run it from the repo root as `brand_owner` (`DATABASE_URL`); relative `--from`
+paths resolve against where you ran it (`INIT_CWD`, set by pnpm) and `~` is
+expanded. `import` is read-only and idempotent. Real writes to a non-localhost database are refused until S8.
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs

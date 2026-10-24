@@ -20,6 +20,7 @@ import {
   type RunArtifact,
   type RunArtifactRepository,
   type ExportRepository,
+  type ImportRunRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -54,6 +55,7 @@ export interface MemoryRepositories {
   content: ContentItemRepository;
   runs: RecipeRunRepository;
   runArtifacts: RunArtifactRepository;
+  importRuns: ImportRunRepository;
 }
 
 interface DocRow {
@@ -593,5 +595,13 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts };
+  // Rows are not kept yet: S7b must store them when it adds `list()`.
+  const importRuns: ImportRunRepository = {
+    async record(input) {
+      if (!brands.has(input.brandId)) throw new NotFoundError(`brand ${input.brandId}`);
+      return { ...structuredClone(input), id: randomUUID() };
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns };
 }
