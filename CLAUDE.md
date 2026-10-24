@@ -16,11 +16,18 @@
 >    nombres, ni colores, ni ciudades, ni copy real. El repo es el motor;
 >    las marcas viven en `profiles/<marca>/`, fuera de git. Test: quien
 >    clone el repo no debe poder deducir para qué marca se construyó.
-> 2. **Los módulos no se rompen entre sí.** Se comunican por los archivos
->    de `profiles/`, nunca importando código ajeno.
+> 2. **Los módulos no se rompen entre sí.** Nunca importan código ajeno;
+>    comparten datos solo por `@personal-brand/storage` (`BlobStore` +
+>    repositorios). Lógica pura en `core/`, I/O compartido en `storage/`.
+>    Ningún módulo crea tablas fuera de `storage/migrations` ni claves
+>    del bucket fuera de `storage` (esquema de claves en `storage/src/contracts/keys.ts`).
 > 3. **El sistema de markdown y los agentes de `.claude/agents/` deben
 >    seguir funcionando igual.** La app es un módulo más y escribe los
 >    mismos archivos.
+>
+> Transición: hasta el corte de cada marca (D12 en
+> `docs/design/storage-foundation.md`), los módulos siguen leyendo
+> `profiles/<marca>/` y las reglas 1 y 3 aplican tal cual.
 
 ### EQUIPO
 
