@@ -143,11 +143,11 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
                      ${r.bodyText}, ${meta.author}, ${meta.source}, ${meta.sourceHash ?? null}, ${at})`;
   }
 
-  async function writeBrand(id: string, meta: WriteMeta, patch: { displayName?: string; status?: string }) {
+  async function writeBrand(id: string, meta: WriteMeta, patch: { displayName?: string; status?: string; cutoverAt?: Date }) {
     if (!isUuid(id)) throw new NotFoundError(`brand ${id}`);
     return sql.begin(async (tx) => {
       const [row] = await tx`UPDATE brands SET display_name = COALESCE(${patch.displayName ?? null}, display_name),
-                                    status = COALESCE(${patch.status ?? null}, status), updated_at = ${now()}, version = version + 1
+                                    status = COALESCE(${patch.status ?? null}, status), cutover_at = COALESCE(cutover_at, ${patch.cutoverAt ?? null}), updated_at = ${now()}, version = version + 1
                              WHERE id = ${id} AND version = ${meta.expectedVersion} RETURNING *`;
       if (!row) {
         const [cur] = await tx`SELECT version FROM brands WHERE id = ${id}`;
@@ -185,6 +185,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       });
     },
     update: (id, patch, meta) => writeBrand(id, meta, patch),
+    markCutover: (id, meta) => writeBrand(id, meta, { cutoverAt: now() }),
     archive: (id, meta) => writeBrand(id, meta, { status: "archived" }),
     unarchive: (id, meta) => writeBrand(id, meta, { status: "active" }),
   };

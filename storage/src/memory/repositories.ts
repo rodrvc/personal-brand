@@ -123,6 +123,9 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     async update(id, patch, meta) {
       return writeBrand(id, meta, (b) => ({ ...b, displayName: patch.displayName ?? b.displayName }));
     },
+    async markCutover(id, meta) {
+      return writeBrand(id, meta, (b) => ({ ...b, cutoverAt: b.cutoverAt ?? now().toISOString() }));
+    },
     async archive(id, meta) {
       return writeBrand(id, meta, (b) => ({ ...b, status: "archived" }));
     },
