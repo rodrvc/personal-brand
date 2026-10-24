@@ -3,11 +3,13 @@ import { basename, join, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { AlreadyExistsError, InvalidInputError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
+import { AlreadyExistsError, blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectAssets } from "./assets.ts";
+import { planLegacy, type LegacyFile } from "./legacy.ts";
 import { collectRuns } from "./runs.ts";
+import { putBlob } from "../blob/put-blob.ts";
 import { canon, found, readRegular, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
 export type { ImportRepos };
@@ -40,10 +42,21 @@ export interface ImportReport {
   notImported: string[];
   /** Entries inside imported areas that were passed over, each with the reason, so nothing disappears silently. */
   skipped: string[];
+  /** Informational lines that are not left-behind data (e.g. a stored take the import no longer claims). Printed, never blocking a cutover. */
+  notices: string[];
+  /** Files the legacy pass proved secret-like (dotfiles, key files, secret content): never uploaded, deliberately not counted as left behind. */
+  refused: string[];
+  /** Files it would not upload on a guess (unknown type, suspicious name): never uploaded, but left-behind data that blocks a cutover without `--partial`. */
+  unimported: string[];
   /** One `<key> (<reason>)` per item counted as `conflict`: why it was left alone. */
   conflicts: string[];
   /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
   proposals: Array<{ kind: string; params: Record<string, unknown>; from: string }>;
+  /**
+   * Files no collector imported, kept as content-keyed blobs: how many, the path -> sha256 manifest, and the paths new or
+   * different since the latest import run's manifest (empty on a first run).
+   */
+  legacy: { count: number; manifest: Record<string, string>; changed: string[] };
   /** Set when the pass threw part-way; the counts then cover only the items done before it. */
   aborted?: string;
 }
@@ -56,9 +69,10 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[]; notImported: string[]; skipped: string[]; proposals: ImportReport["proposals"] } {
+function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[] } {
   const items: Item[] = [];
   const skipped: string[] = [];
+  const notices: string[] = [];
   const proposals: ImportReport["proposals"] = [];
   const root = realpathSync(dir); // the folder itself may be a symlink; what it contains may not point out of it
   const handled = new Set<string>();
@@ -149,10 +163,10 @@ function collect(dir: string, repos: Repos, blobs?: BlobStore): { items: Item[];
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
-  const ctx = { dir, root, repos, blobs, skipped, handled };
+  const ctx = { dir, root, repos, blobs, skipped, notices, handled };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx));
-  const notImported = readdirSync(dir).filter((f) => !handled.has(f)).sort();
-  return { items, notImported, skipped, proposals };
+  const left = planLegacy({ root, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files };
 }
 
 /**
@@ -180,7 +194,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, proposals } = collect(dir, repos, opts.blobs);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy } = collect(dir, repos, opts.blobs);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
 
   if (!opts.dryRun && !brand) {
@@ -188,10 +202,13 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
     // A concurrent importer may have created the brand first: continue with its row.
     brand = await repos.brands.create({ slug, displayName: slug }, meta).catch((e) => (e instanceof AlreadyExistsError ? repos.brands.getBySlug(slug) : Promise.reject(e)));
   }
+  const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
+  const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, proposals, conflicts: [],
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [],
+    legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
-    sourceRootHash: sha256(items.map((i) => `${i.key}:${i.hash}`).join("\n")),
+    sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),
   };
   const record = (finishedAt: string) =>
     repos.importRuns.record({ brandId: brand!.id, sourceKind: "folder", sourceRootHash: report.sourceRootHash, startedAt, finishedAt, report: { ...report } });
@@ -216,6 +233,8 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
       report.items.push({ key: item.key, outcome });
       report.counts[outcome]++;
     }
+    // Content-keyed, so a re-run writes nothing new for an unchanged file and never overwrites a different one.
+    if (!opts.dryRun) for (const f of legacy) await putBlob(opts.blobs as BlobStore, brand!.id, f.bytes);
   } catch (error) {
     // An unexpected failure still leaves a run row saying how far the pass got; the original error is what the caller sees.
     report.aborted = (error as Error).message;
@@ -235,7 +254,12 @@ export async function verifyBrand(repos: Repos, from: string, blobs?: BlobStore)
   const dir = resolve(from);
   const brand = await repos.brands.getBySlug(basename(dir));
   const bad: string[] = [];
-  for (const item of collect(dir, repos, blobs).items) {
+  const { items, legacy } = collect(dir, repos, blobs);
+  for (const f of legacy) {
+    const intact = await blobs!.get(blobKey(brand.id, f.sha256)).then((b) => sha256(b.body) === f.sha256, (e) => (e instanceof ObjectNotFoundError ? false : Promise.reject(e)));
+    if (!intact) bad.push(`legacy:${f.path} (blob)`);
+  }
+  for (const item of items) {
     const stored = await item.read(brand.id);
     if (!stored || canon(stored.value) !== canon(item.payload)) bad.push(item.key);
     else if (item.verifyBlobs && !(await item.verifyBlobs(brand.id))) bad.push(`${item.key} (blob)`);

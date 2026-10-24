@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, type BlobStore } from "../contracts/index.ts";
+import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories } from "../pg/index.ts";
@@ -131,13 +132,10 @@ function markerNames(path: string, brandId: string): boolean {
 }
 
 /**
- * Top-level folder entries that are never imported by design, so they do not count as left-behind data:
- * the machine-local config (`config.local.yaml` and its variants), our own cutover marker, and macOS `.DS_Store`.
+ * Data a cutover would strand: everything not imported, skipped or refused on a guess (unknown type, suspicious name),
+ * minus what is never imported by design, kept as a legacy blob, or proven secret (`refused`: deliberate, never blocks).
  */
-const BY_DESIGN = /^(config\.local\.yaml.*|\.storage-cutover|\.DS_Store)$/;
-
-/** Data a cutover would strand: everything not imported or skipped, minus what is never imported by design. */
-const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped];
+const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped.filter((e) => !isKept(r.legacy.manifest, entryPath(e))), ...r.unimported];
 
 function describe(report: ImportReport): string[] {
   const c = report.counts;
@@ -146,6 +144,10 @@ function describe(report: ImportReport): string[] {
     ...report.items.map((i) => `  ${i.outcome} ${i.key}`),
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
     ...(report.conflicts.length ? [`Conflictos: ${report.conflicts.join(", ")}.`] : []),
+    ...(report.legacy.count ? [`Guardados como legado, por contenido: ${report.legacy.count} archivo(s)${report.legacy.changed.length ? `; nuevos o cambiados desde la última importación: ${report.legacy.changed.join(", ")}` : ""}.`] : []),
+    ...(report.refused.length ? [`Rechazados, nunca importados: ${report.refused.join(", ")}.`] : []),
+    ...(report.unimported.length ? [`Sin importar (tipo no reconocido o nombre sospechoso): ${report.unimported.join(", ")}.`] : []),
+    ...(report.notices.length ? [`Avisos: ${report.notices.join("; ")}.`] : []),
     ...(report.notImported.length ? [`Fuera de esta etapa, no importado: ${report.notImported.join(", ")}.`] : []),
     ...report.proposals.map((p) => `Propuesta de regla (no creada): ${p.kind} ${JSON.stringify(p.params)} desde ${p.from}.`),
     ...(report.skipped.length ? [`Omitidos: ${report.skipped.join(", ")}.`] : []),

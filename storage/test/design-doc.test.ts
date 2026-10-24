@@ -19,6 +19,8 @@ for (const line of table.split("\n").filter((l) => l.startsWith("|"))) {
 assert.ok(rows.size > 5, "the slice table was parsed");
 const exists = (d: string) => rows.has(d) || [...rows.keys()].some((k) => k.startsWith(d) && /^[a-z]/.test(k.slice(d.length)));
 for (const [slice, deps] of rows) for (const d of deps) assert.ok(exists(d), `${slice} depends on ${d}, which has no row in §13`);
-assert.ok(rows.has("S7b2b1") && rows.has("S7b2b2"), "S7b2b1 and S7b2b2 are rows");
-assert.ok(rows.get("S8")?.includes("S7b2b2"), "S8 depends on S7b2b2");
+assert.ok(["S7b2b1", "S7b2b2", "S7b2b3a", "S7b2b3b"].every((k) => rows.has(k)), "S7b2b1, S7b2b2, S7b2b3a and S7b2b3b are rows");
+assert.ok(rows.get("S7b2b3a")?.includes("S7b2b2"), "S7b2b3a depends on S7b2b2");
+assert.ok(rows.get("S7b2b3b")?.includes("S7b2b3a"), "S7b2b3b depends on S7b2b3a");
+assert.ok(rows.get("S8")?.includes("S7b2b3b"), "S8 depends on S7b2b3b");
 console.log("design doc slice table: ok");
