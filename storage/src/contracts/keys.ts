@@ -20,6 +20,11 @@ function version(n: number): string {
   return `v${String(n).padStart(3, "0")}`;
 }
 
+/** The prefix shared by every file of one carousel export version (ends with `/`). */
+export function carouselExportPrefix(brandId: string, carouselId: string, versionNo: number): string {
+  return `brands/${uuid("brandId", brandId)}/exports/carousels/${uuid("carouselId", carouselId)}/${version(versionNo)}/`;
+}
+
 export function carouselExportKey(brandId: string, carouselId: string, versionNo: number, file: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(file) || file === "." || file === "..") throw new Error(`Invalid file name: "${file}"`);
   return `brands/${uuid("brandId", brandId)}/exports/carousels/${uuid("carouselId", carouselId)}/${version(versionNo)}/${file}`;

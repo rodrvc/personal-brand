@@ -72,7 +72,7 @@ export function collectCarousels(ctx: CollectContext): Item[] {
     const document = { ...doc, status };
     const schemaOf = (d: Record<string, unknown>) => (Number.isInteger(d.schemaVersion) && (d.schemaVersion as number) >= 1 ? (d.schemaVersion as number) : 1);
     const hash = sha256([...snapshots.map((s) => s.hash), sha256(current), chatRaw ? sha256(chatRaw) : ""].join("\n"));
-    ctx.carousels.add(id);
+    ctx.carouselSlugs.add(id);
     items.push({
       key: `carousel:${id}`, entityType: "carousel", hash,
       payload: { title: doc.title, status, document, chat },

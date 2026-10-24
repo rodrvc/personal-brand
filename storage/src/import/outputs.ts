@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, YAMLParseError } from "yaml";
 
 /** Prefix of the report labels of files under the outputs root (`@outputs/<path>`); one constant, so no filter drifts from a label. */
 export const OUTPUTS_LABEL = "@outputs/";
@@ -17,6 +17,9 @@ export interface OutputsRoot {
   editor: string;
   reels: string;
 }
+
+/** Files that make a sibling folder a brand folder (the ones the importer reads), for the "inside another brand" rule. */
+const BRAND_FILES = ["brand.json", "brand.yaml", "profile.md"];
 
 /** `$HOME` the way `homedir()` reads it, with the environment given to the CLI taking precedence (so a test can fake it). */
 const homeOf = (env: NodeJS.ProcessEnv) => env.HOME?.trim() || homedir();
@@ -33,7 +36,7 @@ function readOutputsConfig(dir: string): { config: Record<string, string>; probl
       const section = (parseYaml(readFileSync(join(dir, file), "utf-8")) as { outputs?: Record<string, unknown> } | null)?.outputs;
       for (const [key, value] of Object.entries(section ?? {})) if (typeof value === "string" && value.trim()) merged[key] = value.trim();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") problem ??= `config ${file} unreadable: outputs root unknown`;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") problem ??= `${file} ${error instanceof YAMLParseError ? "could not be parsed" : "could not be read"}: outputs root unknown`;
     }
   }
   return { config: merged, problem };
@@ -54,11 +57,12 @@ const realOrNull = (path: string): string | null => {
 };
 
 /**
- * Whether an outputs root is too broad to read: it is the home directory or holds it, is or holds the folder that holds the
+ * Why an outputs root is too broad to read (null when it is fine): it is the home directory or holds it, is or holds the folder that holds the
  * brand folders (as given and as resolved: a linked brand lives elsewhere), or holds another brand's folder (an entry next to the
- * brand folder). A root that is merely the brand folder itself, or lies inside it, is fine.
+ * brand folder), or lies inside another brand's folder. A root that is merely the brand folder itself, or lies inside it, is fine.
+ * A root shared by several brands (one folder holding each brand's outputs) cannot be told apart from any other folder and is not detected.
  */
-function tooBroad(real: string, dir: string, root: string, env: NodeJS.ProcessEnv): boolean {
+function tooBroad(real: string, dir: string, root: string, env: NodeJS.ProcessEnv): string | null {
   const parents = new Set([dirname(dir), dirname(root)]);
   const others = [...parents].flatMap((parent) => {
     try {
@@ -68,7 +72,11 @@ function tooBroad(real: string, dir: string, root: string, env: NodeJS.ProcessEn
     }
   });
   const named = [...parents, homeOf(env), realOrNull(homeOf(env))].filter((p): p is string => !!p);
-  return named.some((folder) => within(real, folder)) || others.some((folder) => folder && folder !== real && folder !== root && folder !== dir && within(real, folder));
+  if (named.some((folder) => within(real, folder))) return "is the home directory or holds it, or is or holds the folder of the brands";
+  const sibling = others.filter((folder): folder is string => !!folder && folder !== root && folder !== dir);
+  if (sibling.some((folder) => folder !== real && within(real, folder))) return "holds another brand's folder";
+  if (sibling.some((folder) => within(folder, real) && BRAND_FILES.some((f) => existsSync(join(folder, f))))) return "lies inside another brand's folder";
+  return null;
 }
 
 /**
@@ -95,7 +103,8 @@ export function resolveOutputs(dir: string, root: string, slug: string, env: Nod
     return { outputs: null };
   }
   if (real === sep || (real !== root && within(real, root))) return { outputs: null, unusable: `outputs root ${real} is "/" or an ancestor of the brand folder: not read` };
-  if (tooBroad(real, dir, root, env)) return { outputs: null, unusable: `outputs root ${real} is the home directory or holds it, the folder of the brands or another brand: not read` };
+  const broad = tooBroad(real, dir, root, env);
+  if (broad) return { outputs: null, unusable: `outputs root ${real} ${broad}: not read` };
   const reels = config.reels ?? "reels";
   if (isAbsolute(reels) || reels.split(/[\\/]/).includes("..")) return { outputs: null, unusable: `outputs.reels "${reels}" leaves the outputs root: not read` };
   return { outputs: { real, inside: within(root, real), editor: config.editor ?? "editor", reels } };

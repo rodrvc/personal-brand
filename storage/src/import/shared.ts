@@ -34,11 +34,13 @@ export interface CollectContext {
   blobs?: BlobStore;
   /** Where `outputs.base_dir` resolves to (null when it does not exist); read as a second root when it lies outside the folder. */
   outputs: OutputsRoot | null;
-  /** Ids of the carousels the folder yields, so an export can name its carousel by slug. */
-  carousels: Set<string>;
+  /** Slugs of the carousels the folder yields (a carousel's slug is its folder name), so an export can name its carousel. */
+  carouselSlugs: Set<string>;
   /** Absolute paths already imported by a collector; the legacy pass leaves them out. */
   used: Set<string>;
   skipped: string[];
+  /** The clock of the pass (injectable for tests). */
+  now: () => Date;
   /** Informational lines that are not left-behind data. */
   notices: string[];
   /** Top-level folder entries some collector took responsibility for; the rest are reported as not imported. */
