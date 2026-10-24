@@ -446,8 +446,8 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
 | reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
-| `ideas/` backlog | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
-| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; `content/**` becomes `content_items` once S6b lands) |
+| `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
+| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; S7b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -505,6 +505,35 @@ hash).
    `--partial`, and a marker that does not name the brand is refused, not
    trusted. `import_runs.list(brandId)` reads runs back, newest first.
 
+   *As built in S7b1b:* `import` now also carries `templates/*.json`,
+   `carousels/<id>/` (document, `versions/*.json` oldest first, then the
+   current document, then a status move if the column differs, all reason
+   `import`; `chat.jsonl` as insert-only messages, appended only past what is
+   stored, a diverging log is a conflict) and `ideas/`, `content/drafts`,
+   `content/published` as `content_items`. **Ideas mapping (owner decision):**
+   legacy markers are not interpreted. A checked line (`[x]`) becomes stage
+   `archived` (neutral: never deleted, no "discarded" meaning); an unchecked
+   line or plain bullet becomes `idea`; the checked flag and the source file
+   stay in `meta.legacy`. "Approved by the owner" is not a stage: whatever the
+   file says about it stays in `meta` (a draft's whole frontmatter is kept
+   verbatim in `meta.frontmatter`). Drafts become `draft` and published pieces
+   `published`, the folder deciding the stage. `published_at` comes from the
+   frontmatter (`publicado` / `published_at` / `fecha`), else the
+   `YYYY-MM-DD-` prefix of the file name; with neither, the piece is skipped
+   and reported (no date is invented). Folder readmes and non-`.md` files are
+   reported in `skipped`. Slugs are slugified file names (`idea-<text>` for
+   ideas), de-duplicated with `-2`, `-3`. A recipe's `source.image_hosts` is
+   reported as a rule proposal and never created: rules are owner decisions.
+   Flat `carousels/*.json` are recipe inputs and wait for S7b2 with the runs.
+   Idea slug suffixes follow processing order (files sorted, lines top to
+   bottom), so inserting an earlier duplicate renumbers later ones. Carousel
+   history is "oldest first" only for the first import; snapshots that appear
+   later are appended after the revisions already stored.
+   A hash is written only by the last revisioned write of an item, so an
+   interrupted pass re-runs as `updated`. Carousel snapshot steps carry their
+   own snapshot hash; only the current-document save before a status move (or a
+   fresh create) carries `<hash>:doc`.
+
    **Owner guard (owner decision).** `import` and `cutover` refuse any brand
    whose slug does not match `^example(-[a-z0-9-]+)?$` (the tracked
    `profiles/example*`), `--dry-run` included, before any database connection
@@ -517,6 +546,17 @@ hash).
    that brand's source; agents and automation never do. This is a speed bump
    against mistakes, not a security boundary: anyone who can run the CLI can
    set an env var.
+
+   **S7b2 (next slice, design only).** Seam: S7b1 is everything that lands in
+   Postgres rows alone; S7b2 is everything that needs blobs. It adds
+   `assets/**` (+ `index.json`, sidecars) as blobs through `putBlob` and
+   `assets` rows with preserved ids, flat `carousels/*.json` and
+   `reels/**/week-input.json` + `storyboard.yaml` as `recipe_runs`, TTS mp3 +
+   sidecars and existing clips as blobs with `tts_cache` / `run_artifacts`,
+   `outputs/**` as `exports` + export keys, and every other file as a blob
+   under `brands/<id>/legacy/<importRunId>/<path>` listed in the report. Its
+   verification pass re-downloads each blob and compares sha256 (the row-level
+   pass already exists). After it, the examples cut over without `--partial`.
 5. S12 removes the folder path and the resolver once every real brand is cut
    over.
 

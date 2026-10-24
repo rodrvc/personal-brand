@@ -274,7 +274,7 @@ owner-only).
 - `cutover <slug> --confirm <slug>` runs a final import, verifies it and then
   marks the brand cut over and writes `.storage-cutover` in its folder (the
   folder is not deleted). It refuses while anything the importer does not carry
-  yet (assets, carousels, reels, ideas, content...) is left in the folder, so
+  yet (assets, reels, outputs, flat carousel inputs...) is left in the folder, so
   nothing is stranded; `--partial` acknowledges that. Until S7b2 lands, the
   example brands are cut over with `--partial`. Without `--from`, the folder is
   `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
