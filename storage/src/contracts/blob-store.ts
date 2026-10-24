@@ -12,11 +12,33 @@ export interface BlobPutOptions {
   metadata?: Record<string, string>;
 }
 
+export interface BlobGetResult {
+  body: Buffer;
+  etag: string;
+}
+export interface BlobStreamResult {
+  stream: AsyncIterable<Buffer>;
+  etag: string;
+}
+export interface BlobHeadResult {
+  etag: string;
+  size: number;
+  metadata: Record<string, string>;
+}
+export interface BlobListEntry {
+  key: string;
+  etag: string;
+  size: number;
+}
+export interface BlobPutResult {
+  etag: string;
+}
+
 export interface BlobStore {
-  get(key: string): Promise<{ body: Buffer; etag: string }>;
-  getStream(key: string): Promise<{ stream: AsyncIterable<Buffer>; etag: string }>;
-  head(key: string): Promise<{ etag: string; size: number; metadata: Record<string, string> }>;
-  put(key: string, body: Buffer, options?: BlobPutOptions): Promise<{ etag: string }>;
+  get(key: string): Promise<BlobGetResult>;
+  getStream(key: string): Promise<BlobStreamResult>;
+  head(key: string): Promise<BlobHeadResult>;
+  put(key: string, body: Buffer, options?: BlobPutOptions): Promise<BlobPutResult>;
   /** Every object whose key starts with `prefix`, recursively, in no particular order. */
-  list(prefix: string): Promise<Array<{ key: string; etag: string; size: number }>>;
+  list(prefix: string): Promise<BlobListEntry[]>;
 }

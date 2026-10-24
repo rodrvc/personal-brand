@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { createObjectStore, loadStorageConfig } from "./config.js";
-import { S3ObjectStore } from "./s3-object-store.js";
+import { S3ObjectStore } from "@personal-brand/storage/blob";
 
 const tests: Array<[string, () => void]> = [
   [

@@ -38,12 +38,12 @@ importers:
 
   editor/server:
     dependencies:
-      '@aws-sdk/client-s3':
-        specifier: ^3.700.0
-        version: 3.1140.0
       '@personal-brand/core':
         specifier: workspace:*
         version: link:../../core
+      '@personal-brand/storage':
+        specifier: workspace:*
+        version: link:../../storage
       busboy:
         specifier: ^1.6.0
         version: 1.6.0
@@ -106,6 +106,9 @@ importers:
 
   storage:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.700.0
+        version: 3.1140.0
       postgres:
         specifier: ^3.4.5
         version: 3.4.9

@@ -1,37 +1,36 @@
 import { createHash } from "node:crypto";
 
 import {
-  ObjectNotFoundError,
-  PreconditionFailedError,
-  type GetResult,
-  type GetStreamResult,
-  type HeadResult,
-  type ListedObject,
-  type ObjectStore,
-  type PutOptions,
-  type PutResult,
-} from "./object-store.js";
+  type BlobGetResult,
+  type BlobHeadResult,
+  type BlobListEntry,
+  type BlobPutOptions,
+  type BlobPutResult,
+  type BlobStore,
+  type BlobStreamResult,
+} from "../contracts/blob-store.ts";
+import { ObjectNotFoundError, PreconditionFailedError } from "../contracts/errors.ts";
 
 function etagOf(body: Buffer): string {
   return createHash("sha256").update(body).digest("hex");
 }
 
 /**
- * In-memory `ObjectStore` with real conditional-write semantics, for unit
+ * In-memory `BlobStore` with real conditional-write semantics, for unit
  * tests that need to exercise `ifMatch`/`ifNoneMatch` races without a real
  * bucket. Never used outside tests.
  */
-export class FakeObjectStore implements ObjectStore {
+export class FakeObjectStore implements BlobStore {
   private readonly objects = new Map<string, { body: Buffer; etag: string; metadata: Record<string, string> }>();
 
-  async get(key: string): Promise<GetResult> {
+  async get(key: string): Promise<BlobGetResult> {
     const entry = this.objects.get(key);
     if (!entry) throw new ObjectNotFoundError(key);
     return { body: Buffer.from(entry.body), etag: entry.etag };
   }
 
   /** In-memory stand-in for a streamed body: wraps the already-buffered content in a one-chunk async iterable so `mirror.ts`'s streaming pipeline exercises the same code path in tests as it does against a real bucket. */
-  async getStream(key: string): Promise<GetStreamResult> {
+  async getStream(key: string): Promise<BlobStreamResult> {
     const entry = this.objects.get(key);
     if (!entry) throw new ObjectNotFoundError(key);
     const body = Buffer.from(entry.body);
@@ -44,13 +43,13 @@ export class FakeObjectStore implements ObjectStore {
     };
   }
 
-  async head(key: string): Promise<HeadResult> {
+  async head(key: string): Promise<BlobHeadResult> {
     const entry = this.objects.get(key);
     if (!entry) throw new ObjectNotFoundError(key);
     return { etag: entry.etag, size: entry.body.byteLength, metadata: { ...entry.metadata } };
   }
 
-  async put(key: string, body: Buffer, options?: PutOptions): Promise<PutResult> {
+  async put(key: string, body: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
     const existing = this.objects.get(key);
 
     if (options?.ifNoneMatch === "*" && existing) {
@@ -66,8 +65,8 @@ export class FakeObjectStore implements ObjectStore {
     return { etag };
   }
 
-  async list(prefix: string): Promise<ListedObject[]> {
-    const results: ListedObject[] = [];
+  async list(prefix: string): Promise<BlobListEntry[]> {
+    const results: BlobListEntry[] = [];
     for (const [key, entry] of this.objects) {
       if (key.startsWith(prefix)) {
         results.push({ key, etag: entry.etag, size: entry.body.byteLength });
