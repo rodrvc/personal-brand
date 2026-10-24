@@ -60,6 +60,8 @@ try {
       repos: createPgRepositories(sql, now),
       owner: createPgRepositories(ownerSql, now),
       restricted: Boolean(role),
+      rawSql: sql,
+      rawCarouselDocument: async (id: string) => (await sql`SELECT document FROM carousels WHERE id = ${id}`)[0].document,
       cleanup: async () => {
         await sql.end({ timeout: 1 });
         await ownerSql.end({ timeout: 1 });

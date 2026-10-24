@@ -1,7 +1,7 @@
 import { RuleParamsError, validateRule, validateRuleParams, type Rule } from "@personal-brand/core/checks";
 
 import { InvalidInputError } from "./contracts/errors.ts";
-import type { AssetInput, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
+import type { AssetInput, CarouselStatus, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
 
 /** An autosave within this window by the same author folds into the previous revision. */
 export const AUTOSAVE_WINDOW_MS = 10 * 60 * 1000;
@@ -92,4 +92,38 @@ export function assertTts(narrationHash: string, entry: { sha256: string; second
   if (!SHA256.test(entry.sha256)) throw new InvalidInputError("invalid sha256");
   if (!Number.isFinite(entry.seconds) || entry.seconds < 0) throw new InvalidInputError("invalid seconds");
   assertParams(entry.voice, 1);
+}
+
+const CAROUSEL_STATUSES: string[] = ["draft", "exported", "scheduled", "published"];
+
+/** Mirrors the `carousels` CHECK constraints so both implementations reject identically. */
+export function assertCarousel(input: { slug?: string; title?: string; status?: CarouselStatus; document?: { json: unknown; schemaVersion: number } }, complete = false): void {
+  if (input.slug !== undefined) assertSlug(input.slug);
+  if ((complete || input.title !== undefined) && typeof input.title !== "string") throw new InvalidInputError("carousel title must be a string");
+  if (input.status !== undefined && !CAROUSEL_STATUSES.includes(input.status)) throw new InvalidInputError(`invalid carousel status "${input.status}"`);
+  if (input.document) assertEnvelope(input.document);
+}
+
+/** Status is stored once, in its column: drops any `status` key from a document before it is stored. */
+export function stripStatus(document: Record<string, unknown>): Record<string, unknown> {
+  const { status: _status, ...rest } = document;
+  return rest;
+}
+
+export function parseInstant(value: string | null | undefined, what: string): Date | null {
+  if (value === null || value === undefined) return null;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) throw new InvalidInputError(`invalid ${what}`);
+  return at;
+}
+
+/** `afterSeq` and `limit` of a chat page must be non-negative integers. */
+export function assertChatPage(opts?: { afterSeq?: number; limit?: number }): void {
+  for (const n of [opts?.afterSeq, opts?.limit]) if (n !== undefined && (!Number.isInteger(n) || n < 0)) throw new InvalidInputError("afterSeq and limit must be non-negative integers");
+}
+
+export const DEFAULT_EXPORT_STALE_MS = 30 * 60 * 1000;
+
+export function assertJsonObject(value: unknown, what: string): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new InvalidInputError(`${what} must be an object`);
 }

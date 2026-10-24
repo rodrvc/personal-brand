@@ -8,6 +8,12 @@ import {
   type Brand,
   type Asset,
   type AssetRepository,
+  type CarouselExport,
+  type CarouselHead,
+  type CarouselRepository,
+  type ChatMessage,
+  type ChatRepository,
+  type ExportRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -25,7 +31,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertJsonObject, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -36,6 +42,9 @@ export interface MemoryRepositories {
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
+  carousels: CarouselRepository;
+  exports: ExportRepository;
+  chat: ChatRepository;
 }
 
 interface DocRow {
@@ -308,5 +317,124 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts };
+  interface CarouselRow { id: string; brandId: string; head: CarouselHead; document: Record<string, unknown>; schemaVersion: number; version: number; updatedAt: string }
+  const carouselRows = new Map<string, CarouselRow>();
+  const carouselBody = (c: CarouselRow) => structuredClone({ ...c.head, document: c.document });
+  const carouselVersioned = (c: CarouselRow): Versioned<CarouselHead> => structuredClone({ id: c.id, value: c.head, version: c.version, updatedAt: c.updatedAt });
+  const readCarousel = <T,>(c: CarouselRow | undefined, what: string, validate: (body: unknown, schemaVersion: number) => T) => {
+    if (!c) throw new NotFoundError(what);
+    const value = { ...structuredClone(c.head), document: validate({ ...structuredClone(c.document), status: c.head.status }, c.schemaVersion) };
+    return { id: c.id, value, version: c.version, updatedAt: c.updatedAt };
+  };
+
+  function writeCarousel(id: string, meta: WriteMeta, change: (cur: CarouselRow) => Partial<CarouselRow>): Versioned<CarouselHead> {
+    const cur = carouselRows.get(id);
+    if (!cur) throw new NotFoundError(`carousel ${id}`);
+    if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+    const next = { ...cur, ...change(cur), version: cur.version + 1, updatedAt: now().toISOString() };
+    carouselRows.set(id, next);
+    record({ brandId: cur.brandId, entityType: "carousel", entityId: id, version: next.version, body: carouselBody(next), bodyText: null }, meta);
+    return carouselVersioned(next);
+  }
+
+  const carousels: CarouselRepository = {
+    async list(brandId, filter) {
+      return [...carouselRows.values()].filter((c) => c.brandId === brandId && (!filter?.status || c.head.status === filter.status))
+        .sort((a, b) => cmp(a.head.slug, b.head.slug)).map(carouselVersioned);
+    },
+    async get(brandId, slug, validate) {
+      return readCarousel([...carouselRows.values()].find((c) => c.brandId === brandId && c.head.slug === slug), `carousel "${slug}"`, validate);
+    },
+    async getById(id, validate) {
+      return readCarousel(carouselRows.get(id), `carousel ${id}`, validate);
+    },
+    async create(brandId, input, meta) {
+      assertCarousel(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const dup = [...carouselRows.values()].find((c) => c.brandId === brandId && c.head.slug === input.slug);
+      if (dup) throw new AlreadyExistsError(`carousel "${input.slug}"`, dup.version);
+      const row: CarouselRow = {
+        id: randomUUID(), brandId, head: { slug: input.slug, title: input.title, status: input.status ?? "draft", scheduledFor: null, publishedAt: null },
+        document: structuredClone(stripStatus(input.document.json)), schemaVersion: input.document.schemaVersion, version: 1, updatedAt: now().toISOString(),
+      };
+      carouselRows.set(row.id, row);
+      record({ brandId, entityType: "carousel", entityId: row.id, version: 1, body: carouselBody(row), bodyText: null }, meta);
+      return carouselVersioned(row);
+    },
+    async save(id, input, meta) {
+      assertCarousel(input);
+      return writeCarousel(id, meta, (cur) => ({
+        head: { ...cur.head, title: input.title ?? cur.head.title }, document: structuredClone(stripStatus(input.document.json)), schemaVersion: input.document.schemaVersion,
+      }));
+    },
+    async setStatus(id, patch, meta) {
+      assertCarousel({ status: patch.status });
+      const iso = (v: string | null | undefined, what: string) => (v === undefined ? undefined : (parseInstant(v, what)?.toISOString() ?? null));
+      const scheduledFor = iso(patch.scheduledFor, "scheduledFor");
+      const publishedAt = iso(patch.publishedAt, "publishedAt");
+      return writeCarousel(id, meta, (cur) => ({
+        head: { ...cur.head, status: patch.status, scheduledFor: scheduledFor === undefined ? cur.head.scheduledFor : scheduledFor, publishedAt: publishedAt === undefined ? cur.head.publishedAt : publishedAt },
+      }));
+    },
+  };
+
+  const exportRows = new Map<string, CarouselExport>();
+  const exportsOf = (carouselId: string) => [...exportRows.values()].filter((e) => e.carouselId === carouselId);
+  const finishExport = (id: string, status: "done" | "failed", manifest?: Record<string, unknown>): CarouselExport => {
+    const cur = exportRows.get(id);
+    if (!cur) throw new NotFoundError(`export ${id}`);
+    if (cur.status !== "running") {
+      if (status === "failed") return structuredClone(cur);
+      throw new InvalidInputError(`export ${id} is ${cur.status}, not running`);
+    }
+    const next: CarouselExport = { ...cur, status, manifest: manifest ? structuredClone(manifest) : null, finishedAt: now().toISOString() };
+    exportRows.set(id, next);
+    return structuredClone(next);
+  };
+
+  const exports: ExportRepository = {
+    async reserveNextVersion(carouselId, carouselVersion, opts) {
+      if (!Number.isInteger(carouselVersion) || carouselVersion < 1) throw new InvalidInputError("invalid carouselVersion");
+      if (!carouselRows.has(carouselId)) throw new NotFoundError(`carousel ${carouselId}`);
+      const at = now();
+      const cutoff = at.getTime() - (opts?.staleAfterMs ?? DEFAULT_EXPORT_STALE_MS);
+      const existing = exportsOf(carouselId);
+      for (const e of existing) if (e.status === "running" && Date.parse(e.startedAt) < cutoff) exportRows.set(e.id, { ...e, status: "failed", finishedAt: at.toISOString() });
+      const row: CarouselExport = {
+        id: randomUUID(), carouselId, versionNo: Math.max(0, ...existing.map((e) => e.versionNo)) + 1, carouselVersion,
+        status: "running", manifest: null, startedAt: at.toISOString(), finishedAt: null,
+      };
+      exportRows.set(row.id, row);
+      return structuredClone(row);
+    },
+    async complete(id, manifest) {
+      assertJsonObject(manifest, "manifest");
+      return finishExport(id, "done", manifest);
+    },
+    async fail(id) {
+      return finishExport(id, "failed");
+    },
+    async list(carouselId) {
+      return structuredClone(exportsOf(carouselId).sort((a, b) => a.versionNo - b.versionNo));
+    },
+  };
+
+  const chatRows = new Map<string, ChatMessage[]>();
+  const chat: ChatRepository = {
+    async append(carouselId, body) {
+      assertJsonObject(body, "chat body");
+      if (!carouselRows.has(carouselId)) throw new NotFoundError(`carousel ${carouselId}`);
+      const list = chatRows.get(carouselId) ?? [];
+      const seq = list.length + 1;
+      chatRows.set(carouselId, [...list, { seq, body: structuredClone(body), createdAt: now().toISOString() }]);
+      return seq;
+    },
+    async list(carouselId, opts) {
+      assertChatPage(opts);
+      return structuredClone((chatRows.get(carouselId) ?? []).filter((m) => m.seq > (opts?.afterSeq ?? 0)).slice(0, opts?.limit));
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat };
 }

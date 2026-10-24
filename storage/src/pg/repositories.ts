@@ -8,6 +8,12 @@ import {
   type Brand,
   type Asset,
   type AssetRepository,
+  type CarouselExport,
+  type CarouselHead,
+  type CarouselRepository,
+  type ChatMessage,
+  type ChatRepository,
+  type ExportRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -23,7 +29,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertJsonObject, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -38,10 +44,13 @@ export interface PgRepositories {
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
+  carousels: CarouselRepository;
+  exports: ExportRepository;
+  chat: ChatRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
-const json = (tx: Tx, value: unknown) => tx.json(value as postgres.JSONValue);
+const json = (tx: Pick<Tx, "json">, value: unknown) => tx.json(value as postgres.JSONValue);
 
 const toBrand = (r: Row) => ({
   id: r.id as string,
@@ -68,6 +77,13 @@ const toAsset = (r: Row) => ({
 });
 
 const toTts = (r: Row): TtsEntry => ({ sha256: r.sha256, seconds: r.seconds, voice: r.voice, createdAt: iso(r.created_at)! });
+
+const toHead = (r: Row): CarouselHead => ({ slug: r.slug, title: r.title, status: r.status, scheduledFor: iso(r.scheduled_for), publishedAt: iso(r.published_at) });
+
+const toExport = (r: Row): CarouselExport => ({
+  id: r.id, carouselId: r.carousel_id, versionNo: r.version_no, carouselVersion: r.carousel_version, status: r.status,
+  manifest: r.manifest, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at),
+});
 
 const toRevision = (r: Row): Revision => ({
   brandId: r.brand_id,
@@ -391,5 +407,146 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts };
+  /** Revision body of a carousel: the head plus the stored document (which never holds `status`). */
+  const carouselBody = (r: Row) => ({ ...toHead(r), document: r.document });
+  const carouselVersioned = (r: Row) => ({ id: r.id as string, value: toHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+
+  async function readCarousel<T>(row: Row | undefined, what: string, validate: (body: unknown, schemaVersion: number) => T) {
+    if (!row) throw new NotFoundError(what);
+    const value = { ...toHead(row), document: validate({ ...row.document, status: row.status }, row.document_schema_version) };
+    return { id: row.id as string, value, version: row.version as number, updatedAt: iso(row.updated_at)! };
+  }
+
+  /** Locks the row, checks the version, applies `change` to its columns and appends a revision. */
+  async function writeCarousel(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
+    if (!isUuid(id)) throw new NotFoundError(`carousel ${id}`);
+    return sql.begin(async (tx) => {
+      const [cur] = await tx`SELECT * FROM carousels WHERE id = ${id} FOR NO KEY UPDATE`;
+      if (!cur) throw new NotFoundError(`carousel ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const [row] = await tx`UPDATE carousels SET ${tx({ ...change(cur), updated_at: now() })}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      await appendRevision(tx, { brandId: row.brand_id, entityType: "carousel", entityId: id, version: row.version, body: carouselBody(row), bodyText: null }, meta);
+      return carouselVersioned(row);
+    });
+  }
+
+  const carousels: CarouselRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM carousels WHERE brand_id = ${brandId} ${filter?.status ? sql`AND status = ${filter.status}` : sql``} ORDER BY slug COLLATE "C"`;
+      return rows.map(carouselVersioned);
+    },
+    async get(brandId, slug, validate) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM carousels WHERE brand_id = ${brandId} AND slug = ${slug}` : [];
+      return readCarousel(row, `carousel "${slug}"`, validate);
+    },
+    async getById(id, validate) {
+      const [row] = isUuid(id) ? await sql`SELECT * FROM carousels WHERE id = ${id}` : [];
+      return readCarousel(row, `carousel ${id}`, validate);
+    },
+    async create(brandId, input, meta) {
+      assertCarousel(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const at = now();
+        const [row] = await tx`INSERT INTO carousels (brand_id, slug, title, status, document, document_schema_version, created_at, updated_at)
+                               VALUES (${brandId}, ${input.slug}, ${input.title}, ${input.status ?? "draft"}, ${json(tx, stripStatus(input.document.json))},
+                                       ${input.document.schemaVersion}, ${at}, ${at})
+                               ON CONFLICT (brand_id, slug) DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM carousels WHERE brand_id = ${brandId} AND slug = ${input.slug}`;
+          throw cur ? new AlreadyExistsError(`carousel "${input.slug}"`, cur.version) : new VersionConflictError(null);
+        }
+        await appendRevision(tx, { brandId, entityType: "carousel", entityId: row.id, version: 1, body: carouselBody(row), bodyText: null }, meta);
+        return carouselVersioned(row);
+      });
+    },
+    async save(id, input, meta) {
+      assertCarousel(input);
+      return writeCarousel(id, meta, (cur) => ({
+        title: input.title ?? cur.title, document: json(sql, stripStatus(input.document.json)), document_schema_version: input.document.schemaVersion,
+      }));
+    },
+    async setStatus(id, patch, meta) {
+      assertCarousel({ status: patch.status });
+      const scheduled = parseInstant(patch.scheduledFor, "scheduledFor");
+      const published = parseInstant(patch.publishedAt, "publishedAt");
+      return writeCarousel(id, meta, (cur) => ({
+        status: patch.status,
+        scheduled_for: patch.scheduledFor === undefined ? cur.scheduled_for : scheduled,
+        published_at: patch.publishedAt === undefined ? cur.published_at : published,
+      }));
+    },
+  };
+
+  /**
+   * Serializes writers of one carousel's counter (export versions, chat seq). An advisory lock, not a row lock, so it
+   * never blocks saves; keyed by schema so schemas sharing a database do not contend.
+   */
+  const lockCounter = (tx: Tx, scope: string, carouselId: string) => tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || ${scope} || ':' || ${carouselId}, 0))`;
+  const requireCarousel = async (tx: Tx, carouselId: string) => {
+    const [found] = isUuid(carouselId) ? await tx`SELECT 1 FROM carousels WHERE id = ${carouselId}` : [];
+    if (!found) throw new NotFoundError(`carousel ${carouselId}`);
+  };
+
+  const exports: ExportRepository = {
+    async reserveNextVersion(carouselId, carouselVersion, opts) {
+      if (!Number.isInteger(carouselVersion) || carouselVersion < 1) throw new InvalidInputError("invalid carouselVersion");
+      return sql.begin(async (tx) => {
+        await requireCarousel(tx, carouselId);
+        await lockCounter(tx, "exports", carouselId);
+        const at = now();
+        const cutoff = new Date(at.getTime() - (opts?.staleAfterMs ?? DEFAULT_EXPORT_STALE_MS));
+        await tx`UPDATE exports SET status = 'failed', finished_at = ${at} WHERE carousel_id = ${carouselId} AND status = 'running' AND started_at < ${cutoff}`;
+        const [row] = await tx`INSERT INTO exports (carousel_id, version_no, carousel_version, started_at)
+                               SELECT ${carouselId}, COALESCE(MAX(version_no), 0) + 1, ${carouselVersion}, ${at} FROM exports WHERE carousel_id = ${carouselId} RETURNING *`;
+        return toExport(row);
+      });
+    },
+    async complete(id, manifest) {
+      assertJsonObject(manifest, "manifest");
+      return finishExport(id, "done", manifest);
+    },
+    fail: (id) => finishExport(id, "failed"),
+    async list(carouselId) {
+      if (!isUuid(carouselId)) return [];
+      return (await sql`SELECT * FROM exports WHERE carousel_id = ${carouselId} ORDER BY version_no`).map(toExport);
+    },
+  };
+
+  async function finishExport(id: string, status: "done" | "failed", manifest?: Record<string, unknown>): Promise<CarouselExport> {
+    if (!isUuid(id)) throw new NotFoundError(`export ${id}`);
+    const [row] = await sql`UPDATE exports SET status = ${status}, manifest = ${manifest ? sql.json(manifest as postgres.JSONValue) : null}, finished_at = ${now()}
+                            WHERE id = ${id} AND status = 'running' RETURNING *`;
+    if (row) return toExport(row);
+    const [cur] = await sql`SELECT * FROM exports WHERE id = ${id}`;
+    if (!cur) throw new NotFoundError(`export ${id}`);
+    if (status === "failed") return toExport(cur);
+    throw new InvalidInputError(`export ${id} is ${cur.status}, not running`);
+  }
+
+  const chat: ChatRepository = {
+    async append(carouselId, body) {
+      assertJsonObject(body, "chat body");
+      return sql.begin(async (tx) => {
+        await requireCarousel(tx, carouselId);
+        await lockCounter(tx, "chat", carouselId);
+        const [row] = await tx`INSERT INTO chat_messages (carousel_id, seq, body, created_at)
+                               SELECT ${carouselId}, COALESCE(MAX(seq), 0) + 1, ${json(tx, body)}, ${now()} FROM chat_messages WHERE carousel_id = ${carouselId} RETURNING seq`;
+        return row.seq as number;
+      });
+    },
+    async list(carouselId, opts) {
+      assertChatPage(opts);
+      if (!isUuid(carouselId)) return [];
+      const rows = await sql`SELECT seq, body, created_at FROM chat_messages WHERE carousel_id = ${carouselId} AND seq > ${opts?.afterSeq ?? 0}
+                             ORDER BY seq ${opts?.limit === undefined ? sql`` : sql`LIMIT ${opts.limit}`}`;
+      return rows.map((r): ChatMessage => ({ seq: r.seq, body: r.body, createdAt: iso(r.created_at)! }));
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat };
 }

@@ -60,7 +60,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel";
 
 export interface Revision {
   brandId?: string;
@@ -178,4 +178,77 @@ export interface TtsCacheRepository {
   takes(brandId: string, narrationHash: string): Promise<TtsEntry[]>;
   /** A new (hash, sha256) becomes the current take (latest recorded wins). Recording an existing take returns it and never changes which take is current. */
   record(brandId: string, narrationHash: string, entry: Omit<TtsEntry, "createdAt">): Promise<TtsEntry>;
+}
+
+export type CarouselStatus = "draft" | "exported" | "scheduled" | "published";
+
+export interface CarouselHead {
+  slug: string;
+  title: string;
+  status: CarouselStatus;
+  scheduledFor: string | null;
+  publishedAt: string | null;
+}
+export interface CarouselDocumentInput {
+  json: Record<string, unknown>;
+  schemaVersion: number;
+}
+
+/**
+ * Status is stored once, in its column: any `status` key in a written document is dropped, and `get` hands the
+ * validator the stored document with the column's status overlaid. Every write appends a revision (per the revision
+ * policy) whose body is the head plus the stored document. Writes need `expectedVersion` except `create` (null).
+ */
+export interface CarouselRepository {
+  /** Ordered by slug. */
+  list(brandId: string, filter?: { status?: CarouselStatus }): Promise<Array<Versioned<CarouselHead>>>;
+  get<T>(brandId: string, slug: string, validate: BodyValidator<T>): Promise<Versioned<CarouselHead & { document: T }>>;
+  getById<T>(id: string, validate: BodyValidator<T>): Promise<Versioned<CarouselHead & { document: T }>>;
+  create(brandId: string, input: { slug: string; title: string; document: CarouselDocumentInput; status?: CarouselStatus }, meta: WriteMeta): Promise<Versioned<CarouselHead>>;
+  save(id: string, input: { title?: string; document: CarouselDocumentInput }, meta: WriteMeta): Promise<Versioned<CarouselHead>>;
+  /** Dates are ISO strings; `undefined` keeps the stored value. */
+  setStatus(id: string, patch: { status: CarouselStatus; scheduledFor?: string | null; publishedAt?: string | null }, meta: WriteMeta): Promise<Versioned<CarouselHead>>;
+}
+
+export type ExportStatus = "running" | "done" | "failed";
+
+export interface CarouselExport {
+  id: string;
+  carouselId: string;
+  versionNo: number;
+  carouselVersion: number;
+  status: ExportStatus;
+  manifest: Record<string, unknown> | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** Export attempts are never rewritten: only the outcome (status, manifest, finish time) changes. */
+export interface ExportRepository {
+  /**
+   * Marks this carousel's `running` exports older than `staleAfterMs` (default 30 minutes) as `failed`, then reserves
+   * the next `versionNo` as a new `running` export. Safe under concurrency: callers get distinct, consecutive numbers.
+   * `carouselVersion` is trusted from the caller and not checked against the carousel.
+   */
+  reserveNextVersion(carouselId: string, carouselVersion: number, opts?: { staleAfterMs?: number }): Promise<CarouselExport>;
+  /** Only a `running` export can complete; a reclaimed one is `InvalidInputError`. */
+  complete(id: string, manifest: Record<string, unknown>): Promise<CarouselExport>;
+  /** Idempotent: a finished export is returned unchanged. */
+  fail(id: string): Promise<CarouselExport>;
+  /** Ordered by `versionNo`. */
+  list(carouselId: string): Promise<CarouselExport[]>;
+}
+
+export interface ChatMessage {
+  seq: number;
+  body: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** Insert-only editor chat log, not revisioned. */
+export interface ChatRepository {
+  /** Returns the assigned `seq`: 1, 2, 3, ... per carousel, gap-free even under concurrency. */
+  append(carouselId: string, body: Record<string, unknown>): Promise<number>;
+  /** Ordered by `seq`. */
+  list(carouselId: string, opts?: { afterSeq?: number; limit?: number }): Promise<ChatMessage[]>;
 }
