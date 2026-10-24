@@ -183,15 +183,15 @@ everywhere, `version int not null default 1`, enum-like columns as `text` +
 | `brand_recipes` | `id`, `brand_id`, `recipe`, `schema_version`, `params jsonb`, `updated_at`, `version` | UNIQUE (`brand_id`,`recipe`) | S4 |
 | `assets` | `id`, `brand_id`, `asset_id` (first 16 hex of sha256, **same id as today**), `sha256 char(64)`, `blob_key`, `kind`, `mime`, `width`, `height`, `bytes`, `origin`, `status` (`candidate`/`approved`/`hidden`), `tags text[]`, `family`, `generation jsonb` (former sidecar), `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`asset_id`), UNIQUE (`brand_id`,`sha256`) | S5 |
 | `tts_cache` | `brand_id`, `narration_hash` (today's `narrationCacheKey`), `sha256`, `seconds`, `voice jsonb`, `created_at` | PK (`brand_id`,`narration_hash`); insert-only | S5 |
-| `carousels` | `id`, `brand_id`, `slug`, `title`, `status` (`draft`/`exported`/`scheduled`/`published`), `scheduled_for`, `published_at`, `document jsonb` (**without** `status`), `document_schema_version`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`) | S6 |
-| `exports` | `id`, `carousel_id`, `version_no`, `carousel_version`, `status` (`running`/`done`/`failed`), `manifest jsonb`, `started_at`, `finished_at` | UNIQUE (`carousel_id`,`version_no`) | S6 |
-| `chat_messages` | `carousel_id`, `seq`, `body jsonb`, `created_at` | PK (`carousel_id`,`seq`); insert-only, not revisioned | S6 |
-| `recipe_runs` | `id`, `brand_id`, `recipe`, `period_start`, `period_end`, `input jsonb`, `storyboard jsonb`, `created_at`, `created_by`, `version` | former `week-input.json` + `storyboard.yaml` | S6 |
-| `run_artifacts` | `id`, `run_id`, `kind` (`clip`/`audio`/`timeline`), `card_index`, `sha256`, `inputs_hash`, `created_at` | insert-only; current = latest per (`run_id`,`kind`,`card_index`) | S6 |
+| `carousels` | `id`, `brand_id`, `slug`, `title`, `status` (`draft`/`exported`/`scheduled`/`published`), `scheduled_for`, `published_at`, `document jsonb` (**without** `status`), `document_schema_version`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`) | S6a |
+| `exports` | `id`, `carousel_id`, `version_no`, `carousel_version`, `status` (`running`/`done`/`failed`), `manifest jsonb`, `started_at`, `finished_at` | UNIQUE (`carousel_id`,`version_no`) | S6a |
+| `chat_messages` | `carousel_id`, `seq`, `body jsonb`, `created_at` | PK (`carousel_id`,`seq`); insert-only, not revisioned | S6a |
+| `recipe_runs` | `id`, `brand_id`, `recipe`, `period_start`, `period_end`, `input jsonb`, `storyboard jsonb`, `created_at`, `created_by`, `version` | former `week-input.json` + `storyboard.yaml` | S6c |
+| `run_artifacts` | `id`, `run_id`, `kind` (`clip`/`audio`/`timeline`), `card_index`, `sha256`, `inputs_hash`, `created_at` | insert-only; current = latest per (`run_id`,`kind`,`card_index`) | S6c |
 | `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `dry_run`, `started_at`, `finished_at`, `report jsonb` | — | S7a |
 | `restore_drills` | `id`, `target_db` (host/db name, no secrets), `dump_taken_at`, `restored_at`, `verified bool`, `notes` | insert-only | S8 |
 | `seasonal_themes` | `id`, `brand_id`, `name`, `starts_on`, `ends_on`, `token_overrides jsonb`, `guidance_md`, `updated_at`, `version` | CHECK `ends_on >= starts_on` | S13 (scheduled, after cutover) |
-| `content_items` | ideas / drafts / published markdown | — | scheduled in S6 (§14 decision 5) |
+| `content_items` | `id`, `brand_id`, `slug`, `title`, `stage` (`idea`/`draft`/`published`/`archived`), `channel`, `format`, `body_md`, `meta jsonb` (**without** `stage`), `meta_schema_version`, `derived_from`, `published_at`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`); composite FK for `derived_from`; `published_at` set iff `published` | S6b |
 
 Notes:
 
@@ -446,7 +446,8 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `carousels/*.json`, `reels/**/week-input.json`, `storyboard.yaml` | `recipe_runs` |
 | reel TTS cache (mp3 + sidecar) and existing clips | blobs + `tts_cache` / `run_artifacts` |
 | `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
-| `ideas/`, `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; becomes `content_items` once S6 lands) |
+| `ideas/` backlog | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
+| `content/**`, anything else | blob under `brands/<id>/legacy/<importRunId>/<path>`, listed in the report (nothing lost; `content/**` becomes `content_items` once S6b lands) |
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -541,11 +542,14 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S3 | Postgres + memory repos for brands, documents (incl. templates), revisions; revision policy; contract suite | ~550 | S1 | contract suite passes on both |
 | S4 | `0002`: rules, guidance, recipes + repos; check runner and `validateRuleParams` in `core/` | ~590 | S3 | §9 examples produce expected findings; contract suite |
 | S5 | `0003`: assets, `tts_cache` + repos; `system/assets/index.ts` on `AssetRepository` + blobs (no `index.json`/sidecars); `fetch-fonts.ts` uploads fonts as assets | ~580 | S2, S3 | asset library tests run on memory storage, no profile dir |
-| S6 | `0004`: `content_items`, carousels (status stripped), exports (`started_at`, stale reclaim), chat, `recipe_runs`, `run_artifacts` + repos; `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~590 | S4, S5 | concurrent reserve/append tests; usage/verify tests on memory storage |
+| S6a | `0004`: carousels (status stripped), exports (`started_at`, stale reclaim), chat + repos | ~580 | S4, S5 | concurrent reserve/append tests |
+| S6b | `0005`: `content_items` (stage/channel/format columns, opaque `meta`) + repo with one shared stage-transition rule | ~560 | S6a | contract suite on both implementations; transitions and grants checked |
+| S6c | `0006`: `recipe_runs`, `run_artifacts` + repos | ~400 | S6b | concurrent run/artifact tests |
+| S6d | `system/assets/usage.ts` and `verify-slides.ts` read via storage/injected policy | ~300 | S6c | usage/verify tests on memory storage |
 | S7a | CLI skeleton (bin, `runCli`, flag parser from #116) + `import`/`cutover` verbs; importer part 1: documents, guidance, recipes, dry-run, report, `import_runs`; `resolveBrandSource` + `resolveProfileDir` post-cutover refusal | ~590 | S3, S4 | example brands import, re-run is a no-op, cutover writes marker + `cutover_at`, legacy readers refuse it |
-| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass | ~590 | S7a, S5, S6 | verification clean on examples |
+| S7b | Importer part 2: templates, rule proposals, assets, carousels + revisions + chat, runs, TTS/clips, outputs, verification pass; ideas backlog -> `content_items` | ~590 | S7a, S5, S6c | verification clean on examples |
 | S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
-| S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6, S7a | example brand renders from storage with no `profiles/` dir |
+| S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
 | S10b | Editor write path: save (`If-Match`), export, chat, compose; 409 with current version | ~580 | S10a | concurrent-save tests; exports land in bucket |
@@ -581,7 +585,7 @@ when S7a lands.
 2. Postgres: local docker for now. Production will be one shared company database, so product tables live in their own schema `content_platform`, configured only via `DATABASE_URL`, with no ownership assumptions and no cloud provisioning here (§12 is reference only). The backup destination stays open until hosting is chosen.
 3. Same existing bucket, new `brands/` root.
 4. Per brand, import the copy whose content is finished, decided by evidence; the choice is reported to the owner before any real import.
-5. Ideas, drafts and published go into the database too: `content_items` is scheduled (S6) together with the content agents' switch (S11b).
+5. Ideas, drafts and published go into the database too: `content_items` is scheduled (S6b) together with the content agents' switch (S11b).
 6. The editor's local `fs` mode is removed; local dev uses docker (S12).
 7. Commit-gate denylist: gitignored local file generated by `brand denylist --write`.
 8. `brand_owner` credentials: owner only; an editor UI for rules/guidance comes later.

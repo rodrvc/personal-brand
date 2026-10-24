@@ -1,7 +1,7 @@
 import { RuleParamsError, validateRule, validateRuleParams, type Rule } from "@personal-brand/core/checks";
 
 import { InvalidInputError } from "./contracts/errors.ts";
-import type { AssetInput, CarouselStatus, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
+import type { AssetInput, CarouselStatus, ContentItemInput, ContentStage, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
 
 /** An autosave within this window by the same author folds into the previous revision. */
 export const AUTOSAVE_WINDOW_MS = 10 * 60 * 1000;
@@ -126,4 +126,52 @@ export const DEFAULT_EXPORT_STALE_MS = 30 * 60 * 1000;
 
 export function assertJsonObject(value: unknown, what: string): void {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new InvalidInputError(`${what} must be an object`);
+}
+
+const CONTENT_STAGES: string[] = ["idea", "draft", "published", "archived"];
+
+/** Mirrors the `content_items` CHECK constraints so both implementations reject identically. */
+export function assertContentItem(input: Partial<ContentItemInput> & { slug?: string; stage?: string; derivedFrom?: string }, complete = false): void {
+  if (input.slug !== undefined) assertSlug(input.slug);
+  if ((complete || input.title !== undefined) && typeof input.title !== "string") throw new InvalidInputError("content title must be a string");
+  if (input.stage !== undefined && !CONTENT_STAGES.includes(input.stage)) throw new InvalidInputError(`invalid content stage "${input.stage}"`);
+  for (const [what, v] of [["channel", input.channel], ["format", input.format]] as const) {
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string") throw new InvalidInputError(`${what} must be a string`);
+    assertSlug(v, what);
+  }
+  const msv = input.metaSchemaVersion;
+  if (msv !== undefined && (!Number.isInteger(msv) || msv < 1)) throw new InvalidInputError("metaSchemaVersion must be a positive integer");
+  if (input.bodyMd !== undefined && typeof input.bodyMd !== "string") throw new InvalidInputError("bodyMd must be a string");
+  if (input.meta !== undefined) assertJsonObject(input.meta, "meta");
+  if (input.derivedFrom !== undefined && !isUuid(input.derivedFrom)) throw new InvalidInputError("invalid derivedFrom");
+}
+
+/** Stage is stored once, in its column: drops any `stage` key from meta before it is stored. */
+export function stripStage(meta: Record<string, unknown>): Record<string, unknown> {
+  const { stage: _stage, ...rest } = meta;
+  return rest;
+}
+
+/**
+ * The one stage-transition rule. `from` is null at create. Entering `published` is allowed only from `draft` (or at
+ * create) and needs `publishedAt`; every other move is allowed. Returns the `publishedAt` the row must hold afterwards:
+ * the given instant when entering, the stored one when staying published, null otherwise.
+ */
+export function resolvePublishedAt(from: ContentStage | null, to: ContentStage, publishedAt: string | undefined, stored: string | null): Date | null {
+  if (!CONTENT_STAGES.includes(to)) throw new InvalidInputError(`invalid content stage "${to}"`);
+  const given = parseInstant(publishedAt, "publishedAt");
+  if (to !== "published") {
+    if (given) throw new InvalidInputError("publishedAt only applies to the published stage");
+    return null;
+  }
+  if (from === "published") return given ?? parseInstant(stored, "publishedAt");
+  if (from !== null && from !== "draft") throw new InvalidInputError(`cannot publish from ${from}: only a draft can be published`);
+  if (!given) throw new InvalidInputError("publishing needs publishedAt");
+  return given;
+}
+
+/** A status or stage change is never an autosave: autosaves fold into the previous revision and would hide it. */
+export function assertNotAutosave(meta: { reason: string }): void {
+  if (meta.reason === "autosave") throw new InvalidInputError("a status or stage change cannot be an autosave");
 }

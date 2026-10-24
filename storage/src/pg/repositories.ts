@@ -11,6 +11,8 @@ import {
   type CarouselExport,
   type CarouselHead,
   type CarouselRepository,
+  type ContentItemHead,
+  type ContentItemRepository,
   type ChatMessage,
   type ChatRepository,
   type ExportRepository,
@@ -29,7 +31,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertJsonObject, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -47,6 +49,7 @@ export interface PgRepositories {
   carousels: CarouselRepository;
   exports: ExportRepository;
   chat: ChatRepository;
+  content: ContentItemRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -79,6 +82,10 @@ const toAsset = (r: Row) => ({
 const toTts = (r: Row): TtsEntry => ({ sha256: r.sha256, seconds: r.seconds, voice: r.voice, createdAt: iso(r.created_at)! });
 
 const toHead = (r: Row): CarouselHead => ({ slug: r.slug, title: r.title, status: r.status, scheduledFor: iso(r.scheduled_for), publishedAt: iso(r.published_at) });
+
+const toContentHead = (r: Row): ContentItemHead => ({
+  slug: r.slug, title: r.title, stage: r.stage, channel: r.channel, format: r.format, derivedFrom: r.derived_from, publishedAt: iso(r.published_at), createdAt: iso(r.created_at)!,
+});
 
 const toExport = (r: Row): CarouselExport => ({
   id: r.id, carouselId: r.carousel_id, versionNo: r.version_no, carouselVersion: r.carousel_version, status: r.status,
@@ -471,6 +478,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       }));
     },
     async setStatus(id, patch, meta) {
+      assertNotAutosave(meta);
       assertCarousel({ status: patch.status });
       const scheduled = parseInstant(patch.scheduledFor, "scheduledFor");
       const published = parseInstant(patch.publishedAt, "publishedAt");
@@ -478,6 +486,84 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
         status: patch.status,
         scheduled_for: patch.scheduledFor === undefined ? cur.scheduled_for : scheduled,
         published_at: patch.publishedAt === undefined ? cur.published_at : published,
+      }));
+    },
+  };
+
+  /** Revision body of a content item: the head plus the stored meta (which never holds `stage`). */
+  const contentBody = (r: Row) => ({ ...toContentHead(r), meta: r.meta });
+  const contentVersioned = (r: Row) => ({ id: r.id as string, value: toContentHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+  const readContent = (row: Row | undefined, what: string) => {
+    if (!row) throw new NotFoundError(what);
+    return { ...contentVersioned(row), value: { ...toContentHead(row), bodyMd: row.body_md as string, meta: { ...row.meta, stage: row.stage }, metaSchemaVersion: row.meta_schema_version as number } };
+  };
+
+  /** Locks the row, checks the version, applies `change` to its columns and appends a revision. */
+  async function writeContent(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
+    if (!isUuid(id)) throw new NotFoundError(`content item ${id}`);
+    return sql.begin(async (tx) => {
+      const [cur] = await tx`SELECT * FROM content_items WHERE id = ${id} FOR NO KEY UPDATE`;
+      if (!cur) throw new NotFoundError(`content item ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const [row] = await tx`UPDATE content_items SET ${tx({ ...change(cur), updated_at: now() })}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      await appendRevision(tx, { brandId: row.brand_id, entityType: "content_item", entityId: id, version: row.version, body: contentBody(row), bodyText: row.body_md }, meta);
+      return contentVersioned(row);
+    });
+  }
+
+  const content: ContentItemRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId) || (filter?.derivedFrom !== undefined && !isUuid(filter.derivedFrom))) return [];
+      const rows = await sql`SELECT * FROM content_items WHERE brand_id = ${brandId} ${filter?.stage ? sql`AND stage = ${filter.stage}` : sql``}
+                             ${filter?.channel ? sql`AND channel = ${filter.channel}` : sql``} ${filter?.derivedFrom ? sql`AND derived_from = ${filter.derivedFrom}` : sql``} ORDER BY slug COLLATE "C"`;
+      return rows.map(contentVersioned);
+    },
+    async get(brandId, slug) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM content_items WHERE brand_id = ${brandId} AND slug = ${slug}` : [];
+      return readContent(row, `content item "${slug}"`);
+    },
+    async getById(id) {
+      const [row] = isUuid(id) ? await sql`SELECT * FROM content_items WHERE id = ${id}` : [];
+      return readContent(row, `content item ${id}`);
+    },
+    async create(brandId, input, meta) {
+      assertContentItem(input, true);
+      const stage = input.stage ?? "idea";
+      const publishedAt = resolvePublishedAt(null, stage, input.publishedAt, null);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        if (input.derivedFrom) {
+          const [parent] = await tx`SELECT 1 FROM content_items WHERE id = ${input.derivedFrom} AND brand_id = ${brandId}`;
+          if (!parent) throw new InvalidInputError("derivedFrom must be an item of the same brand");
+        }
+        const at = now();
+        const [row] = await tx`INSERT INTO content_items (brand_id, slug, title, stage, channel, format, body_md, meta, meta_schema_version, derived_from, published_at, created_at, updated_at)
+                               VALUES (${brandId}, ${input.slug}, ${input.title}, ${stage}, ${input.channel ?? null}, ${input.format ?? null}, ${input.bodyMd ?? ""},
+                                       ${json(tx, stripStage(input.meta ?? {}))}, ${input.metaSchemaVersion ?? 1}, ${input.derivedFrom ?? null}, ${publishedAt}, ${at}, ${at})
+                               ON CONFLICT (brand_id, slug) DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM content_items WHERE brand_id = ${brandId} AND slug = ${input.slug}`;
+          throw cur ? new AlreadyExistsError(`content item "${input.slug}"`, cur.version) : new VersionConflictError(null);
+        }
+        await appendRevision(tx, { brandId, entityType: "content_item", entityId: row.id, version: 1, body: contentBody(row), bodyText: row.body_md }, meta);
+        return contentVersioned(row);
+      });
+    },
+    async save(id, patch, meta) {
+      assertContentItem(patch);
+      return writeContent(id, meta, (cur) => ({
+        title: patch.title ?? cur.title, channel: patch.channel === undefined ? cur.channel : patch.channel, format: patch.format === undefined ? cur.format : patch.format,
+        body_md: patch.bodyMd ?? cur.body_md, meta_schema_version: patch.metaSchemaVersion ?? cur.meta_schema_version, meta: patch.meta === undefined ? json(sql, cur.meta) : json(sql, stripStage(patch.meta)),
+      }));
+    },
+    async setStage(id, patch, meta) {
+      assertNotAutosave(meta);
+      assertContentItem({ stage: patch.stage });
+      return writeContent(id, meta, (cur) => ({
+        stage: patch.stage, published_at: resolvePublishedAt(cur.stage, patch.stage, patch.publishedAt, iso(cur.published_at)),
       }));
     },
   };
@@ -548,5 +634,5 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat };
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content };
 }
