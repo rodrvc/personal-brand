@@ -141,8 +141,13 @@ const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESI
  * A skipped entry whose files the legacy pass kept, or refused as proven secrets (itself or inside it), is not stranded data:
  * whatever else is inside it that is neither kept nor refused is reported on its own line (`skipped` or `unimported`).
  */
-const accountedFor = (r: ImportReport, path: string) =>
-  isKept(r.legacy.manifest, path) || r.refused.some((e) => { const p = entryPath(e).replace(/\/$/, ""); return p === path || p.startsWith(`${path}/`); });
+const accountedFor = (r: ImportReport, path: string) => isKept(r.legacy.manifest, path) || r.refused.some((e) => isSameOrUnder(path, entryPath(e)));
+
+/** Whether `entry` (a report path, maybe with a trailing slash) is `path` or lies under it. */
+const isSameOrUnder = (path: string, entry: string): boolean => {
+  const p = entry.replace(/\/$/, "");
+  return p === path || p.startsWith(`${path}/`);
+};
 
 function describe(report: ImportReport): string[] {
   const c = report.counts;

@@ -73,7 +73,7 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
+function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date()): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
   const items: Item[] = [];
   const skipped: string[] = [];
   const notices: string[] = [];
@@ -169,7 +169,7 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   }
   const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices);
   if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
-  const ctx = { dir, root, repos, blobs, outputs, carousels: new Set<string>(), used: new Set<string>(), skipped, notices, handled };
+  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set<string>(), skipped, notices, handled, now };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
   return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
@@ -202,7 +202,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
 
   if (!opts.dryRun && !brand) {

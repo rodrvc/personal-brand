@@ -655,6 +655,25 @@ hash).
    legacy pass and the run artifacts hold only hashes and read each file again
    when it is uploaded.
 
+   *Built in S7b2b3c:* an export marked `done` means the allowlisted subset of
+   its folder was stored; refused and unknown files stay with the legacy pass. A
+   conflict on a lower version never lets a higher one take its number: a gap
+   number that becomes an export in the folder stays reserved for it (a version
+   without a usable manifest is not one), any other gap number is failed; an
+   older reserved row below the written version that the folder lacks is failed,
+   a fresh one is left alone (it may be a concurrent writer's). Before cutover the
+   import is the only writer of a brand's exports to storage, so a `running` row
+   at its own number counts as its own interrupted reservation and is resumed; a
+   fresh row the import did not create becoming a conflict is a follow-up. An import pass never marks other reserved exports stale,
+   so a resumable export is not turned into `failed` by it (a row the editor's
+   30-minute sweep already failed cannot be completed again and stays a
+   conflict). A reservation that lands above the wanted number is failed
+   before the conflict is reported, so no `running` row is orphaned. Objects
+   stored under an export's prefix that the folder does not have are reported as
+   a notice, never deleted (objects under the number of a failed gap are not looked at). An outputs root inside another brand's folder (one
+   holding `brand.json`, `brand.yaml` or `profile.md`) is unusable, and a config
+   file that cannot be read is told apart from one that cannot be parsed.
+
    **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
    Postgres rows alone; S7b2 is everything that needs blobs. S7b2a (above)
    is the follow-ups plus assets. S7b2b is the rest; its open questions were

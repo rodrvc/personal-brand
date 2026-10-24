@@ -10,11 +10,12 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { resolveBrandSource } from "../src/brand-source.ts";
 import { FakeObjectStore } from "../src/blob/index.ts";
-import { blobKey, carouselExportKey } from "../src/contracts/index.ts";
+import { blobKey, carouselExportKey, type BlobStore } from "../src/contracts/index.ts";
 import { blobStoreFromEnv, isLocalDatabase, runCli } from "../src/cli/brand.ts";
 import { contentRefusal } from "../src/import/allowlist.ts";
-import { verifyBrand } from "../src/import/importer.ts";
-import { rereadChecked } from "../src/import/shared.ts";
+import { importBrand, verifyBrand } from "../src/import/importer.ts";
+import { DEFAULT_EXPORT_STALE_MS } from "../src/revision-policy.ts";
+import { rereadChecked, sha256 } from "../src/import/shared.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
@@ -827,6 +828,83 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-c");
   assert.match((await run("import", "--from", resumeShop)).lines.join("\n"), /Conflictos: export:launch\/v1 \(differs from storage; never rewritten\)/, "a changed file under the same manifest is not unchanged");
 
+  // Export numbering under conflict: a lower version that conflicts keeps its own number (a higher one never takes it) and resumes once the
+  // folder matches storage; a pass never sweeps reserved exports as stale; a writer that got ahead leaves no `running` row; stray stored objects are told.
+  const gapShop = fixture(label, "example-export-gap-shop");
+  mkdirSync(join(gapShop, "carousels", "launch"));
+  writeFileSync(join(gapShop, "carousels", "launch", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Launch", slides: [] }));
+  const gapRoot = join(work, label, "outputs-gap");
+  writeFileSync(join(gapShop, "config.local.yaml"), `outputs:\n  base_dir: ${gapRoot}\n`);
+  seedOut(gapRoot, { "editor/launch/v1/manifest.json": JSON.stringify({ version: 1 }), "editor/launch/v1/01.png": "png-1" });
+  assert.equal((await run("import", "--from", gapShop)).exitCode, 0);
+  const gapBrand = (await repos.brands.getBySlug("example-export-gap-shop")).id;
+  const gapCarousel = await repos.carousels.get(gapBrand, "launch", identity);
+  const exportStates = async () => (await repos.exports.list(gapCarousel.id)).map((e) => [e.versionNo, e.status]);
+  await blobs.put(carouselExportKey(gapBrand, gapCarousel.id, 2, "01.png"), Buffer.from("other"), { metadata: { sha256: sha256(Buffer.from("other")) } });
+  await blobs.put(carouselExportKey(gapBrand, gapCarousel.id, 1, "extra.bin"), Buffer.from("x"));
+  seedOut(gapRoot, { "editor/launch/v2/manifest.json": JSON.stringify({ version: 2 }), "editor/launch/v2/01.png": "png-2", "editor/launch/v4/manifest.json": JSON.stringify({ version: 4 }), "editor/launch/v4/01.png": "png-4" });
+  const staleAfter: Array<number | undefined> = [];
+  const counting = { ...spied, exports: { ...repos.exports, reserveNextVersion: (...a: Parameters<typeof repos.exports.reserveNextVersion>) => (staleAfter.push(a[2]?.staleAfterMs), repos.exports.reserveNextVersion(...a)) } } as MemoryRepositories;
+  const gapRun = await runCli(["import", "--from", gapShop], env, counting, blobs);
+  assert.match(gapRun.lines.join("\n"), /Conflictos: export:launch\/v2 \(.*already exists with different content/);
+  assert.match(gapRun.lines.join("\n"), /Avisos: .*launch\/v1: 1 object\(s\) in storage are not in the folder \(kept\): extra\.bin/, "a stray stored object is told, never deleted");
+  assert.deepEqual(await exportStates(), [[1, "done"], [2, "running"], [3, "failed"], [4, "done"]], "v4 does not take the number of the conflicted v2, and the real gap is failed");
+  assert.ok(staleAfter.length > 0 && staleAfter.every((ms) => ms !== undefined && ms > 24 * 3600 * 1000), "the import never lets a reservation mark other reserved exports stale");
+  writeFileSync(join(gapRoot, "editor", "launch", "v2", "01.png"), "other");
+  assert.equal((await run("import", "--from", gapShop)).exitCode, 0);
+  assert.deepEqual(await exportStates(), [[1, "done"], [2, "done"], [3, "failed"], [4, "done"]], "the conflicted version completes under its own number once the folder matches storage");
+
+  // A writer that reserved a number meanwhile: the import's own over-reserved row is failed, never left `running`.
+  seedOut(gapRoot, { "editor/launch/v5/manifest.json": JSON.stringify({ version: 5 }), "editor/launch/v5/01.png": "png-5" });
+  const ahead = { ...spied, exports: { ...repos.exports, reserveNextVersion: async (...a: Parameters<typeof repos.exports.reserveNextVersion>) => (await repos.exports.reserveNextVersion(...a), repos.exports.reserveNextVersion(...a)) } } as MemoryRepositories;
+  assert.match((await runCli(["import", "--from", gapShop], env, ahead, blobs)).lines.join("\n"), /Conflictos: export:launch\/v5 \(.*storage already holds newer versions/);
+  assert.deepEqual((await exportStates()).slice(4), [[5, "running"], [6, "failed"]], "the other writer's row is untouched and the import's own over-reserved row is failed");
+
+  // A reserved number below the one being written is failed only when it is old: a fresh `running` row may be a concurrent editor's.
+  await repos.exports.reserveNextVersion(gapCarousel.id, gapCarousel.version);
+  seedOut(gapRoot, { "editor/launch/v8/manifest.json": JSON.stringify({ version: 8 }), "editor/launch/v8/01.png": "png-8" });
+  assert.equal((await run("import", "--from", gapShop)).exitCode, 0);
+  assert.deepEqual((await exportStates()).slice(4), [[5, "done"], [6, "failed"], [7, "running"], [8, "done"]], "a fresh running row below the written version is left untouched");
+
+  // The same row, once old enough, is an abandoned reservation: the next pass (clock moved past the stale window) fails it.
+  seedOut(gapRoot, { "editor/launch/v9/manifest.json": JSON.stringify({ version: 9 }), "editor/launch/v9/01.png": "png-9" });
+  await importBrand(spied, { from: gapShop, dryRun: false, author: "test", blobs, env, now: () => new Date(Date.now() + DEFAULT_EXPORT_STALE_MS + 60_000) });
+  assert.deepEqual((await exportStates()).slice(6), [[7, "failed"], [8, "done"], [9, "done"]], "an old running row below the written version is failed");
+
+  // A version folder without a usable manifest is not an export, so its number is a plain gap: failed, never kept `running`.
+  const bareShop = fixture(label, "example-export-bare-shop");
+  mkdirSync(join(bareShop, "carousels", "launch"));
+  writeFileSync(join(bareShop, "carousels", "launch", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Launch", slides: [] }));
+  const bareRoot = join(work, label, "outputs-bare");
+  writeFileSync(join(bareShop, "config.local.yaml"), `outputs:\n  base_dir: ${bareRoot}\n`);
+  seedOut(bareRoot, { "editor/launch/v2/01.png": "png-2", "editor/launch/v4/manifest.json": JSON.stringify({ version: 4 }), "editor/launch/v4/01.png": "png-4" });
+  assert.equal((await run("import", "--from", bareShop)).exitCode, 0);
+  const bareBrand = (await repos.brands.getBySlug("example-export-bare-shop")).id;
+  assert.deepEqual((await repos.exports.list((await repos.carousels.get(bareBrand, "launch", identity)).id)).map((e) => [e.versionNo, e.status]), [[1, "failed"], [2, "failed"], [3, "failed"], [4, "done"]], "a version without a manifest keeps no reservation");
+
+  // A file that changes between planning and upload is not uploaded and is reported (the pass goes on and says so).
+  const raceExp = fixture(label, "example-export-race-shop");
+  mkdirSync(join(raceExp, "carousels", "launch"));
+  writeFileSync(join(raceExp, "carousels", "launch", "carousel.json"), JSON.stringify({ schemaVersion: 1, title: "Launch", slides: [] }));
+  const raceRoot = join(work, label, "outputs-race");
+  writeFileSync(join(raceExp, "config.local.yaml"), `outputs:\n  base_dir: ${raceRoot}\n`);
+  seedOut(raceRoot, { "editor/launch/v1/manifest.json": JSON.stringify({ version: 1 }), "editor/launch/v1/01.png": "png-a", "editor/launch/v1/02.png": "png-b" });
+  const uploaded: string[] = [];
+  const edits: BlobStore = {
+    get: (k) => blobs.get(k), getStream: (k) => blobs.getStream(k), head: (k) => blobs.head(k), list: (p) => blobs.list(p),
+    put: async (k, body, o) => {
+      uploaded.push(k);
+      writeFileSync(join(raceRoot, "editor", "launch", "v1", "02.png"), `png-edited-${uploaded.length}`); // after the first upload, before the second file is read again
+      return blobs.put(k, body, o);
+    },
+  };
+  const exportRaced = await runCli(["import", "--from", raceExp], env, spied, edits);
+  assert.match(exportRaced.lines.join("\n"), /Conflictos: export:launch\/v1 \(@outputs\/editor\/launch\/v1\/02\.png changed while the import was running/);
+  assert.equal(uploaded.filter((k) => k.endsWith("/02.png")).length, 0, "the changed file is never uploaded");
+  const raceBrand = (await repos.brands.getBySlug("example-export-race-shop")).id;
+  assert.deepEqual(await repos.exports.list((await repos.carousels.get(raceBrand, "launch", identity)).id), [], "no export row is reserved for the changed version");
+  assert.equal((await runCli(["cutover", "example-export-race-shop", "--confirm", "example-export-race-shop", "--from", raceExp], env, spied, edits)).exitCode, 1, "a cutover is refused while the export is a conflict");
+
   // A take whose card left the plan and came back with a new mp3 is the import's own (`_imported.released`), not "changed in storage".
   const backShop = fixture(label, "example-returning-take-shop");
   cpSync(join(runShop, "reels"), join(backShop, "reels"), { recursive: true });
@@ -884,7 +962,15 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   mkdirSync(join(holder, "other-brand"), { recursive: true });
   symlinkSync(join(holder, "other-brand"), join(work, label, "example-linked-brand"));
   const holdShop = problem("example-holder-out-shop", `outputs:\n  base_dir: ${holder}\n`);
-  assert.match((await run("import", "--from", holdShop, "--dry-run")).lines.join("\n"), /@outputs\/ \(outputs root .* is the home directory or holds it, the folder of the brands or another brand/);
+  assert.match((await run("import", "--from", holdShop, "--dry-run")).lines.join("\n"), /@outputs\/ \(outputs root .* holds another brand's folder: not read/);
+
+  const insideBrand = join(work, label, "example-neighbour-brand");
+  seedOut(insideBrand, { "brand.json": "{}", "outputs/ok.json": "{}" });
+  const insideShop = problem("example-inside-brand-out-shop", `outputs:\n  base_dir: ${join(insideBrand, "outputs")}\n`);
+  assert.match((await run("import", "--from", insideShop, "--dry-run")).lines.join("\n"), /@outputs\/ \(outputs root .* lies inside another brand's folder/, "a root inside another brand's folder is unusable");
+
+  const exactShop = problem("example-exact-brand-out-shop", `outputs:\n  base_dir: ${insideBrand}\n`);
+  assert.match((await run("import", "--from", exactShop, "--dry-run")).lines.join("\n"), /@outputs\/ \(outputs root .* lies inside another brand's folder/, "a root that is exactly another brand's folder is unusable");
 
   // A `clips` path that is a file, or a folder that cannot be listed, is reported, never a crash.
   const clipFile = fixture(label, "example-clips-file-shop");
@@ -923,7 +1009,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
 
   // An unreadable or unparseable config file is a notice, not silence; a file that changed after it was hashed is not uploaded.
   const badConfig = problem("example-bad-config-shop", "outputs: [unclosed\n");
-  assert.match((await run("import", "--from", badConfig, "--dry-run")).lines.join("\n"), /Omitidos: .*@outputs\/ \(config config\.local\.yaml unreadable: outputs root unknown\)/);
+  assert.match((await run("import", "--from", badConfig, "--dry-run")).lines.join("\n"), /Omitidos: .*@outputs\/ \(config\.local\.yaml could not be parsed: outputs root unknown\)/);
   assert.equal((await run("cutover", "example-bad-config-shop", "--confirm", "example-bad-config-shop", "--from", badConfig)).exitCode, 1, "an unknown outputs root blocks a cutover");
   assert.throws(() => rereadChecked(innerShop, join(innerShop, "profile.md"), "profile.md", "0".repeat(64)), /changed while the import was running/);
 
