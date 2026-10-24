@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { BlobStore } from "../contracts/blob-store.ts";
-import { ObjectNotFoundError, PreconditionFailedError } from "../contracts/errors.ts";
+import { InvalidInputError, ObjectNotFoundError, PreconditionFailedError } from "../contracts/errors.ts";
 import { blobKey } from "../contracts/keys.ts";
 
 export interface PutBlobResult {
@@ -22,8 +22,12 @@ const RETRY_DELAY_MS = 50;
  * is not yet visible to `head`; that case retries the put a couple of times.
  */
 export async function putBlob(store: BlobStore, brandId: string, bytes: Buffer, mime?: string): Promise<PutBlobResult> {
+  return putAt(store, blobKey(brandId, createHash("sha256").update(bytes).digest("hex")), bytes, mime);
+}
+
+/** The same write-once rule at a caller-chosen key (e.g. an export key); an existing object must hold the same bytes. */
+export async function putAt(store: BlobStore, key: string, bytes: Buffer, mime?: string): Promise<PutBlobResult> {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const key = blobKey(brandId, sha256);
   for (let attempt = 1; ; attempt++) {
     try {
       await store.put(key, bytes, { ifNoneMatch: "*", contentType: mime, metadata: { sha256 } });
@@ -34,7 +38,7 @@ export async function putBlob(store: BlobStore, brandId: string, bytes: Buffer, 
     try {
       const existing = await store.head(key);
       if (existing.metadata.sha256 !== sha256 || existing.size !== bytes.byteLength) {
-        throw new Error(`Blob "${key}" already exists with different content`);
+        throw new InvalidInputError(`Blob "${key}" already exists with different content`);
       }
       return { sha256, key };
     } catch (error) {

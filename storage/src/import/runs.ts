@@ -8,7 +8,8 @@ import { parse as parseYaml } from "yaml";
 import { putBlob } from "../blob/put-blob.ts";
 import { blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type RunArtifactInput } from "../contracts/index.ts";
 import { nameRefusal } from "./allowlist.ts";
-import { readRegular, sha256, type CollectContext, type ImportRepos, type Item } from "./shared.ts";
+import { OUTPUTS_LABEL } from "./outputs.ts";
+import { listDir, readRegular, rereadChecked, sha256, type CollectContext, type ImportRepos, type Item } from "./shared.ts";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const identity = (b: unknown) => b as Record<string, unknown>;
@@ -45,10 +46,10 @@ interface RunPlan {
   derived: { recipe: string; period: string };
   source: Record<string, unknown>;
   storyboard: Record<string, unknown> | null;
-  /** Every source file the run is made of, for the item hash. */
-  raws: Buffer[];
-  /** Audio takes (card order) first, then clips: the order `run_artifacts.current` returns them in. */
-  artifacts: Array<RunArtifactInput & { bytes: Buffer; mime: string; take?: { seconds: number; voice: VoiceSettings } }>;
+  /** The sha256 of every source file the run is made of, for the item hash. */
+  raws: string[];
+  /** Audio takes (card order) first, then clips: the order `run_artifacts.current` returns them in. Only hashes are held: the bytes are read again (`rereadChecked`) when uploaded. */
+  artifacts: Array<RunArtifactInput & { root: string; file: string; rel: string; mime: string; take?: { seconds: number; voice: VoiceSettings } }>;
 }
 
 type StoredRun = Awaited<ReturnType<ImportRepos["runs"]["get"]>>;
@@ -108,7 +109,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
       skipped.push(`${rel} (no run: not a carousel input with every slide dated within one week)`);
       continue;
     }
-    plans.push({ path: rel, recipe: "weekly-roundup", period, derived: { recipe: "flat carousels/*.json are weekly-roundup inputs", period: "the Monday-to-Sunday week holding every slide date" }, source: json, storyboard: null, raws: [raw], artifacts: [] });
+    plans.push({ path: rel, recipe: "weekly-roundup", period, derived: { recipe: "flat carousels/*.json are weekly-roundup inputs", period: "the Monday-to-Sunday week holding every slide date" }, source: json, storyboard: null, raws: [sha256(raw)], artifacts: [] });
   }
 
   const reels = join(dir, "reels");
@@ -124,7 +125,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
     const inputWeek = singleWeek(inputItems.map((i) => asObject(i)?.date));
     if (folders.length === 0 && input.raw) {
       if (input.json && inputWeek) {
-        plans.push({ path: "reels/week-input.json", recipe: "reel-week", period: inputWeek, derived: { recipe: "reels are reel-week inputs", period: "the Monday-to-Sunday week holding every item date" }, source: input.json, storyboard: null, raws: [input.raw], artifacts: [] });
+        plans.push({ path: "reels/week-input.json", recipe: "reel-week", period: inputWeek, derived: { recipe: "reels are reel-week inputs", period: "the Monday-to-Sunday week holding every item date" }, source: input.json, storyboard: null, raws: [sha256(input.raw)], artifacts: [] });
       } else skipped.push(input.json ? "reels/week-input.json (no run: items undated or spanning several weeks)" : "reels/week-input.json (not a JSON object)");
     } else if (input.raw && !input.json) skipped.push("reels/week-input.json (not a JSON object)");
     else if (input.json && !folders.some((f) => weekHolding(f)!.start === inputWeek?.start)) {
@@ -147,7 +148,7 @@ export function collectRuns(ctx: CollectContext): Item[] {
       }
       const period = weekHolding(folder)!;
       const ownInput = input.json && inputWeek?.start === period.start ? input : null;
-      const plan: RunPlan = { path: `${rel}/storyboard.yaml`, recipe: "reel-week", period, derived: { recipe: "a storyboard is a reel-week input", period: "the Monday-to-Sunday week holding the folder date" }, source: ownInput?.json ?? {}, storyboard, raws: [sb, ...(ownInput?.raw ? [ownInput.raw] : [])], artifacts: [] };
+      const plan: RunPlan = { path: `${rel}/storyboard.yaml`, recipe: "reel-week", period, derived: { recipe: "a storyboard is a reel-week input", period: "the Monday-to-Sunday week holding the folder date" }, source: ownInput?.json ?? {}, storyboard, raws: [sha256(sb), ...(ownInput?.raw ? [sha256(ownInput.raw)] : [])], artifacts: [] };
       for (const name of readdirSync(join(dir, rel)).sort()) if (name !== "storyboard.yaml" && name !== "audio") skipped.push(`${rel}/${name} (not part of a run)`);
       collectAudio(ctx, plan, rel, recipeRaw);
       collectClips(ctx, plan);
@@ -200,8 +201,8 @@ function collectAudio(ctx: CollectContext, plan: RunPlan, rel: string, recipeRaw
       skipped.push(`${rel}/audio/${mp3Name} (narration hash cannot be recomputed from the recipe voice and the storyboard; kept as a plain file)`);
       return;
     }
-    plan.raws.push(mp3, sidecarRaw);
-    plan.artifacts.push({ kind: "audio", cardIndex, cardId: id, sha256: sha256(mp3), inputsHash: sidecar.hash, bytes: mp3, mime: "audio/mpeg", take: { seconds: sidecar.seconds, voice } });
+    plan.raws.push(sha256(mp3), sha256(sidecarRaw));
+    plan.artifacts.push({ kind: "audio", cardIndex, cardId: id, sha256: sha256(mp3), inputsHash: sidecar.hash, root, file: join(audioDir, mp3Name), rel: `${rel}/audio/${mp3Name}`, mime: "audio/mpeg", take: { seconds: sidecar.seconds, voice } });
   });
   for (const name of files) if (!claimed.has(name)) skipped.push(`${rel}/audio/${name} (not the audio of a storyboard card)`);
 }
@@ -213,27 +214,48 @@ function collectAudio(ctx: CollectContext, plan: RunPlan, rel: string, recipeRaw
  */
 function collectClips(ctx: CollectContext, plan: RunPlan): void {
   const { outputs, blobs, skipped, used } = ctx;
-  const dir = outputs && join(outputs.real, outputs.reels, plan.period.start, "clips");
-  if (!outputs || !dir || !blobs || !existsSync(dir)) return;
+  if (!outputs || !blobs) return;
+  const label = `${OUTPUTS_LABEL}${outputs.reels}/${plan.period.start}/clips`;
+  const dir = join(outputs.real, outputs.reels, plan.period.start, "clips");
+  const found = listDir(dir, label, skipped, false);
+  if (!found) return;
   const ids = (Array.isArray(plan.storyboard?.cards) ? (plan.storyboard!.cards as unknown[]) : []).map((c) => asObject(c)?.id);
-  const names = new Set(readdirSync(dir));
+  const names = new Set(found);
   ids.forEach((id, index) => {
     const name = typeof id === "string" ? clipFileName(index, id, ids.length) : "";
     // A card id the name policy refuses (a suspicious word) is not guessed into a clip: the legacy pass reports it.
     if (!names.has(name) || nameRefusal(name, false)) return;
     used.add(join(dir, name)); // claimed even when the read fails, so the legacy pass does not report it a second time
-    const bytes = readRegular(outputs.real, join(dir, name), `@outputs/${outputs.reels}/${plan.period.start}/clips/${name}`, skipped);
+    const bytes = readRegular(outputs.real, join(dir, name), `${label}/${name}`, skipped);
     if (!bytes) return;
-    plan.raws.push(bytes);
-    plan.artifacts.push({ kind: "clip", cardIndex: index, cardId: id as string, sha256: sha256(bytes), inputsHash: `import:sha256:${sha256(bytes)}`, bytes, mime: "video/mp4" });
+    plan.raws.push(sha256(bytes));
+    plan.artifacts.push({ kind: "clip", cardIndex: index, cardId: id as string, sha256: sha256(bytes), inputsHash: `import:sha256:${sha256(bytes)}`, root: outputs.real, file: join(dir, name), rel: `${label}/${name}`, mime: "video/mp4" });
   });
 }
 
-/** The `kind:cardIndex` slots a stored run's `_imported.artifacts` claims: the only ones the import owns. */
+/** The `kind:cardIndex` slots a stored run's `_imported` lists under `key`, by slot. */
+type SlotRow = { kind: string; cardIndex: number | null; sha256: string };
 const slotOf = (a: { kind: string; cardIndex: number | null }) => `${a.kind}:${a.cardIndex}`;
-function claimedSlots(input: unknown): Map<string, string> {
-  const recorded = asObject(identity(input)._imported)?.artifacts;
-  return new Map((Array.isArray(recorded) ? (recorded as Array<{ kind: string; cardIndex: number | null; sha256: string }>) : []).map((r) => [slotOf(r), r.sha256] as const));
+/**
+ * `artifacts` are the slots the import owns (the only ones it compares and may replace); `released` are the takes of cards that
+ * left the plan, still current in storage but no longer claimed. A run written before `artifacts` existed listed its takes as
+ * `audio` (`{ cardIndex, sha256 }`, no kind): they are still its claimed slots.
+ */
+function importedSlots(input: unknown, key: "artifacts" | "released"): Map<string, SlotRow> {
+  const imported = asObject(identity(input)._imported);
+  const listed = imported?.[key];
+  const legacy = key === "artifacts" && !Array.isArray(listed) && Array.isArray(imported?.audio) ? (imported!.audio as Array<Omit<SlotRow, "kind">>).map((r) => ({ kind: "audio", ...r })) : [];
+  return new Map((Array.isArray(listed) ? (listed as SlotRow[]) : legacy).map((r) => [slotOf(r), r] as const));
+}
+const claimedSlots = (input: unknown) => importedSlots(input, "artifacts");
+
+/** The stored input as the source reads: without the `released` bookkeeping, and with a pre-`artifacts` run's `audio` as `artifacts`. */
+function comparable(input: unknown, claimed: Map<string, SlotRow>): Record<string, unknown> {
+  const imported = { ...asObject(identity(input)._imported) };
+  const legacy = imported.audio && !imported.artifacts;
+  delete imported.released;
+  delete imported.audio;
+  return { ...asObject(input), _imported: legacy ? { ...imported, artifacts: [...claimed.values()] } : imported };
 }
 
 function toItem(plan: RunPlan, repos: ImportRepos, runs: RunIndex, notices: string[], blobs?: BlobStore): Item {
@@ -242,16 +264,17 @@ function toItem(plan: RunPlan, repos: ImportRepos, runs: RunIndex, notices: stri
   const artifacts = plan.artifacts.map(shape);
   return {
     key: `run:${plan.path}`, entityType: "recipe_run",
-    hash: sha256(plan.raws.map(sha256).join("\n")),
+    hash: sha256(plan.raws.join("\n")),
     payload: { recipe: plan.recipe, periodStart: plan.period.start, periodEnd: plan.period.end, input: json, storyboard: plan.storyboard, artifacts },
     read: async (brandId) => {
       const run = (await runs(brandId)).get(plan.path);
       if (!run) return null;
       // Only the slots the import owns (planned now, or claimed by the last import) are compared: a card that left the plan
       // is dropped from `_imported.artifacts` by the next write, so its old take stays in history but is no longer claimed.
-      const owned = new Set([...plan.artifacts.map(slotOf), ...claimedSlots(run.value.input).keys()]);
+      const claimed = claimedSlots(run.value.input);
+      const owned = new Set([...plan.artifacts.map(slotOf), ...claimed.keys()]);
       const stored = (await repos.runArtifacts.current(run.id)).filter((a) => owned.has(slotOf(a))).map(shape);
-      return { id: run.id, version: run.version, value: { recipe: run.value.recipe, periodStart: run.value.periodStart, periodEnd: run.value.periodEnd, input: run.value.input, storyboard: run.value.storyboard, artifacts: stored } };
+      return { id: run.id, version: run.version, value: { recipe: run.value.recipe, periodStart: run.value.periodStart, periodEnd: run.value.periodEnd, input: comparable(run.value.input, claimed), storyboard: run.value.storyboard, artifacts: stored } };
     },
     write: async (brandId, expectedVersion, meta) => {
       const existing = expectedVersion === null ? null : ((await runs(brandId)).get(plan.path) ?? null);
@@ -260,27 +283,33 @@ function toItem(plan: RunPlan, repos: ImportRepos, runs: RunIndex, notices: stri
       // Never overwrite an artifact someone else produced: a slot whose current one is neither the planned one nor the one
       // the last import recorded in `_imported.artifacts` was changed in storage, so the run is left alone and reported.
       // (Before cutover the importer is the only artifact writer; this guard keeps that true if it ever stops being so.)
+      const released = new Map<string, SlotRow>();
       if (existing) {
-        const lastImported = claimedSlots(existing.value.input);
+        const lastImported = new Map([...claimedSlots(existing.value.input)].map(([slot, row]) => [slot, row.sha256] as const));
+        importedSlots(existing.value.input, "released").forEach((row, slot) => released.set(slot, row));
         const currentNow = await repos.runArtifacts.current(existing.id);
         const now = new Map(currentNow.map((a) => [slotOf(a), a.sha256] as const));
         for (const a of plan.artifacts) {
           const sha = now.get(slotOf(a));
-          if (sha !== undefined && sha !== a.sha256 && sha !== lastImported.get(slotOf(a))) throw new InvalidInputError(`run ${plan.path}: ${a.kind} of card ${a.cardId} was changed in storage since the last import; not overwritten`);
+          if (sha !== undefined && sha !== a.sha256 && sha !== lastImported.get(slotOf(a)) && sha !== released.get(slotOf(a))?.sha256) throw new InvalidInputError(`run ${plan.path}: ${a.kind} of card ${a.cardId} was changed in storage since the last import; not overwritten`);
         }
         // A card imported before that no longer has an artifact in the plan (narration edited after synthesis, file removed):
         // it is released, not deleted. Its take stays in history and the run stops claiming it.
         const planned = new Set(plan.artifacts.map(slotOf));
+        // Its take is remembered in `_imported.released`: if the card returns with a new take, that old one is still the import's own.
+        for (const slot of planned) released.delete(slot);
         for (const a of currentNow) {
           if (!lastImported.has(slotOf(a)) || planned.has(slotOf(a))) continue;
+          released.set(slotOf(a), { kind: a.kind, cardIndex: a.cardIndex, sha256: lastImported.get(slotOf(a))! });
           notices.push(`${plan.path}: ${a.kind} of card ${a.cardId} is no longer in the source; its stored take is kept in history and no longer claimed by the import`);
         }
       }
+      // Blobs and tts takes written before a failed reread stay: they are content-keyed and idempotent, so a partial pass is harmless.
       for (const a of plan.artifacts) {
-        await putBlob(blobs as BlobStore, brandId, a.bytes, a.mime);
+        await putBlob(blobs as BlobStore, brandId, rereadChecked(a.root, a.file, a.rel, a.sha256), a.mime);
         if (a.take) await repos.tts.record(brandId, a.inputsHash, { sha256: a.sha256, seconds: a.take.seconds, voice: a.take.voice as unknown as Record<string, unknown> });
       }
-      const body = { json, schemaVersion: 1 };
+      const body = { json: released.size ? { ...json, _imported: { ...json._imported, released: [...released.values()] } } : json, schemaVersion: 1 };
       // A run has no unique source key: two importers creating the same new run at once would both create it (one importer at a time, as with carousels).
       // The item hash only reaches storage with the LAST revisioned write, after the artifacts are recorded: an interrupted
       // pass is then never classified `unchanged` with artifacts missing (a new run's first write carries a derived hash).

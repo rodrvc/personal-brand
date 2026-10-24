@@ -16,7 +16,7 @@
  * disk — `render-reel-week.ts` is the only caller that touches any of those.
  */
 
-import { clipFileName as sharedClipFileName } from "@personal-brand/core/clips";
+import { clipFileName } from "@personal-brand/core/clips";
 import { FPS, type Scene } from "./remotion/src/timeline.js";
 
 /** One clip: a frame range of the full `Reel` composition, tied to its card. */
@@ -69,9 +69,9 @@ export function clipRangesFor(scenes: readonly Scene[], cardIds: readonly string
   });
 }
 
-/** Index + card id as a clip file name; the padding rule is documented on the shared `clipFileName` (`@personal-brand/core/clips`). */
-export function clipFileName(range: ClipRange, total: number): string {
-  return sharedClipFileName(range.index, range.cardId, total);
+/** Index + card id as a clip file name; the padding rule is documented on the shared `clipFileName` (`@personal-brand/core/clips`) that this wraps. */
+export function clipFileForRange(range: ClipRange, total: number): string {
+  return clipFileName(range.index, range.cardId, total);
 }
 
 /**

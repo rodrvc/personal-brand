@@ -135,7 +135,14 @@ function markerNames(path: string, brandId: string): boolean {
  * Data a cutover would strand: everything not imported, skipped or refused on a guess (unknown type, suspicious name),
  * minus what is never imported by design, kept as a legacy blob, or proven secret (`refused`: deliberate, never blocks).
  */
-const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped.filter((e) => !isKept(r.legacy.manifest, entryPath(e))), ...r.unimported];
+const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped.filter((e) => !accountedFor(r, entryPath(e))), ...r.unimported];
+
+/**
+ * A skipped entry whose files the legacy pass kept, or refused as proven secrets (itself or inside it), is not stranded data:
+ * whatever else is inside it that is neither kept nor refused is reported on its own line (`skipped` or `unimported`).
+ */
+const accountedFor = (r: ImportReport, path: string) =>
+  isKept(r.legacy.manifest, path) || r.refused.some((e) => { const p = entryPath(e).replace(/\/$/, ""); return p === path || p.startsWith(`${path}/`); });
 
 function describe(report: ImportReport): string[] {
   const c = report.counts;

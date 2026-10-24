@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 
-import { NotFoundError, type BlobStore, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
+import { InvalidInputError, NotFoundError, type BlobStore, type RevisionEntity, type WriteMeta } from "../contracts/index.ts";
 import type { MemoryRepositories } from "../memory/index.ts";
 import type { OutputsRoot } from "./outputs.ts";
 
@@ -19,6 +19,8 @@ export interface Item {
   payload: unknown;
   read(brandId: string): Promise<{ id: string; version: number; value: unknown } | null>;
   write(brandId: string, expectedVersion: number | null, meta: WriteMeta): Promise<unknown>;
+  /** Not revisioned in storage (exports): judged by comparing the stored value with `payload`, and never rewritten. */
+  revisionless?: boolean;
   /** Blob-level check for items that own bytes in the bucket: true when every blob is stored and hashes to what the row says. */
   verifyBlobs?(brandId: string): Promise<boolean>;
 }
@@ -32,6 +34,8 @@ export interface CollectContext {
   blobs?: BlobStore;
   /** Where `outputs.base_dir` resolves to (null when it does not exist); read as a second root when it lies outside the folder. */
   outputs: OutputsRoot | null;
+  /** Ids of the carousels the folder yields, so an export can name its carousel by slug. */
+  carousels: Set<string>;
   /** Absolute paths already imported by a collector; the legacy pass leaves them out. */
   used: Set<string>;
   skipped: string[];
@@ -60,6 +64,29 @@ export function readRegular(root: string, file: string, rel: string, skipped: st
     if (expected) skipped.push(`${rel} (missing)`);
   }
   return null;
+}
+
+/**
+ * The entries of a directory (only the sub-directories when `ofDirs`), sorted. A path that is not there gives none; one that is
+ * there but is not a readable directory is reported in `skipped` (never thrown), so it cannot abort the pass.
+ */
+export function listDir(path: string, rel: string, skipped: string[], ofDirs = true): string[] | null {
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter((e) => (ofDirs ? e.isDirectory() : e.isFile())).map((e) => e.name).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") skipped.push(`${rel} (not a readable directory)`);
+    return null;
+  }
+}
+
+/**
+ * Reads again, at upload time, a file collected earlier by its hash only (so the pass never holds every file at once). It
+ * throws when the file no longer reads or no longer hashes to what the plan recorded: the pass is then run again.
+ */
+export function rereadChecked(root: string, file: string, rel: string, expected: string): Buffer {
+  const bytes = readRegular(root, file, rel, []);
+  if (!bytes || sha256(bytes) !== expected) throw new InvalidInputError(`${rel} changed while the import was running; run it again`);
+  return bytes;
 }
 
 /** Lowercase `[a-z0-9-]` slug of free text (accents folded), or "" when nothing usable is left. */

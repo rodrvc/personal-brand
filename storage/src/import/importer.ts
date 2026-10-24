@@ -6,12 +6,13 @@ import { parse as parseYaml } from "yaml";
 import { AlreadyExistsError, blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
+import { collectExports } from "./exports.ts";
 import { collectAssets } from "./assets.ts";
 import { planLegacy, type LegacyFile } from "./legacy.ts";
-import { resolveOutputs } from "./outputs.ts";
+import { OUTPUTS_LABEL, resolveOutputs } from "./outputs.ts";
 import { collectRuns } from "./runs.ts";
 import { putBlob } from "../blob/put-blob.ts";
-import { canon, found, readRegular, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
+import { canon, found, readRegular, rereadChecked, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
 export type { ImportRepos };
 type Repos = ImportRepos;
@@ -166,11 +167,10 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
-  const { outputs, notice, unusable } = resolveOutputs(dir, root, basename(dir), env);
-  if (notice) notices.push(notice);
-  if (unusable) skipped.push(`@outputs/ (${unusable})`);
-  const ctx = { dir, root, repos, blobs, outputs, used: new Set<string>(), skipped, notices, handled };
-  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx));
+  const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices);
+  if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
+  const ctx = { dir, root, repos, blobs, outputs, carousels: new Set<string>(), used: new Set<string>(), skipped, notices, handled };
+  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
   return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
 }
@@ -183,6 +183,8 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
 async function classify(item: Item, brandId: string | null, repos: Repos): Promise<{ outcome: Outcome; current: { version: number } | null; reason?: string }> {
   const current = brandId ? await item.read(brandId) : null;
   if (!current) return { outcome: "created", current: null };
+  // Not revisioned (exports): equal to the source or a conflict; there is no "updated" for a row that is never rewritten.
+  if (item.revisionless) return canon(current.value) === canon(item.payload) ? { outcome: "unchanged", current } : { outcome: "conflict", current, reason: "differs from storage; never rewritten" };
   const lastImport = (await repos.revisions.list(item.entityType, current.id)).filter((r) => r.source === "import").at(-1);
   if (lastImport?.version !== current.version) return { outcome: "conflict", current, reason: "storage changed since the last import" };
   return { outcome: lastImport.sourceHash === item.hash ? "unchanged" : "updated", current };
@@ -240,7 +242,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
       report.counts[outcome]++;
     }
     // Content-keyed, so a re-run writes nothing new for an unchanged file and never overwrites a different one.
-    if (!opts.dryRun) for (const f of legacy) await putBlob(opts.blobs as BlobStore, brand!.id, f.bytes);
+    if (!opts.dryRun) for (const f of legacy) await putBlob(opts.blobs as BlobStore, brand!.id, rereadChecked(f.base, f.file, f.path, f.sha256));
   } catch (error) {
     // An unexpected failure still leaves a run row saying how far the pass got; the original error is what the caller sees.
     report.aborted = (error as Error).message;

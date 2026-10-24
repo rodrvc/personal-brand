@@ -444,7 +444,7 @@ brand edited in `s3` mode may be fresher there than in its folder (§14 Q4).
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
 | `carousels/*.json` (flat), `reels/week-input.json`, `reels/<date>/storyboard.yaml` | `recipe_runs`; recipe and period are derived and recorded on the run (S7b2b1, §14 Q-S7b2b) |
 | reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b3a) |
-| `outputs/**`, resolved `outputs.base_dir` | `exports` + export keys |
+| `<outputs.editor>/<slug>/v<N>/` of the resolved `outputs.base_dir` | `exports` + export keys (S7b2b3b) |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
 | `content/**`, anything else | blob keyed by content (`blobKey(sha256)`), with the path -> sha256 manifest in that run's `import_runs.report` (nothing lost; S7b2b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
 
@@ -635,13 +635,25 @@ hash).
    over `config.yaml`; read as a second root, confined to its real path, with
    `@outputs/<path>` legacy paths) and clips as `clip` artifacts of the matching
    storyboard card, accepted only under the name `clipFileName` gives (shared with
-   the engine, zero-padded from 11 cards) (`inputs_hash = import:sha256:<mp4 sha>`). Whatever no collector
+   the engine; zero-padded from 11 cards), with `inputs_hash = import:sha256:<mp4 sha>`. Whatever no collector
    claims in the second root goes through the same allowlist and two-class
    refusal policy as the folder (labelled `@outputs/<path>`), and the CLI prints
    the resolved path. The content signatures also cover Stripe live keys, Google
    API keys and JWTs, and text with NUL bytes or a UTF-16 BOM is a guess
-   (`unknown`), since a UTF-8 decode cannot see secrets in it. Editor exports
-   (`exports` rows) are S7b2b3b.
+   (`unknown`), since a UTF-8 decode cannot see secrets in it.
+
+   *Built in S7b2b3b:* editor exports (`<outputs.editor>/<slug>/v<N>/` with a
+   `manifest.json`) as `exports` rows plus keys under the carousel export key,
+   taken in numeric `v<N>` order (`v2` before `v10`), never rewritten (a
+   different stored version is a conflict); a released run take is remembered in
+   `_imported.released`, and a run written under the old `_imported.audio` key
+   still claims its slots; an outputs root that is the home directory, holds it,
+   holds the profiles folder or holds another brand's folder is unusable; a config file
+   that cannot be read leaves the root unknown and blocks a cutover; an
+   interrupted export is completed by the next pass and a changed export file is
+   a conflict; the
+   legacy pass and the run artifacts hold only hashes and read each file again
+   when it is uploaded.
 
    **S7b2 (design only; split in two).** Seam: S7b1 is everything that lands in
    Postgres rows alone; S7b2 is everything that needs blobs. S7b2a (above)
@@ -809,12 +821,14 @@ when S7a lands.
 10. `app/`: retired formally (S11b).
 
 **Q-S7b2b3 (deferred from the S7b2b2 review; nothing here is optional).**
-1. Editor exports -> `exports` rows, `v<N>` folders in numeric order (test: v2, v10).
+1. Editor exports -> `exports` rows, `v<N>` folders in numeric order (test: v2, v10). Done in S7b2b3b.
 2. The legacy pass walks the whole folder minus `used`; collectors fill `used`.
 3. Refuse an outputs root that is `$HOME` or holds other brands' folders; stream
-   and hash instead of reading everything into memory. Known limit of S7b2b3a,
-   scheduled for S7b2b3b: the whole outputs root is read into memory, and a
-   cutover reads it three times (plan, real pass, verify).
+   and hash instead of reading everything into memory. (Done in S7b2b3b: the
+   home directory, a folder that holds it, the profiles folder or another
+   brand's folder is unusable, and the collectors keep only path, hash and size,
+   reading each file again when it is uploaded. A cutover still reads the outputs
+   root three times (plan, real pass, verify), one file at a time.)
 4. Share the outputs resolver with the engine, or fail on an unreadable
    `config.local.yaml`; a symlinked `outputs` directory counts as the second
    root. (Done in S7b2b3a: confinement tests for the second root, and an `outputs` link
@@ -822,9 +836,13 @@ when S7a lands.
    unusable root, `/` or an ancestor of the folder, or an `outputs.reels` leaving
    the root, is reported in `skipped` and blocks a cutover; a configured root
    that does not exist is a notice; any other `realpath` failure, such as
-   EACCES or ELOOP, is unusable.) Still open for S7b2b3b: a `config.local.yaml`
-   that is unreadable or unparseable is ignored silently.
+   EACCES or ELOOP, is unusable.) Done in S7b2b3b: a `config.local.yaml` that
+   is unreadable or unparseable leaves the outputs root unknown (skipped, blocks a cutover).
 5. A released take (its card left the plan) must not look foreign when the card
    returns with a new mp3: record `_imported.released`, accept it as the last
-   import (test: card leaves, returns, updates cleanly).
+   import (test: card leaves, returns, updates cleanly). Done in S7b2b3b, with the
+   old `_imported.audio` key still claiming its slots.
 6. An aborted run's legacy manifest: "changed" is relative to the last complete run.
+7. Open (patch `odd/status/patches/s7b2b3c.patch`): an outputs root that lies INSIDE
+   another brand's folder is unusable (a sibling with `brand.json`, `brand.yaml` or
+   `profile.md`). A root shared by several brands cannot be detected.
