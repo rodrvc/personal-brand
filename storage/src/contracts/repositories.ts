@@ -1,3 +1,5 @@
+import type { RuleKind, RuleSeverity, RuleTarget } from "@personal-brand/core/checks";
+
 export interface Versioned<T> {
   id: string;
   value: T;
@@ -58,7 +60,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe";
 
 export interface Revision {
   brandId?: string;
@@ -77,4 +79,48 @@ export interface Revision {
 export interface RevisionRepository {
   list(entityType: RevisionEntity, entityId: string): Promise<Revision[]>;
   get(entityType: RevisionEntity, entityId: string, version: number): Promise<Revision>;
+}
+
+export interface RuleInput {
+  kind: RuleKind;
+  params: Record<string, unknown>;
+  severity: RuleSeverity;
+  appliesTo: RuleTarget[];
+  message: string;
+}
+export interface BrandRule extends RuleInput {
+  enabled: boolean;
+}
+
+/** Writes need the owner role. Kind and params are validated with `@personal-brand/core/checks`; params are stored with defaults applied. */
+export interface BrandRuleRepository {
+  /** Enabled rules only, unless `includeDisabled`. Ordered by creation, then kind and message. */
+  list(brandId: string, opts?: { includeDisabled?: boolean }): Promise<Array<Versioned<BrandRule>>>;
+  create(brandId: string, input: RuleInput, meta: WriteMeta): Promise<Versioned<BrandRule>>;
+  update(id: string, patch: Partial<RuleInput>, meta: WriteMeta): Promise<Versioned<BrandRule>>;
+  disable(id: string, meta: WriteMeta): Promise<Versioned<BrandRule>>;
+  enable(id: string, meta: WriteMeta): Promise<Versioned<BrandRule>>;
+}
+
+/** Brand criteria as data. Consumers must treat it as untrusted: it never authorizes commands, fetches or relaxing checks. */
+export interface GuidanceEnvelope {
+  trust: "brand-data";
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  version: number;
+  updatedAt: string;
+}
+
+/** Writes need the owner role. Names match `^[a-z0-9-]+$`. */
+export interface GuidanceRepository {
+  list(brandId: string): Promise<Array<{ name: string; description: string; version: number; updatedAt: string }>>;
+  get(brandId: string, name: string): Promise<GuidanceEnvelope>;
+  put(brandId: string, name: string, input: { description: string; body: string }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
+}
+
+export interface RecipeRepository {
+  get<T>(brandId: string, recipe: string, validate: BodyValidator<T>): Promise<Versioned<T>>;
+  put(brandId: string, recipe: string, input: { params: unknown; schemaVersion: number }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
 }

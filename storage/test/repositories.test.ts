@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+
+import { RULE_KINDS } from "@personal-brand/core/checks";
 
 import postgres from "postgres";
 
@@ -7,7 +10,7 @@ import { createPgRepositories } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
 import { runRepositoryContract } from "./repositories.contract.ts";
 
-await runRepositoryContract("memory", async (now) => ({ repos: createMemoryRepositories(now), cleanup: async () => {} }));
+await runRepositoryContract("memory", async (now) => ({ repos: createMemoryRepositories(now), get owner() { return this.repos; }, cleanup: async () => {} }));
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -26,6 +29,16 @@ try {
   process.exit(0);
 }
 
+// The kind CHECK in 0002 must list exactly the kinds the engine implements.
+{
+  const schema = `test_${randomBytes(6).toString("hex")}`;
+  await migrate(admin, { schema });
+  const [def] = await admin`SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+                            WHERE n.nspname = ${schema} AND t.relname = 'brand_rules' AND pg_get_constraintdef(c.oid) LIKE '%forbidden_terms%'`;
+  await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`);
+  assert.deepEqual([...def.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]).sort(), [...RULE_KINDS].sort(), "0002 kind CHECK matches core RULE_KINDS");
+}
+
 let logged = false;
 try {
   await runRepositoryContract("postgres", async (now) => {
@@ -33,16 +46,23 @@ try {
     await migrate(admin, { schema });
     // Run as the least-privilege app role when provisioned, so the migration's grants are proven sufficient.
     const [role] = await admin`SELECT 1 FROM pg_roles WHERE rolname = 'brand_app'`;
-    const appUrl = new URL(url);
-    appUrl.username = "brand_app";
-    appUrl.password = "local-dev-only";
-    const sql = postgres(role ? appUrl.toString() : url, { connection: { search_path: schema }, onnotice: () => {} });
+    const open = (username: string) => {
+      const u = new URL(url);
+      u.username = username;
+      u.password = "local-dev-only";
+      return postgres(role ? u.toString() : url, { connection: { search_path: schema }, onnotice: () => {} });
+    };
+    const sql = open("brand_app");
+    const ownerSql = open("brand_owner");
     if (!logged) console.log(role ? "postgres contract runs as brand_app" : "role brand_app missing; postgres contract runs as the superuser");
     logged = true;
     return {
       repos: createPgRepositories(sql, now),
+      owner: createPgRepositories(ownerSql, now),
+      restricted: Boolean(role),
       cleanup: async () => {
         await sql.end({ timeout: 1 });
+        await ownerSql.end({ timeout: 1 });
         await admin.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       },
     };

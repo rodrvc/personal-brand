@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -45,10 +45,11 @@ async function rejects(fn: () => Promise<unknown>, pattern: RegExp): Promise<voi
 let dir: string | undefined;
 try {
   const first = await Promise.all([migrate(sql, { schema }), migrate(sql, { schema }), migrate(sql, { schema })]);
-  assert.equal(first.flat().length, 1, "concurrent runners apply exactly once");
+  const shipped = (await readdir(DEFAULT_MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).length;
+  assert.equal(first.flat().length, shipped, "concurrent runners apply every migration exactly once");
   assert.deepEqual(await migrate(sql, { schema }), [], "second run applies nothing");
   const count = await inSchema((c) => c`SELECT count(*)::int AS n FROM schema_migrations`);
-  assert.equal(count[0].n, 1);
+  assert.equal(count[0].n, shipped);
 
   await inSchema(async (c) => {
     await rejects(() => c`INSERT INTO brands (slug, display_name) VALUES ('Bad Slug', 'x')`, /brands_slug_check/);
@@ -103,15 +104,16 @@ try {
 
   // A changed applied file is refused; a CONCURRENTLY file is rejected before touching the DB.
   dir = await mkdtemp(path.join(os.tmpdir(), "migrations-"));
+  for (const file of await readdir(DEFAULT_MIGRATIONS_DIR)) await copyFile(path.join(DEFAULT_MIGRATIONS_DIR, file), path.join(dir, file));
   const original = await readFile(path.join(DEFAULT_MIGRATIONS_DIR, "0001_foundation.sql"), "utf8");
   await writeFile(path.join(dir, "0001_foundation.sql"), original + "\n-- edited\n");
   await rejects(() => migrate(sql, { schema, dir }), /Checksum mismatch/);
   await writeFile(path.join(dir, "0001_foundation.sql"), original.replace(/\n/g, "\r\n"));
   assert.deepEqual(await migrate(sql, { schema, dir }), [], "CRLF checkout of the same file is accepted");
-  await writeFile(path.join(dir, "0002_bad.sql"), "CREATE INDEX CONCURRENTLY i ON brands (slug);");
+  await writeFile(path.join(dir, "9998_bad.sql"), "CREATE INDEX CONCURRENTLY i ON brands (slug);");
   await rejects(() => migrate(sql, { schema, dir }), /CONCURRENTLY/);
 
-  await rm(path.join(dir, "0002_bad.sql"));
+  await rm(path.join(dir, "9998_bad.sql"));
   // An applied migration whose file vanished is reported.
   await writeFile(path.join(dir, "0001_foundation.sql"), original);
   await inSchema((c) => c`INSERT INTO schema_migrations (name, checksum) VALUES ('0099_gone.sql', 'x')`);
