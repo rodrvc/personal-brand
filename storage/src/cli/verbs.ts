@@ -12,6 +12,7 @@ import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "..
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
+import { downloadFonts, FontPolicyError, type FontFile } from "./fonts.ts";
 import { toCheckRules } from "../revision-policy.ts";
 
 export interface CliResult {
@@ -39,6 +40,10 @@ interface Ctx {
   readBytes(path: string, max: number): { bytes: Buffer; stat: Stats };
   /** The random part of the temporary sibling `asset get --out` writes first (a seam for tests). */
   suffix(): string;
+  /** The clock for the purge bundle name and timestamp (a seam for tests). */
+  now(): Date;
+  /** The network, for `fonts fetch` only (a seam for tests; the default is the global `fetch`). */
+  fetch: typeof fetch;
   /** Resolves a path named on the command line the same way `read` does (`~`, INIT_CWD). */
   resolve(path: string): string;
 }
@@ -89,6 +94,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
 };
@@ -96,7 +102,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
   doc: ["get", "put"], guidance: ["list", "get", "put"], recipe: ["get", "put"],
-  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], asset: ["list", "add", "get"], export: ["pull"],
+  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
@@ -108,7 +114,7 @@ const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*"
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
  * other write is identity, so a new verb is guarded until it is listed here.
  */
-const CONTENT_WRITES: Record<string, string[]> = { carousel: ["put", "status"], asset: ["add"] };
+const CONTENT_WRITES: Record<string, string[]> = { carousel: ["put", "status"], asset: ["add"], fonts: ["fetch"] };
 
 /**
  * The brand a verb would change, or null for a read. Fail closed: everything outside READS is a write, and an identity
@@ -134,6 +140,7 @@ export const VERB_USAGE = [
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
   "  brand carousel status <marca> <carrusel> --status <estado> --if-version <n> [--scheduled-for <fecha>] [--published-at <fecha>]",
   "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
+  "  brand fonts fetch <marca>   (descarga las fuentes de googleFontsHref de los tokens y las registra como candidatas; reemplaza a system/assets/fetch-fonts.ts)",
   "  brand export pull <marca> <carrusel> --out <carpeta fuera del repo> [--version <n>]",
   "  (todos aceptan --json; las escrituras de identidad en marcas que no son de ejemplo requieren --owner-opt-in, las de contenido solo hasta el corte a storage)",
 ];
@@ -278,9 +285,11 @@ async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
   // Role and host are checked on open, before anything is read.
   const purger = await ctx.openPurger().catch((e) => (e instanceof PurgeRefusedError ? e : Promise.reject(e)));
   if (purger instanceof PurgeRefusedError) return refused(`${purger.message}. No se borró nada.`);
+  // The bundle file once this call has linked it: kept after a later failure, so the retry message can name it.
+  let linked: string | undefined;
   try {
     const bucketKeys = ctx.blobs ? (await ctx.blobs.list(brandPrefix(brand.id))).map((e) => e.key).sort() : null;
-    const exportedAt = new Date();
+    const exportedAt = ctx.now();
     // A new name per run (UTC timestamp): a re-run never meets an old bundle, and nothing is ever overwritten.
     const file = join(bundle, `${slug}.${exportedAt.toISOString().replace(/[-:.]/g, "")}.bundle.json`);
     // Called by the purger inside its transaction, after it read every row: the bundle must be written, durable and read back before the delete starts.
@@ -289,11 +298,20 @@ async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
       const dir = ctx.resolve(bundle);
       const created = mkdirSync(dir, { recursive: true, mode: 0o700 });
       try {
-        writeNew(ctx, file, body, true);
-        // The entry of each folder this call created lives in its parent: fsync those too, from the first created one down to the bundle folder.
+        try {
+          writeNew(ctx, file, body, true);
+        } catch (error) {
+          // The name is taken (same clock tick): nothing was written and the existing file is untouched.
+          if ((error as { code?: string }).code !== "EEXIST") throw error;
+          throw new PurgeRefusedError(`ya existe un paquete con el nombre ${file}: no se sobrescribe (${(error as Error).message})`);
+        }
+        linked = file;
+        // The entry of each folder this call created lives in its parent: fsync those too, from the bundle folder up to the first created one.
         for (let d = dir; created && (d === created || d.startsWith(`${created}${sep}`)); d = dirname(d)) fsyncDir(dirname(d));
         if (!ctx.readBytes(file, body.length + 1).bytes.equals(body)) throw new InvalidInputError(`the bundle written to ${file} does not match what was read`);
       } catch (error) {
+        // Nothing is deleted yet and the bundle is not verified: remove the file this call linked (never one that was already there), then the folders it created.
+        if (linked) try { unlinkSync(linked); linked = undefined; } catch { /* the original error is not hidden by a failed cleanup */ }
         removeCreated(dir, created);
         throw error;
       }
@@ -303,8 +321,14 @@ async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
     const left = bucketKeys === null ? "No se listó el bucket (faltan las variables S3_*): las claves conocidas están en el paquete." : `Quedan ${bucketKeys.length} objeto(s) en el bucket bajo ${brandPrefix(brand.id)}: la purga nunca borra del bucket; bórralos con una llave con permiso de borrado.`;
     return out(args, { slug, bundle: file, deleted, bucketKeys }, [`Paquete verificado en ${file} (${rows} filas).`, `Marca "${slug}" purgada: ${rows} filas borradas.`, left]);
   } catch (error) {
-    if (error instanceof PurgeRefusedError) return refused(`${error.message}. No se borró nada.`);
-    throw error;
+    // Whatever fails once the bundle is linked, the message names it: the operator needs to know it was left behind.
+    const left = linked ? `; se dejó el paquete en ${linked}` : "";
+    if (error instanceof PurgeRefusedError) return refused(`${error.message}. No se borró nada${left}.`);
+    // The delete transaction lost a race (serialization failure, deadlock, a RESTRICT key, an exclusion violation): everything was rolled back.
+    if (["40001", "40P01", "23503", "23001"].includes((error as { code?: string }).code ?? "")) {
+      return refused(`La purga se revirtió porque otra escritura chocó con ella (${(error as Error).message}); vuelve a ejecutarla. No se borró nada${left}.`);
+    }
+    throw left ? Object.assign(new Error(`${(error as Error).message}${left}`), { cause: error }) : error;
   } finally {
     await purger.close();
   }
@@ -502,7 +526,8 @@ function writeNew(ctx: Ctx, target: string, body: Buffer, secure = false): void 
       fsyncDir(dirname(final));
     }
   } catch (error) {
-    throw new InvalidInputError(`cannot write ${target} (${(error as NodeJS.ErrnoException).code ?? "error"}); an existing file is never overwritten`);
+    const code = (error as NodeJS.ErrnoException).code;
+    throw Object.assign(new InvalidInputError(`cannot write ${target} (${code ?? "error"}); an existing file is never overwritten`), { code });
   } finally {
     if (created) try { unlinkSync(tmp); } catch { /* the original error (or the success) is not hidden by a failed cleanup */ }
   }
@@ -603,28 +628,71 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const { bytes, stat } = ctx.readBytes(arg, MAX_ASSET_BYTES);
   if (stat.dev !== judgedStat.dev || stat.ino !== judgedStat.ino || realNearest(ctx.resolve(arg)) !== judged) return refuse("el archivo cambió mientras se leía");
   if (stat.nlink > 1) return refuse("el archivo tiene enlaces duros: su ruta real no es verificable");
+  const verdict = judgeBytes(name, bytes, { kind: args.values.get("kind"), tags: args.values.get("tags"), family: args.values.get("family") });
+  if ("refused" in verdict) return refuse(verdict.refused);
+  const outcome = await commitBytes(ctx, brand.id, bytes, verdict);
+  if ("exists" in outcome) return { lines: [`Ese archivo ya está registrado como asset ${outcome.exists}.`], exitCode: EXIT.CONFLICT };
+  return wrote(args, outcome.done, [`Asset ${outcome.done.value.assetId} registrado (candidato).`]);
+}
+
+type Judged = { sha256: string; mime: string; kind: AssetKind; tags?: string[]; family?: string };
+type Registered = { exists: string } | { done: Awaited<ReturnType<ImportRepos["assets"]["register"]>> };
+
+/** Pure half of `asset add`, shared with `fonts fetch`: magic bytes, secret scan and the field limits. Nothing is uploaded, so a caller can judge many files before committing any. */
+function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: string; family?: string }): Judged | { refused: string } {
+  const ext = name.split(".").pop()!.toLowerCase();
   // A binary type must start with the bytes of that type (the extension alone proves nothing); text is scanned for secrets.
   const genuine = ext === "webp" ? mimeOf(bytes, name) === "image/webp" : !Object.hasOwn(MAGIC, ext) || MAGIC[ext].some((m) => bytes.subarray(0, m.length / 2).toString("hex") === m);
-  if (!genuine) return refuse(`el contenido no es ${ext}`);
+  if (!genuine) return { refused: `el contenido no es ${ext}` };
   const byContent = contentRefusal(name, bytes);
-  if (byContent) return refuse(byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why);
-  const mime = mimeOf(bytes, name);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const kind = args.values.get("kind") ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
-  const tags = args.values.get("tags")?.split(",").map((t) => t.trim()).filter(Boolean);
-  const family = args.values.get("family");
-  // Everything the registration checks is checked here first, so a refused write leaves no blob behind. Upload and
-  // register are two steps, but a retry is safe: `putBlob` accepts identical bytes under their hash-derived key, so
-  // after a failed register the same command uploads nothing new and registers (only a registered row is "ya registrado").
-  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (family && family.length > 100)) throw new InvalidInputError("invalid --kind, --tags (at most 20 of 50 characters) or --family (at most 100 characters)");
+  if (byContent) return { refused: byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why };
+  const kind = o.kind ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
+  const tags = o.tags?.split(",").map((t) => t.trim()).filter(Boolean);
+  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (o.family && o.family.length > 100)) throw new InvalidInputError("invalid --kind, --tags (at most 20 of 50 characters) or --family (at most 100 characters)");
+  return { sha256: createHash("sha256").update(bytes).digest("hex"), mime: mimeOf(bytes, name), kind: kind as AssetKind, ...(tags?.length ? { tags } : {}), ...(o.family ? { family: o.family } : {}) };
+}
+
+/** Uploads and registers judged bytes as a manual candidate. Upload and register are two steps, but a retry is safe: `putBlob` accepts identical bytes under their hash-derived key. */
+async function commitBytes(ctx: Ctx, brandId: string, bytes: Buffer, j: Judged): Promise<Registered> {
   try {
-    await putBlob(ctx.blobs, brand.id, bytes, mime);
-    const done = await ctx.repos.assets.register(brand.id, { sha256, kind: kind as AssetKind, mime, bytes: bytes.length, origin: "manual", status: "candidate", ...(tags?.length ? { tags } : {}), ...(family ? { family } : {}) }, meta(ctx, null, "structural"));
-    return wrote(args, done, [`Asset ${done.value.assetId} registrado (candidato).`]);
+    await putBlob(ctx.blobs!, brandId, bytes, j.mime);
+    return { done: await ctx.repos.assets.register(brandId, { sha256: j.sha256, kind: j.kind, mime: j.mime, bytes: bytes.length, origin: "manual", status: "candidate", ...(j.tags ? { tags: j.tags } : {}), ...(j.family ? { family: j.family } : {}) }, meta(ctx, null, "structural")) };
   } catch (error) {
-    if (error instanceof AlreadyExistsError) return { lines: [`Ese archivo ya está registrado como asset ${sha256.slice(0, 16)}.`], exitCode: EXIT.CONFLICT };
+    if (error instanceof AlreadyExistsError) return { exists: j.sha256.slice(0, 16) };
     throw error;
   }
+}
+
+/** `brand fonts fetch <slug>`: downloads the web fonts the tokens' `googleFontsHref` names, under the policy in `fonts.ts`, and registers them as candidate assets. */
+async function fonts(ctx: Ctx, args: Parsed, [sub, slug]: string[]): Promise<CliResult> {
+  if (sub !== "fetch" || !slug) return usage();
+  if (!ctx.blobs) return noBucketResult();
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  if (brand.value.status === "archived") throw new BrandArchivedError(slug);
+  const tokens = (await ctx.repos.documents.get(brand.id, "tokens", "", rawBody)).value as { googleFontsHref?: unknown };
+  if (typeof tokens.googleFontsHref !== "string") return { lines: [`Los tokens de "${slug}" no declaran googleFontsHref: no hay fuentes que descargar.`], exitCode: EXIT.OK };
+  let files: FontFile[];
+  try {
+    // Everything is downloaded and judged before the first upload: a refused URL leaves nothing behind.
+    files = await downloadFonts(ctx.fetch, tokens.googleFontsHref);
+  } catch (error) {
+    if (error instanceof FontPolicyError) return refused(`Descarga de fuentes rechazada: ${error.message}. No se subió nada.`);
+    throw error;
+  }
+  // Judge EVERY file before the first upload: one refused font leaves nothing registered.
+  const judged = new Map<string, { file: FontFile; j: Judged }>();
+  for (const f of files) {
+    const j = judgeBytes(f.name, f.bytes, { kind: "font", family: f.family });
+    if ("refused" in j) return refused(`Fuente ${f.name} rechazada (${j.refused}). No se subió nada.`);
+    judged.set(j.sha256, { file: f, j });
+  }
+  const added: string[] = [];
+  const existing: string[] = [];
+  for (const { file, j } of judged.values()) {
+    const outcome = await commitBytes(ctx, brand.id, file.bytes, j);
+    ("done" in outcome ? added : existing).push("done" in outcome ? outcome.done.value.assetId : outcome.exists);
+  }
+  return wrote(args, { added, existing }, [`Fuentes: ${added.length} registradas (candidatas), ${existing.length} ya estaban.`]);
 }
 
 async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult> {
@@ -659,6 +727,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "carousel": return carousel(ctx, args, p);
     case "asset": return asset(ctx, args, p);
     case "export": return exportPull(ctx, args, p);
+    case "fonts": return fonts(ctx, args, p);
     default: throw new Error(`unknown verb: ${verb}`);
   }
 }

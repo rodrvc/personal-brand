@@ -38,11 +38,11 @@ export interface Purger {
   close(): Promise<void>;
 }
 
-const where = async (sql: Sql) => (await sql`SELECT current_database() AS db, inet_server_port() AS port`)[0];
+const where = async (sql: Sql) => (await sql`SELECT current_database() AS db, inet_server_port() AS port, inet_server_addr()::text AS addr, pg_postmaster_start_time()::text AS started`)[0];
 
 /**
  * Opens a purger on `sql`, refusing (and closing it) unless the session really is `brand_purger`, and, when `sameAs` is
- * given (the `DATABASE_URL` connection), unless both connections reach the same database and port.
+ * given (the `DATABASE_URL` connection), unless both connections reach the same database, address, port and server start time.
  */
 export async function openPurger(sql: Sql, sameAs?: Sql): Promise<Purger> {
   try {
@@ -50,7 +50,7 @@ export async function openPurger(sql: Sql, sameAs?: Sql): Promise<Purger> {
     if (who !== "brand_purger") throw new PurgeRefusedError(`la conexión de purga corre como "${who}", no como brand_purger`);
     if (sameAs) {
       const [a, b] = [await where(sql), await where(sameAs)];
-      if (a.db !== b.db || a.port !== b.port) throw new PurgeRefusedError("DATABASE_URL y DATABASE_PURGE_URL apuntan a bases de datos distintas");
+      if (a.db !== b.db || a.port !== b.port || (a.addr && b.addr && a.addr !== b.addr) || a.started !== b.started) throw new PurgeRefusedError("DATABASE_URL y DATABASE_PURGE_URL apuntan a bases de datos distintas");
     }
   } catch (error) {
     await sql.end({ timeout: 1 });

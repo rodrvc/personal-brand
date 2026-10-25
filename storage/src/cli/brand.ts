@@ -218,6 +218,10 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: No
 export interface CliHooks {
   suffix?: () => string;
   beforeRead?: (path: string) => void;
+  /** The clock of the purge bundle name. */
+  now?: () => Date;
+  /** Replaces the network of `fonts fetch`. */
+  fetch?: typeof fetch;
   /** Replaces the `DATABASE_PURGE_URL` connection of `purge` (the host gate still runs first). */
   openPurger?: () => Promise<Purger>;
 }
@@ -266,7 +270,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (!url || !isLocalDatabase(url)) throw new PurgeRefusedError("DATABASE_PURGE_URL no apunta a una base de datos local: la purga solo corre en local");
         return hooks.openPurger ? hooks.openPurger() : openPurger(connect(env, url), verbSql ?? undefined);
       };
-      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), resolve: (path) => fromCwd(path, env) }, verb!, args);
+      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now: hooks.now ?? (() => new Date()), fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {

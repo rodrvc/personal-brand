@@ -308,6 +308,40 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.equal((await r.carousels.save(c.id, { title: "X", document: doc }, meta({ expectedVersion: 1 }))).version, 2);
     },
 
+    async "archived brand: chat, exports, content, recipe runs and the TTS cache are refused too"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const doc = { json: { slides: [1] }, schemaVersion: 3 };
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "W", document: doc }, meta());
+      const item = await r.content.create(b.id, { slug: "post", title: "P" }, meta());
+      const run = await r.runs.create(b.id, { recipe: "weekly-reel", periodStart: "2026-02-02", periodEnd: "2026-02-08", input: { json: {}, schemaVersion: 1 } }, meta());
+      const running = await r.exports.reserveNextVersion(c.id, 1);
+      const entry = { sha256: sha("audio"), seconds: 2, voice: { id: "v" } };
+      const font = await r.assets.register(b.id, asset("font"), meta());
+      const artifact = { kind: "clip" as const, cardIndex: 0, cardId: "card-0", sha256: sha("clip"), inputsHash: "h1" };
+      await r.brands.archive(b.id, meta({ expectedVersion: 1, reason: "archive" }));
+      const refused = (e: unknown) => e instanceof BrandArchivedError;
+      await assert.rejects(() => r.chat.append(c.id, { role: "user" }), refused);
+      await assert.rejects(() => r.exports.reserveNextVersion(c.id, 1), refused);
+      await assert.rejects(() => r.exports.complete(running.id, { files: [] }), refused);
+      await assert.rejects(() => r.content.create(b.id, { slug: "post-2", title: "P" }, meta()), refused);
+      await assert.rejects(() => r.content.save(item.id, { title: "X" }, meta({ expectedVersion: 1 })), refused);
+      await assert.rejects(() => r.content.setStage(item.id, { stage: "draft" }, meta({ expectedVersion: 1, reason: "status" })), refused);
+      await assert.rejects(() => r.runs.create(b.id, { recipe: "weekly-reel", periodStart: "2026-02-09", periodEnd: "2026-02-15", input: { json: {}, schemaVersion: 1 } }, meta()), refused);
+      await assert.rejects(() => r.runs.save(run.id, { storyboard: null }, meta({ expectedVersion: 1 })), refused);
+      await assert.rejects(() => r.runArtifacts.record(run.id, artifact), refused);
+      await assert.rejects(() => r.tts.record(b.id, "n1", entry), refused);
+      await assert.rejects(() => r.assets.update(b.id, font.value.assetId, { status: "approved" }, meta({ expectedVersion: 1 })), refused);
+      assert.equal((await r.assets.get(b.id, font.value.assetId)).version, 1, "the asset update changed nothing");
+      assert.deepEqual(await r.chat.list(c.id), [], "nothing was appended");
+      assert.deepEqual((await r.exports.list(c.id)).map((e) => [e.versionNo, e.status]), [[1, "running"]], "no export was reserved or completed");
+      assert.equal((await r.content.list(b.id)).length, 1);
+      assert.equal((await r.runs.list(b.id)).length, 1);
+      assert.deepEqual(await r.tts.takes(b.id, "n1"), []);
+      await r.brands.unarchive(b.id, meta({ expectedVersion: 2, reason: "archive" }));
+      assert.equal(await r.chat.append(c.id, { role: "user" }), 1, "writes resume after unarchive");
+      assert.equal((await r.exports.complete(running.id, { files: [] })).status, "done");
+    },
+
     async "carousels: status lives in the column, never in the stored document"(r, _clock, h) {
       const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
       const doc = { json: { slides: [1, 2], status: "published" }, schemaVersion: 3 };
