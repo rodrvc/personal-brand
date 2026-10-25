@@ -99,7 +99,9 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
     }
     const bytes = readRegular(base, join(base, rel), label, sink);
     const why = bytes && contentRefusal(basename(rel), bytes);
-    if (why) (why.kind === "secret" ? refused : unimported).add(`${label} (${why.why})`);
+    // An SVG outside the static-drawing allowlist blocks the cutover like any other unknown file; say how to get past it.
+    const hint = why && why.kind === "unknown" && /\.svg$/i.test(rel) ? "; reexpórtalo como SVG plano o conviértelo a PNG, o corta con --partial y agrégalo después" : "";
+    if (why) (why.kind === "secret" ? refused : unimported).add(`${label} (${why.why}${hint})`);
     else if (bytes) {
       files.set(label, { path: label, sha256: sha256(bytes), base, file: join(base, rel) });
       origin.set(label, base);

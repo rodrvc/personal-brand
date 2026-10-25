@@ -246,8 +246,9 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
     async listSince(brandId, entityType, since) {
       if (!isUuid(brandId)) return [];
-      return (await sql`SELECT * FROM revisions WHERE brand_id = ${brandId} AND entity_type = ${entityType} AND created_at > ${new Date(since)}
-                        ORDER BY created_at, entity_id, version`).map(toRevision);
+      // The cursor is exclusive at millisecond resolution, like the memory implementation: `created_at` has microseconds, so the rows are those at or after the next millisecond (index-friendly).
+      return (await sql`SELECT * FROM revisions WHERE brand_id = ${brandId} AND entity_type = ${entityType} AND created_at >= ${new Date(Date.parse(since) + 1)}
+                        ORDER BY date_trunc('milliseconds', created_at), entity_id, version`).map(toRevision);
     },
   };
 

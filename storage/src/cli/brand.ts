@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm exec tsx
+import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -213,13 +214,19 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: No
   return { lines: [...describe(report), `Marca "${slug}" cortada a storage. La carpeta no se borra; ya no se lee como fuente.`], exitCode: EXIT.OK };
 }
 
+/** @internal Test seams: `suffix` names the temporary sibling of `asset get --out`; `beforeRead` runs between the path check and the read of `asset add`. */
+export interface CliHooks {
+  suffix?: () => string;
+  beforeRead?: (path: string) => void;
+}
+
 /**
  * `repos` is injected by tests; otherwise the Postgres repositories are opened from `DATABASE_URL`
  * (an owner-capable role: guidance and import runs are owner-only). `blobs` is injected by tests; otherwise the bucket
  * comes from the `S3_*` variables, and without one the assets of a folder are reported, not imported.
  * Output lines are user-facing Spanish.
  */
-export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: ImportRepos, blobs: BlobStore | undefined = repos ? undefined : blobStoreFromEnv(env)): Promise<CliResult> {
+export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: ImportRepos, blobs: BlobStore | undefined = repos ? undefined : blobStoreFromEnv(env), hooks: CliHooks = {}): Promise<CliResult> {
   const [verb, ...rest] = argv;
   const args = parseArgs(verb, rest);
   const slug = args?.positionals[0];
@@ -252,7 +259,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (brand && brand.value.status !== "active") return { lines: [`La marca "${target.slug}" está archivada: no se escribe contenido en ella. No se hizo nada.`], exitCode: EXIT.REFUSED };
         if (ownerRefused && !brand?.value.cutoverAt) return { lines: [`${ownerRefused} (Una escritura de contenido sin aprobación solo se permite en una marca ya cortada a storage.)`], exitCode: EXIT.REFUSED };
       }
-      return await runVerb({ repos: verbRepos, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => readInputBytes(fromCwd(path, env), max), resolve: (path) => fromCwd(path, env) }, verb!, args);
+      return await runVerb({ repos: verbRepos, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {

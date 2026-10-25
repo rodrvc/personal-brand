@@ -373,7 +373,9 @@ brand unarchive <slug>                            reverses archive
 brand purge <slug> --confirm <slug>               deliberate deletion, see below
 brand show <slug> [--since <iso-time>]             documents + versions, rules, guidance; --since lists guidance revision metadata after the timestamp
 brand doc get|put <slug> <tokens|config|identity|spec|template> [<name>] [--if-version <n>]
-brand rules list|add|update|disable <slug> ...    owner role
+brand rules list <slug>                           includes disabled rules
+brand rules add <slug> --file <rule.json>         owner role; { kind, params, severity, appliesTo, message }
+brand rules update|disable <slug> <ruleId> --if-version <n>   update takes --file with any subset of those fields
 brand guidance list|get|put <slug> [<name>] [--if-version <n>]   put: owner role
 brand recipe get|put <slug> <recipe> [--if-version <n>]
 brand asset list <slug> [--kind --status --origin]
@@ -427,13 +429,33 @@ can neither close nor forge the envelope. The `--json` forms of `show`,
 `trust: "brand-data"`. `create --name` rejects control characters. `rules list --json` is
 `{ "trust": "brand-data", "items": [...] }`, like `guidance list --json`; the same
 shape (`trust` + `items`) holds for `carousel list --json` and `asset list --json`,
-and `carousel get`, `asset get` and `show` carry `trust` too. `asset add` runs the
+and `carousel get`, `asset get` and `show` carry `trust` too, and so do the `--json`
+results of the write verbs. `asset add` runs the
 importer's name allowlist and secret checks (`nameRefusal`, `contentRefusal`) on
 the file and on every directory of its path (as typed, and the real path from
 `$HOME` down, so `.docker/config.json` is refused), requires binary types to start
 with their own magic bytes, validates `--kind`, `--tags` and `--family`, and refuses
 with exit 6 before anything is uploaded; the bytes go through the
-write-once `putBlob` and a duplicate is exit 3. `show` also lists recipes.
+write-once `putBlob` (identical bytes are accepted again, so after a failed register the same
+command succeeds; only a registered row is exit 3). Binary files are scanned only for fixed-prefix
+tokens (PEM, AKIA, `gh*_`, `sk_live`, `AIza`, `xox*`, JWT, docker `"auth"`), and a hit is `unknown`, since
+a font or image may hold such bytes by chance. SVG gets a positive screen, an allowlist and not a
+sanitizer: it is accepted only if every tag is a plain drawing element (no prefix, no `script`,
+`style`, `foreignObject`, `set` or `animate*`), the only references are the five XML entities, no tag holds
+a backslash, no attribute is an event handler, every `href` is `#id` or an inline raster `data:` image and
+every `url()` is `url(#id)` and no other CSS function but colours, `calc`, `var` and the transforms
+appears, `xmlns` values are the SVG and xlink namespaces, `xml:base` and malformed comments are refused;
+DOCTYPE, CDATA and processing instructions other than a leading `<?xml ?>` are refused. The refusal reason is
+English; `asset add` adds a Spanish hint (re-export as plain SVG, no DOCTYPE or `<style>`, quoted attributes;
+SVGO or Figma; or convert to PNG) and the cutover report adds the `--partial` way out. Binaries are searched
+by literal with `Buffer.indexOf` and only a window around a hit is decoded, so no string of the whole file
+is built; a scan that throws is a refusal (`unknown`), never an aborted import. Serving approved SVGs to a browser should still sit behind a CSP. `asset add` looks at the file, judges its path,
+reads through one descriptor, then refuses if the real path, dev/ino or a hard link count shows it
+changed. `asset get --out` judges its destination like a name (any extension is fine). A `$HOME` inside a
+dot-directory is judged by its full real path. The archived-brand check runs in the CLI, not atomically
+with the write; it moves to the repository layer in S8b3b. There is no `rules enable` yet: a disabled
+rule stays disabled until a later slice adds it.
+`show` also lists recipes.
 
 **Consumers to switch** (all in §13): `usar-perfil` (resolve with `brand
 list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
@@ -822,8 +844,9 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S8a | CLI verbs part 1 (`storage/src/cli/verbs.ts`): `list`, `create`, `archive`/`unarchive`, `show` (+ guidance `--since`), `doc`/`guidance`/`recipe` get and put (`--if-version`), `rules list`, `check`; guidance trust envelope; exit codes 3/4/5/6; `purge` refusals only (confirmation, archived brand, bundle outside the repo, `brand_purger` URL) | ~560 | S7b2b3b | exit codes; `purge` refuses by default and deletes nothing; `check` exits 5 on an error finding |
 | S8b1 | CLI hardening: D13 write permissions (`IDENTITY_KINDS`, owner guard by write class); import/cutover exit codes (6 for refusals, 3 for import conflicts) and named exit constants; S8a follow-ups: `--since` UTC, trust headers, marker escaping, 1 MB `--file` cap, slug format before the owner guard, dangling-symlink `--bundle`, explicit `rules` dispatch | ~560 | S8a | each rule has an exit-code test; identity writes need the opt-in, and the owner check is unconditional for every write (the content exemption ships in S8b2) |
 | S8b2 | D13 content exemption (`cutoverAt` lookup in `runCli`), subcommands validated before the guard, CLI verbs part 2: `asset list`/`add`/`get`, `carousel list`/`get`/`put`/`status`; `RecipeRepository.list` (so `show` lists recipes); `revisions.listSince` (avoids N+1 in `show --since`); `--file` read through one descriptor | ~600 | S8b1 | each verb has an exit-code test. Carousel and asset writes are content, tested end to end with `runCli`: on a real brand a content write succeeds without opt-in once cut over, is refused (6) before cutover, and is refused (6) on a remote `DATABASE_URL`; identity writes on a cut-over brand without opt-in exit 6 |
-| S8b3 | `export pull`, `fonts fetch`; the `purge` executor as `brand_purger` (export bundle written and verified, FK-order delete under `SET LOCAL app.purge_brand`); the purge remote gate also checks the `DATABASE_PURGE_URL` host and `current_user = brand_purger`; deferred from S8b2: `rules add`/`update`/`disable` with tests and doc text (patch s8b3-rules-verbs), write-verb `--json` trust + `Bad_Slug` loop (patch s8b3-write-json-trust), binary secret scan with the CONTENT signatures over latin1 for all types in `asset add` and the importer, docker `"auth"` base64 pattern in CONTENT, SVG active-content refusal, `asset add` dev/ino check between path check and read, HOME-in-dot-dir handling, `nameRefusal` on the `--out` segments, repository-level archived check | ~590 | S8b2 | purge deletes only an archived brand and leaves other brands untouched |
-| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
+| S8b3a | S8b2 follow-ups: write-verb `--json` trust, `rules add`/`update`/`disable` (deferred from S8b2; disabling a disabled rule is a no-op), binary scan (fixed-prefix tokens only, over latin1, a hit is `unknown`, in `asset add` and the importer), docker `"auth"` base64 pattern, SVG allowlist-style screen, `asset add` look-judge-read-recheck (dev/ino, real path, hard links), HOME-inside-a-dot-directory, `nameRefusal` on the `--out` segments, `asset get --out` temp-file cleanup and a real `wx` collision test, `asset add` retry after a failed register, Postgres `listSince` at millisecond resolution | ~600 | S8b2 | each hardening item has a test; memory and Postgres agree on the `listSince` cursor |
+| S8b3b | `export pull`, `fonts fetch`; the `purge` executor as `brand_purger` (export bundle written and verified by a bundle writer, FK-order delete under `SET LOCAL app.purge_brand`); the purge remote gate also checks the `DATABASE_PURGE_URL` host and `current_user = brand_purger`; the repository-level archived check (the CLI's archived check is not atomic with the write, see §8); SVG screen follow-ups deferred from S8b3a: function names with digits and 3d transforms, CSS shapes and modern colours, relative-timing asserts | ~590 | S8b3a | purge deletes only an archived brand and leaves other brands untouched |
+| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3b | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
