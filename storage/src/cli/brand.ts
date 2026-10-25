@@ -8,7 +8,7 @@ import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
-import { mutatedSlug, readInputFile, runVerb, VERB_SPECS, VERB_USAGE, type CliResult } from "./verbs.ts";
+import { EXIT, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories } from "../pg/index.ts";
 
@@ -180,37 +180,37 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: No
       throw error;
     }
   };
-  const already = (how: string): CliResult => ({ lines: [`La marca "${slug}" ya estaba cortada a storage (marcador ${how}).`], exitCode: 0 });
+  const already = (how: string): CliResult => ({ lines: [`La marca "${slug}" ya estaba cortada a storage (marcador ${how}).`], exitCode: EXIT.OK });
   const existing = await repos.brands.getBySlug(slug).catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
   const present = markerExists(marker);
   if (existing?.value.cutoverAt) {
     // A marker already there must name this brand; anything else is left untouched and reported.
-    if (present && !markerNames(marker, existing.id)) return { lines: [`El ${CUTOVER_MARKER} de ${from} no corresponde a la marca "${slug}": revísalo; no se tocó.`], exitCode: 1 };
+    if (present && !markerNames(marker, existing.id)) return { lines: [`El ${CUTOVER_MARKER} de ${from} no corresponde a la marca "${slug}": revísalo; no se tocó.`], exitCode: EXIT.REFUSED };
     // Side effect: a missing marker is restored here (created exclusively, never overwriting).
     const restored = !present && write(existing.id, existing.value.cutoverAt) === "written";
     return already(restored ? "restituido" : "presente");
   }
-  if (present) return { lines: [`Ya hay un ${CUTOVER_MARKER} en ${from}, pero la marca no está cortada: revísalo antes de continuar.`], exitCode: 1 };
+  if (present) return { lines: [`Ya hay un ${CUTOVER_MARKER} en ${from}, pero la marca no está cortada: revísalo antes de continuar.`], exitCode: EXIT.REFUSED };
 
   // Data the importer does not carry yet would be stranded by a cutover, so it must be acknowledged with --partial.
   const plan = await importBrand(repos, { from, dryRun: true, author, blobs, env });
-  const refuse = (left: string[]): CliResult => ({ lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: 1 });
+  const refuse = (left: string[]): CliResult => ({ lines: [`No se corta: quedan datos sin importar (${left.join(", ")}). Si es intencional, repite con --partial.`], exitCode: EXIT.REFUSED });
   if (leftBehind(plan).length && !partial) return refuse(leftBehind(plan));
   const report = await importBrand(repos, { from, dryRun: false, author, blobs, env });
   // The real pass can see more than the plan did (the folder may have changed in between): check it too.
   if (leftBehind(report).length && !partial) return refuse(leftBehind(report));
   const mismatched = await verifyBrand(repos, from, blobs, env);
   if (report.counts.conflict || mismatched.length) {
-    return { lines: [...describe(report), `No se corta: verificación sucia (${[...report.items.filter((i) => i.outcome === "conflict").map((i) => i.key), ...mismatched].join(", ")}).`], exitCode: 1 };
+    return { lines: [...describe(report), `No se corta: verificación sucia (${[...report.items.filter((i) => i.outcome === "conflict").map((i) => i.key), ...mismatched].join(", ")}).`], exitCode: EXIT.REFUSED };
   }
   const brand = await repos.brands.getBySlug(slug);
   const done = await repos.brands.markCutover(brand.id, { expectedVersion: brand.version, author, source: "cli", reason: "structural" });
   try {
     if (write(done.id, done.value.cutoverAt!) === "exists") return already("presente");
   } catch (error) {
-    return { lines: [`La marca "${slug}" quedó cortada en storage, pero no se pudo escribir ${CUTOVER_MARKER} (${(error as Error).message}). Vuelve a ejecutar el mismo cutover para restituirlo.`], exitCode: 1 };
+    return { lines: [`La marca "${slug}" quedó cortada en storage, pero no se pudo escribir ${CUTOVER_MARKER} (${(error as Error).message}). Vuelve a ejecutar el mismo cutover para restituirlo.`], exitCode: EXIT.UNEXPECTED };
   }
-  return { lines: [...describe(report), `Marca "${slug}" cortada a storage. La carpeta no se borra; ya no se lee como fuente.`], exitCode: 0 };
+  return { lines: [...describe(report), `Marca "${slug}" cortada a storage. La carpeta no se borra; ya no se lee como fuente.`], exitCode: EXIT.OK };
 }
 
 /**
@@ -224,24 +224,27 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   const args = parseArgs(verb, rest);
   const slug = args?.positionals[0];
   const [min, max] = (verb && Object.hasOwn(VERBS, verb) && VERBS[verb].positionals) || [0, 0];
-  if (!args || args.positionals.length < min || args.positionals.length > max || (verb === "import" && !args.values.has("from"))) return { lines: USAGE, exitCode: 2 };
+  if (!args || args.positionals.length < min || args.positionals.length > max || (verb === "import" && !args.values.has("from"))) return { lines: USAGE, exitCode: EXIT.USAGE };
   const dryRun = args.flags.has("dry-run");
   const author = `cli:${env.USER ?? "unknown"}`;
   if (Object.hasOwn(VERB_SPECS, verb!)) {
-    // Writes to a brand that is not an example need the owner's opt-in and, on a remote database, a restored backup; reads stay open.
-    const target = mutatedSlug(verb!, args.positionals);
+    // Identity writes to a brand that is not an example need the owner's opt-in (decision 11; content writes do not),
+    // every write on a remote database needs a restored backup; reads stay open. The slug format is checked first.
+    const target = writeTarget(verb!, args.positionals);
     if (target !== null) {
-      const refusal = ownerRefusal([target], env, args.values.get("owner-opt-in"));
-      if (refusal) return { lines: [refusal], exitCode: 6 };
-      if (!isLocalDatabase(env.DATABASE_URL)) return { lines: [REMOTE_REFUSAL], exitCode: 6 };
+      if (typeof target.slug !== "string" || !SLUG_FORMAT.test(target.slug)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
+      // D13: unconditional in S8b1, content writes included. S8b2 adds the content exemption (`!target.identity` on a cut-over brand) with its cutoverAt lookup and tests.
+      const refusal = ownerRefusal([target.slug], env, args.values.get("owner-opt-in"));
+      if (refusal) return { lines: [refusal], exitCode: EXIT.REFUSED };
+      if (!isLocalDatabase(env.DATABASE_URL)) return { lines: [REMOTE_REFUSAL], exitCode: EXIT.REFUSED };
     }
-    if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: 1 };
+    if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
     let verbSql: Sql | null = null;
     try {
       if (!repos) verbSql = connect(env);
       return await runVerb({ repos: repos ?? createPgRepositories(verbSql!), env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
-      return { lines: [`Error: ${(error as Error).message}`], exitCode: 1 };
+      return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {
       await verbSql?.end({ timeout: 1 });
     }
@@ -250,32 +253,32 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   if (verb === "import") {
     from = fromCwd(args.values.get("from")!, env);
     const refused = ownerRefusal(folderNames(from), env, args.values.get("owner-opt-in"));
-    if (refused) return { lines: [refused], exitCode: 6 };
+    if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
   } else {
-    if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: 6 };
+    if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: EXIT.REFUSED };
     from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
     const refused = ownerRefusal([slug!, ...folderNames(from)], env, args.values.get("owner-opt-in"));
-    if (refused) return { lines: [refused], exitCode: 6 };
-    if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: 1 };
+    if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
+    if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: EXIT.REFUSED };
   }
 
   // Backup gate (§10). `restore_drills` lands in S8; until then any real write to a remote database is refused.
   if (!dryRun && !isLocalDatabase(env.DATABASE_URL)) {
-    return { lines: [REMOTE_REFUSAL], exitCode: 6 };
+    return { lines: [REMOTE_REFUSAL], exitCode: EXIT.REFUSED };
   }
-  if (!existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: 1 };
+  if (!existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: EXIT.NOT_FOUND };
 
-  if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: 1 };
+  if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
   let sql: Sql | null = null;
   try {
     if (!repos) sql = connect(env);
     const r = repos ?? createPgRepositories(sql!);
     if (verb === "cutover") return await cutover(r, blobs, env, slug!, from, author, args.flags.has("partial"));
     const report = await importBrand(r, { from, dryRun, author, blobs, env });
-    return { lines: describe(report), exitCode: report.counts.conflict ? 1 : 0 };
+    return { lines: describe(report), exitCode: report.counts.conflict ? EXIT.CONFLICT : EXIT.OK };
   } catch (error) {
-    if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: 6 };
-    return { lines: [`Error: ${(error as Error).message}`], exitCode: 1 };
+    if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: EXIT.REFUSED };
+    return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
   } finally {
     await sql?.end({ timeout: 1 });
   }

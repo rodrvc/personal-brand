@@ -20,6 +20,7 @@ implemented. Owner decisions pending in §14.
 | D10 | **Per-brand rules are data:** a closed set of generic check kinds with JSON params, run by a pure function in `core/`. |
 | D11 | **Migration is an idempotent importer** (folder or legacy bucket prefix -> bucket + DB), dry-run first, verification report, backup drill before any real brand. |
 | D12 | **Per-brand cutover:** a real brand is cut over only after every consumer is switched (end of S11b). Cutover sets `brands.cutover_at` and writes one marker file in the folder; from then on folder readers refuse the brand and storage is its single source. |
+| D13 | **Write permissions (owner decision 11, 2026-10-25).** On a real brand that is cut over (D12), agents may write *content* (ideas, drafts, carousels, content items, runs/exports) without the owner opt-in; before cutover a content write needs it too. Changing the brand's *identity* (settings and tokens, rules, tone, guidance, recipes, templates), `create` of a real slug, and `archive`/`unarchive`/`purge`/`cutover`/`import` need `BRAND_OWNER_OPT_IN` + `--owner-opt-in`. `example-*` brands are unrestricted. See §8. |
 
 ---
 
@@ -330,8 +331,27 @@ for agents. Exit codes: 0 ok, 1 unexpected error, 2 usage or invalid input,
 3 version conflict, 4 not found, 5 rule violations, 6 refused (owner guard,
 cutover, remote-database backup gate, database role without permission, purge).
 A write without `--if-version` is a create: over an existing row it is a
-version conflict (exit 3). Writes to a brand that is not an example need
-`BRAND_OWNER_OPT_IN` + `--owner-opt-in` (exit 6 otherwise); reads stay open.
+version conflict (exit 3). Import conflicts also exit 3. A malformed slug is
+exit 2, checked before the owner guard. `--file` is capped at 1 MB (exit 2).
+
+**Write permissions (D13).** On a brand that is not an example, *identity*
+writes need `BRAND_OWNER_OPT_IN` + `--owner-opt-in` (exit 6 otherwise);
+*content* writes do not, but only on a brand that is cut over: a content
+write to a real brand that is not cut over needs the opt-in too (S8b2's
+content branch must check `cutoverAt !== null`). Reads stay open, and the
+guard is fail-closed: only an explicit reads allowlist and an explicit
+content table escape it. A remote database refuses every
+write. Identity: `create`, `archive`, `unarchive`, `purge`, `cutover`,
+`import`, `rules add|update|disable`, `guidance put`, `recipe put`, and
+`doc put` of every `DocumentKind`. The single table is `IDENTITY_KINDS` in
+`storage/src/cli/verbs.ts`: `tokens` (colours, fonts, categories), `config`
+(operational settings such as hashtags and output paths), `identity` and
+`spec` (prose), `template` (layouts) are all identity, so today no
+`DocumentKind` is content. Content: ideas, drafts, `carousel put|status`,
+`asset add`, content items, runs and exports (the S8b2 verbs reuse the
+table; a kind not listed there is guarded). Open question: `config` mixes
+brand settings with operational paths; it is guarded as identity until the
+owner says otherwise.
 
 ```
 brand list [--archived]
@@ -380,7 +400,15 @@ with an end marker; `guidance list --json` carries `trust: "brand-data"`.
 `archive` and `unarchive` write revisions with reason `archive`.
 The `import`/`cutover` refusal exits (marker mismatch, not cut over, left-behind
 data without `--partial`, dirty verification, folder name mismatch -> 6; import
-conflicts -> 3) migrate to these codes in S8b.
+conflicts -> 3) use these codes since S8b1. A missing `--from` folder is exit 4.
+`--since` is a UTC cursor (a date that exists, or a timestamp with `Z` or an
+offset), exclusive at millisecond resolution. Text output of `list`, `show`,
+`check`, `guidance list|get`, `rules list`, `recipe get` and `doc get` of
+`identity`/`spec` is wrapped in the trust header and end marker, with every
+brand line split on all line terminators and prefixed with `│ `, so brand text
+can neither close nor forge the envelope. The `--json` forms of `show`,
+`rules list`, `recipe get` and `doc get` of `identity`/`spec` carry
+`trust: "brand-data"`. `create --name` rejects control characters.
 
 **Consumers to switch** (all in §13): `usar-perfil` (resolve with `brand
 list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
@@ -767,8 +795,10 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7b2b3a | Importer part 2b-2c: second root for `outputs.base_dir` (`BRAND_OUTPUTS_ROOT`, confined reads, `@outputs/` legacy paths, the outputs path in the report); reel clips -> `clip` artifacts (names from the shared `core/clips` `clipFileName`, as the engine writes them); the second root goes through the same allowlist and refusals; wider secret signatures, NUL/UTF-16 text is `unknown` | ~550 | S7b2b2 | clips import and verify; the second root is read confined, with its refusals reported and tested |
 | S7b2b3b | Importer part 2b-2d: editor exports -> `exports` rows + keys (numeric `v<N>` order) and the hardening deferred from the S7b2b2 review (§14, Q-S7b2b3; prepared as a patch on top of S7b2b3a) | ~200 | S7b2b3a | exports import and verify; every item of §14 Q-S7b2b3 has a test |
 | S8a | CLI verbs part 1 (`storage/src/cli/verbs.ts`): `list`, `create`, `archive`/`unarchive`, `show` (+ guidance `--since`), `doc`/`guidance`/`recipe` get and put (`--if-version`), `rules list`, `check`; guidance trust envelope; exit codes 3/4/5/6; `purge` refusals only (confirmation, archived brand, bundle outside the repo, `brand_purger` URL) | ~560 | S7b2b3b | exit codes; `purge` refuses by default and deletes nothing; `check` exits 5 on an error finding |
-| S8b | CLI verbs part 2: `rules add`/`update`/`disable`, `asset list`/`add`/`get`, `carousel list`/`get`/`put`/`status`, `export pull`, `fonts fetch`; `RecipeRepository.list` (so `show` lists recipes); the import/cutover exit codes above (6 for refusals, 3 for import conflicts); S8a follow-ups: `--since` must be UTC with a Z/offset and exclusive at ms resolution, a `revisions.listSince` to avoid N+1 reads, a trust header on `show`/`guidance list`/`doc get` text output, a 1 MB `--file` cap, slug format validated before the owner guard (exit 2), and the purge remote gate also checks the `DATABASE_PURGE_URL` host; the `purge` executor (export bundle written and verified, FK-order delete under `SET LOCAL app.purge_brand`, as `brand_purger`) | ~590 | S8a | each verb has an exit-code test; purge deletes only an archived brand and leaves other brands untouched |
-| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
+| S8b1 | CLI hardening: D13 write permissions (`IDENTITY_KINDS`, owner guard by write class); import/cutover exit codes (6 for refusals, 3 for import conflicts) and named exit constants; S8a follow-ups: `--since` UTC, trust headers, marker escaping, 1 MB `--file` cap, slug format before the owner guard, dangling-symlink `--bundle`, explicit `rules` dispatch | ~560 | S8a | each rule has an exit-code test; content writes need no opt-in, identity writes do |
+| S8b2 | CLI verbs part 2: `rules add`/`update`/`disable`, `asset list`/`add`/`get`, `carousel list`/`get`/`put`/`status`; `RecipeRepository.list` (so `show` lists recipes); `revisions.listSince` (avoids N+1 in `show --since`) | ~550 | S8b1 | each verb has an exit-code test; the owner check is unconditional in S8b1 (even `identity: false` writes go through it); S8b2 adds the content exemption together with the `cutoverAt` lookup. Carousel and asset writes are content, tested end to end with `runCli`: on a real brand a content write succeeds without opt-in once cut over, is refused (6) before cutover, and is refused (6) on a remote `DATABASE_URL` |
+| S8b3 | `export pull`, `fonts fetch`; the `purge` executor as `brand_purger` (export bundle written and verified, FK-order delete under `SET LOCAL app.purge_brand`); the purge remote gate also checks the `DATABASE_PURGE_URL` host and `current_user = brand_purger` | ~590 | S8b2 | purge deletes only an archived brand and leaves other brands untouched |
+| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
