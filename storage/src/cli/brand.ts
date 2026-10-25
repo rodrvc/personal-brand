@@ -9,6 +9,7 @@ import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, PurgeRefusedError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
+import { DEFAULT_LEGACY_PREFIX, LEGACY_SOURCE, LegacyBucketError, withLegacyBucket } from "../import/legacy-bucket.ts";
 import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories, drillRefusal, DrillToolMissingError, openPurger, runBackupDrill, type Purger } from "../pg/index.ts";
@@ -27,7 +28,7 @@ const VERBS: Record<string, { values: string[]; flags: string[]; positionals: [n
   ...VERB_SPECS,
 };
 const REMOTE_REFUSAL = "Se rechaza escribir en una base de datos remota sin un simulacro de restauración verificado y reciente.";
-const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)", ...VERB_USAGE];
+const USAGE = ["Uso:", "  brand import --from <carpeta | legacy-bucket:<marca>> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)", ...VERB_USAGE];
 
 /** Brands the tool may touch freely: the fictional, tracked `profiles/example*` folders. */
 const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
@@ -195,6 +196,7 @@ function describe(report: ImportReport): string[] {
     ...report.items.map((i) => `  ${i.outcome} ${i.key}`),
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
     ...(report.conflicts.length ? [`Conflictos: ${report.conflicts.join(", ")}.`] : []),
+    ...(report.origin ? [`Origen: ${report.origin}.`] : []),
     ...(report.outputsRoot ? [`Carpeta de salidas leída (fuera de la marca): ${report.outputsRoot}.`] : []),
     ...(report.legacy.count ? [`Guardados como legado, por contenido: ${report.legacy.count} archivo(s)${report.legacy.changed.length ? `; nuevos o cambiados desde la última importación: ${report.legacy.changed.join(", ")}` : ""}.`] : []),
     ...(report.refused.length ? [`Rechazados, nunca importados: ${report.refused.join(", ")}.`] : []),
@@ -323,12 +325,20 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     }
   }
   let from: string;
+  let legacy: string | null = null; // the slug, when the source is a legacy bucket
   if (verb === "import") {
-    from = fromCwd(args.values.get("from")!, env);
-    const refused = ownerRefusal(folderNames(from), env, args.values.get("owner-opt-in"));
+    const asked = args.values.get("from")!;
+    if (LEGACY_SOURCE.test(asked)) {
+      legacy = asked.replace(LEGACY_SOURCE, "");
+      if (!SLUG_FORMAT.test(legacy)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
+    }
+    from = legacy ? "" : fromCwd(asked, env);
+    const refused = ownerRefusal(legacy ? [legacy] : folderNames(from), env, args.values.get("owner-opt-in"));
     if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
+    if (legacy && !blobs) return { lines: ["Falta el bucket (S3_BUCKET, S3_ACCESS_KEY_ID y S3_SECRET_ACCESS_KEY): no se puede leer legacy-bucket."], exitCode: EXIT.UNEXPECTED };
   } else {
     if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: EXIT.REFUSED };
+    if (LEGACY_SOURCE.test(args.values.get("from") ?? "")) return { lines: ["cutover no admite legacy-bucket: importa con brand import --from legacy-bucket:<marca> y corta desde la carpeta de la marca."], exitCode: EXIT.REFUSED };
     from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
     const refused = ownerRefusal([slug!, ...folderNames(from)], env, args.values.get("owner-opt-in"));
     if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
@@ -340,7 +350,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     const gate = await backupGate(repos, env, now());
     if (gate) return gate;
   }
-  if (!existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: EXIT.NOT_FOUND };
+  if (!legacy && !existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: EXIT.NOT_FOUND };
 
   if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
   let sql: Sql | null = null;
@@ -348,9 +358,14 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     if (!repos) sql = connect(env);
     const r = repos ?? createPgRepositories(sql!);
     if (verb === "cutover") return await cutover(r, blobs, env, slug!, from, author, args.flags.has("partial"));
-    const report = await importBrand(r, { from, dryRun, author, blobs, env });
+    const prefix = env.S3_PREFIX ?? DEFAULT_LEGACY_PREFIX;
+    // A legacy bucket is copied into a temporary folder and imported by the same code as any folder; the copy is removed afterwards.
+    const report = legacy
+      ? await withLegacyBucket(blobs!, prefix, legacy, env, (src) => importBrand(r, { from: src.dir, dryRun, author, blobs, env: src.env, extraSkipped: src.skipped, quietNotices: src.quietNotices, origin: `legacy-bucket:${prefix}${legacy}` }))
+      : await importBrand(r, { from, dryRun, author, blobs, env });
     return { lines: describe(report), exitCode: report.counts.conflict ? EXIT.CONFLICT : EXIT.OK };
   } catch (error) {
+    if (error instanceof LegacyBucketError) return { lines: [error.message], exitCode: error.empty ? EXIT.NOT_FOUND : EXIT.UNEXPECTED };
     if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: EXIT.REFUSED };
     return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
   } finally {
