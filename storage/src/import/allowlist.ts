@@ -10,7 +10,12 @@
 export interface Refusal {
   kind: "secret" | "unknown";
   why: string;
+  /** Machine-readable reason for the refusals callers treat specially; `why` is English prose and may be reworded. */
+  code?: "unknown-type" | "svg-allowlist";
 }
+
+/** Spanish remedy for an SVG the allowlist screen refused; the importer adds its own `--partial` way out. */
+export const SVG_REEXPORT_HINT = "reexporta como SVG plano (sin DOCTYPE ni <style>, atributos con comillas; p. ej. SVGO o Figma) o conviértelo a PNG";
 
 const ALLOWED = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "mov", "webm", "mp3", "wav", "m4a", "pdf", "ttf", "otf", "woff", "woff2", "json", "yaml", "yml", "md", "txt"]);
 const TEXT = new Set(["svg", "json", "yaml", "yml", "md", "txt"]);
@@ -21,7 +26,7 @@ const PRIVATE_KEY_NAME = /^(id_(rsa|dsa|ecdsa|ed25519)(\.|$)|config\.local\.)/; 
 // Text-only signatures: loose enough that a binary (a font name table holds `http://x.commailto:y@`) would trip them.
 // Every quantifier is bounded: an open `{n,}` over a multi-megabyte run overflows the regex stack.
 const TEXT_ONLY = [
-  /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{1,256}:[^\s@/]{1,256}@/i, // credentials in a URL (the scheme is bounded: no quadratic scan on `a-a-a-...`)
+  /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{1,256}:[^\s@/]{1,1024}@/i, // credentials in a URL (the scheme is bounded: no quadratic scan on `a-a-a-...`)
   /\bsk-[A-Za-z0-9_-]{20}/,
 ];
 // Fixed-prefix tokens: precise enough to run over the raw bytes of any file. Each carries the literals it starts with, so a
@@ -33,14 +38,15 @@ const FIXED: { re: RegExp; literals: string[] }[] = [
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10}/, literals: ["xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"] },
   { re: /\b[sr]k_live_[A-Za-z0-9]{16}/, literals: ["k_live_"] }, // Stripe secret and restricted live keys
   { re: /\bAIza[0-9A-Za-z_-]{35}/, literals: ["AIza"] }, // Google API key
-  { re: /"auth"\s{0,64}:\s{0,64}"[A-Za-z0-9+/]{12,4096}={0,2}"/, literals: ['"auth"'] }, // a container registry login (`.docker/config.json`): base64 of user:password
+  { re: /"auth"\s{0,64}:\s{0,64}"[A-Za-z0-9+/]{12,16384}={0,2}"/, literals: ['"auth"'] }, // a container registry login (`.docker/config.json`): base64 of user:password
   // JWT: header and payload are both base64url JSON (`eyJ`), so ordinary JSON never matches; anchored on the dot so a long `eyJ-eyJ-` run is not rescanned from every start
-  { re: /(?<=\beyJ[A-Za-z0-9_-]{8,4096})\.eyJ[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,4096}/, literals: [".eyJ"] },
+  { re: /(?<=\beyJ[A-Za-z0-9_-]{8,4096})\.eyJ[A-Za-z0-9_-]{8,12000}\.[A-Za-z0-9_-]{8}/, literals: [".eyJ"] },
 ];
 const CONTENT = [...TEXT_ONLY, ...FIXED.map((f) => f.re)];
-// The window around a literal hit in a binary: the longest bounded match is about 12 KB, the JWT header sits up to 4 KB before its dot.
+// The window around a literal hit in a binary: the longest match after a literal is the `"auth"` value (about 16.5 KB; a JWT's tail is
+// about 12 KB), and the JWT header sits up to 4 KB before its dot.
 const WINDOW_BEFORE = 4200;
-const WINDOW_AFTER = 12_500;
+const WINDOW_AFTER = 17_000;
 const MAX_BINARY_HITS = 10_000;
 
 /** Whether a binary holds a fixed-prefix token. No string of the whole file is built (a `latin1` string of 512 MB or more throws): only a window around each literal hit. */
@@ -76,7 +82,12 @@ const SVG_TAIL = /\s*\/?>/y;
 const SVG_HREF_OK = /^\s*(#[\w.-]+|data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+)$/;
 const SVG_URL_OK = /url\(\s*#[\w.-]+\s*\)/gi;
 // A CSS function in an attribute value may only be one of these (`url` only as `url(#id)`, stripped before the check); `image-set`, `cross-fade`, `element`, `src` and the rest can fetch.
-const SVG_CSS_FUNCTIONS = new Set(["rgb", "rgba", "hsl", "hsla", "calc", "var", "matrix", "translate", "translatex", "translatey", "scale", "scalex", "scaley", "rotate", "skewx", "skewy"]);
+// Modern colours, 3d transforms, `min`/`max`/`clamp` and the CSS basic shapes only describe geometry or colour; none of them fetches.
+const SVG_CSS_FUNCTIONS = new Set([
+  "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "calc", "var", "min", "max", "clamp",
+  "matrix", "matrix3d", "translate", "translate3d", "translatex", "translatey", "translatez", "scale", "scale3d", "scalex", "scaley", "scalez", "rotate", "rotate3d", "rotatex", "rotatey", "rotatez", "skewx", "skewy",
+  "circle", "ellipse", "inset", "polygon",
+]);
 const SVG_XMLNS_OK = new Set(["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink"]);
 
 /** Whether the comment starting at `open` is well formed; returns the index after its `-->`, or -1. Linear: `indexOf` only moves forward. */
@@ -118,7 +129,7 @@ function svgAccepted(text: string): boolean {
         if (!SVG_XMLNS_OK.has(value)) return false;
       } else if (key === "href" || key.endsWith(":href")) {
         if (!SVG_HREF_OK.test(value)) return false;
-      } else if (/url\s*\(/i.test(value.replace(SVG_URL_OK, "")) || [...value.matchAll(/(?<![\w-])([A-Za-z-]+)\(/g)].some((f) => !SVG_CSS_FUNCTIONS.has(f[1].toLowerCase()) && f[1].toLowerCase() !== "url")) return false;
+      } else if (/url\s*\(/i.test(value.replace(SVG_URL_OK, "")) || [...value.matchAll(/(?<![\w-])([\w-]+)\(/g)].some((f) => !SVG_CSS_FUNCTIONS.has(f[1].toLowerCase()) && f[1].toLowerCase() !== "url")) return false;
     }
     SVG_TAIL.lastIndex = pos;
     if (!SVG_TAIL.test(s)) return false;
@@ -133,7 +144,7 @@ export function nameRefusal(name: string, isDir: boolean): Refusal | null {
   if (name.startsWith(".")) return { kind: "unknown", why: "dot-directory: may hold brand content" };
   if (KEY_EXT.test(name) || PRIVATE_KEY_NAME.test(name)) return { kind: "secret", why: "secret-like: key, certificate or machine-local config" };
   if (SECRET_NAME.test(name)) return { kind: "unknown", why: "suspicious name" };
-  if (!isDir && !ALLOWED.has(name.split(".").slice(1).pop()?.toLowerCase() ?? "")) return { kind: "unknown", why: "not a known content type" };
+  if (!isDir && !ALLOWED.has(name.split(".").slice(1).pop()?.toLowerCase() ?? "")) return { kind: "unknown", why: "not a known content type", code: "unknown-type" };
   return null;
 }
 
@@ -160,6 +171,6 @@ function scan(name: string, bytes: Buffer): Refusal | null {
   if (bytes.includes(0) || (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) return { kind: "unknown", why: "suspicious content: not plain UTF-8 text" };
   const text = bytes.toString("utf-8");
   if (CONTENT.some((p) => p.test(text))) return { kind: "secret", why: "secret-like: secret pattern in content" };
-  if (ext === "svg" && !svgAccepted(text)) return { kind: "unknown", why: "SVG outside the static-drawing allowlist (unknown tag, DOCTYPE, <style>, script, entity, event handler or external reference)" };
+  if (ext === "svg" && !svgAccepted(text)) return { kind: "unknown", why: "SVG outside the static-drawing allowlist (unknown tag, DOCTYPE, <style>, script, entity, event handler or external reference)", code: "svg-allowlist" };
   return ASSIGNMENT.test(text) ? { kind: "unknown", why: "suspicious content: key-value assignment" } : null;
 }

@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, linkSync, lstatSync, openSync, readSync, readlinkSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { runChecks } from "@personal-brand/core/checks";
 
 import { putBlob } from "../blob/put-blob.ts";
+import { carouselExportPrefix } from "../contracts/keys.ts";
 import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal, type Refusal } from "../import/allowlist.ts";
+import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import { toCheckRules } from "../revision-policy.ts";
@@ -85,19 +86,20 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
 };
 
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
   doc: ["get", "put"], guidance: ["list", "get", "put"], recipe: ["get", "put"],
-  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], asset: ["list", "add", "get"],
+  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], asset: ["list", "add", "get"], export: ["pull"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], asset: ["list", "get"] };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -129,9 +131,11 @@ export const VERB_USAGE = [
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
   "  brand carousel status <marca> <carrusel> --status <estado> --if-version <n> [--scheduled-for <fecha>] [--published-at <fecha>]",
   "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
+  "  brand export pull <marca> <carrusel> --out <carpeta fuera del repo> [--version <n>]",
   "  (todos aceptan --json; las escrituras de identidad en marcas que no son de ejemplo requieren --owner-opt-in, las de contenido solo hasta el corte a storage)",
 ];
 
+const noBucketResult = (): CliResult => ({ lines: ["Falta el bucket de archivos: define S3_BUCKET, S3_ACCESS_KEY_ID y S3_SECRET_ACCESS_KEY."], exitCode: EXIT.UNEXPECTED });
 const usage = (): CliResult => ({ lines: ["Uso incorrecto del comando: revisa los argumentos (brand sin argumentos muestra la ayuda)."], exitCode: EXIT.USAGE });
 const refused = (...lines: string[]): CliResult => ({ lines, exitCode: EXIT.REFUSED });
 
@@ -355,6 +359,8 @@ function ruleFromFile(raw: string, complete: boolean): Partial<RuleInput> {
 }
 
 async function rules(ctx: Ctx, args: Parsed, [sub, slug, id]: string[]): Promise<CliResult> {
+  // Every branch below assumes one of these: a word outside the list (`enable`, a typo) must never fall through into `disable`.
+  if (!["list", "add", "update", "disable"].includes(sub)) return usage();
   const brand = await ctx.repos.brands.getBySlug(slug);
   const all = await ctx.repos.rules.list(brand.id, { includeDisabled: true });
   if (sub === "list") {
@@ -430,10 +436,65 @@ function pathRefusal(ctx: Ctx, path: string, lenientLeaf = false): Refusal | nul
       const leaf = i === segments.length - 1;
       const refusal = nameRefusal(segment, !leaf);
       // A destination may have any extension; only dot, key and secret-like names are refused for it.
-      if (refusal && !(lenientLeaf && leaf && refusal.why === "not a known content type")) return refusal;
+      if (refusal && !(lenientLeaf && leaf && refusal.code === "unknown-type")) return refusal;
     }
   }
   return null;
+}
+
+/**
+ * Writes `body` to a path that must not exist yet. A sibling is written first (`wx`), then hard-linked into place: `link` fails
+ * on an existing target, so nothing is overwritten and a failed write leaves no partial file at the target. Only a sibling
+ * this call created is removed; a file that was already there is never touched.
+ */
+function writeNew(ctx: Ctx, target: string, body: Buffer): void {
+  const final = ctx.resolve(target);
+  const tmp = `${final}.${ctx.suffix()}.tmp`;
+  let created = false;
+  try {
+    // `wx` fails on a file that is already there; `created` is set only once this call owns the file, before any byte is written.
+    const fd = openSync(tmp, "wx");
+    created = true;
+    try {
+      for (let done = 0; done < body.length; ) done += writeSync(fd, body, done);
+    } finally {
+      closeSync(fd);
+    }
+    linkSync(tmp, final);
+  } catch (error) {
+    throw new InvalidInputError(`cannot write ${target} (${(error as NodeJS.ErrnoException).code ?? "error"}); an existing file is never overwritten`);
+  } finally {
+    if (created) try { unlinkSync(tmp); } catch { /* the original error (or the success) is not hidden by a failed cleanup */ }
+  }
+}
+
+/** `brand export pull <slug> <carousel> [--version N] --out <dir>`: copies one export version's files out of the bucket. A read verb, with the safety of `asset get --out`. */
+async function exportPull(ctx: Ctx, args: Parsed, [, slug, name]: string[]): Promise<CliResult> {
+  const target = args.values.get("out");
+  const wanted = args.values.get("version");
+  if (!target || (wanted !== undefined && !/^[1-9]\d{0,8}$/.test(wanted))) return usage();
+  if (!ctx.blobs) return noBucketResult();
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  const carousel = await ctx.repos.carousels.get(brand.id, name, rawBody);
+  const done = (await ctx.repos.exports.list(carousel.id)).filter((e) => e.status === "done");
+  const chosen = wanted === undefined ? done.at(-1) : done.find((e) => e.versionNo === Number(wanted));
+  if (!chosen) throw new NotFoundError(`export ${wanted === undefined ? "(none finished)" : `v${wanted}`} of ${name}`);
+  if (insideRepo(ctx, target)) return refused("El destino debe quedar fuera del repo. No se escribió nada.");
+  if (pathRefusal(ctx, target, true)) return refused("El destino tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se escribió nada.");
+  const prefix = carouselExportPrefix(brand.id, carousel.id, chosen.versionNo);
+  // Judge every name before reading or writing anything: one refused file stops the whole pull.
+  const files = (await ctx.blobs.list(prefix)).map((e) => ({ key: e.key, file: e.key.slice(prefix.length) })).sort((x, y) => x.file.localeCompare(y.file));
+  const bad = files.find((f) => !/^[A-Za-z0-9._-]+$/.test(f.file) || f.file === "." || f.file === ".." || nameRefusal(f.file, false));
+  if (bad) return refused(`El export tiene un archivo no admitido (${bad.file.slice(0, 60)}). No se escribió nada.`);
+  if (!files.length) throw new NotFoundError(`files of export v${chosen.versionNo} of ${name}`);
+  const dir = ctx.resolve(target);
+  const taken = files.find((f) => lstatSync(join(dir, f.file), { throwIfNoEntry: false }));
+  if (taken) throw new InvalidInputError(`cannot write ${join(target, taken.file)} (EEXIST); an existing file is never overwritten`);
+  const bodies = await Promise.all(files.map(async (f) => (await ctx.blobs!.get(f.key)).body));
+  mkdirSync(dir, { recursive: true });
+  files.forEach((f, i) => writeNew(ctx, join(target, f.file), bodies[i]));
+  const lines = [`Export v${chosen.versionNo} de ${name}: ${files.length} archivo(s) guardados en ${target}.`];
+  return out(args, { trust: "brand-data", version: chosen.versionNo, files: files.map((f) => f.file) }, trusted(lines));
 }
 
 async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promise<CliResult> {
@@ -445,7 +506,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
     const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version }));
     return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map(text) : ["Sin assets."]));
   }
-  const noBucket = (): CliResult => ({ lines: ["Falta el bucket de archivos: define S3_BUCKET, S3_ACCESS_KEY_ID y S3_SECRET_ACCESS_KEY."], exitCode: EXIT.UNEXPECTED });
+  const noBucket = noBucketResult;
   if (sub === "get") {
     const a = await ctx.repos.assets.get(brand.id, arg);
     const target = args.values.get("out");
@@ -455,27 +516,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
       if (createHash("sha256").update(body).digest("hex") !== a.value.sha256) throw new Error(`the stored bytes of asset ${arg} do not match its hash`);
       if (insideRepo(ctx, target)) return refused("El destino debe quedar fuera del repo. No se escribió nada.");
       if (pathRefusal(ctx, target, true)) return refused("El destino tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se escribió nada.");
-      // Write a sibling first, then hard-link it into place: `link` fails on an existing target, so nothing is overwritten
-      // and a failed write leaves no partial file at the target.
-      const final = ctx.resolve(target);
-      const tmp = `${final}.${ctx.suffix()}.tmp`;
-      let created = false;
-      try {
-        // `wx` fails on a file that is already there; `created` is set only once this call owns the file, before any byte is written.
-        const fd = openSync(tmp, "wx");
-        created = true;
-        try {
-          for (let done = 0; done < body.length; ) done += writeSync(fd, body, done);
-        } finally {
-          closeSync(fd);
-        }
-        linkSync(tmp, final);
-      } catch (error) {
-        throw new InvalidInputError(`cannot write ${target} (${(error as NodeJS.ErrnoException).code ?? "error"}); an existing file is never overwritten`);
-      } finally {
-        // Only a sibling this call created is removed; a file that was already there is never touched.
-        if (created) try { unlinkSync(tmp); } catch { /* the original error (or the success) is not hidden by a failed cleanup */ }
-      }
+      writeNew(ctx, target, body);
     }
     return out(args, { trust: "brand-data", ...a.value, version: a.version }, trusted([text(a.value), ...(target ? [`Guardado en ${target}.`] : [])]));
   }
@@ -498,7 +539,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const genuine = ext === "webp" ? mimeOf(bytes, name) === "image/webp" : !Object.hasOwn(MAGIC, ext) || MAGIC[ext].some((m) => bytes.subarray(0, m.length / 2).toString("hex") === m);
   if (!genuine) return refuse(`el contenido no es ${ext}`);
   const byContent = contentRefusal(name, bytes);
-  if (byContent) return refuse(ext === "svg" && byContent.kind === "unknown" ? `${byContent.why}; reexporta como SVG plano (sin DOCTYPE ni <style>, atributos con comillas; p. ej. SVGO o Figma) o conviértelo a PNG` : byContent.why);
+  if (byContent) return refuse(byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why);
   const mime = mimeOf(bytes, name);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const kind = args.values.get("kind") ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
@@ -549,6 +590,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "rules": return rules(ctx, args, p);
     case "carousel": return carousel(ctx, args, p);
     case "asset": return asset(ctx, args, p);
+    case "export": return exportPull(ctx, args, p);
     default: throw new Error(`unknown verb: ${verb}`);
   }
 }
