@@ -581,11 +581,31 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const wrong = await runCli(argv, env, repos, blobs, open("brand_owner"));
     assert.deepEqual([wrong.exitCode, /no como brand_purger/.test(wrong.lines[0]), existsSync(bundle)], [6, true, false]);
     await assert.rejects(() => openPurger(login("brand_purger"), (async () => [{ db: "other", port: 1 }]) as unknown as postgres.Sql), /bases de datos distintas/);
+    const probe = login("brand_purger");
+    const [real] = await probe`SELECT current_database() AS db, inet_server_port() AS port, inet_server_addr()::text AS addr, pg_postmaster_start_time()::text AS started`;
+    await probe.end({ timeout: 1 });
+    for (const other of [{ addr: "10.9.9.9" }, { started: "1999-01-01" }]) await assert.rejects(() => openPurger(login("brand_purger"), (async () => [{ ...real, ...other }]) as unknown as postgres.Sql), /bases de datos distintas/);
     // A failure after the bundle is written rolls the whole transaction back: every row is still there, and the bundle stays.
     const before = await counts(doomed.id);
     const failed = await runCli(argv, env, repos, blobs, seam(async () => { throw new PurgeRefusedError("simulated failure"); }));
     assert.deepEqual([failed.exitCode, await counts(doomed.id)], [6, before], "all rows intact after a rollback");
+    assert.match(failed.lines[0], /se dejó el paquete en .*\.bundle\.json/, "a refusal after the bundle was linked names it");
     assert.deepEqual([statSync(bundle).mode & 0o777, readdirSync(bundle).map((f) => statSync(join(bundle, f)).mode & 0o777)], [0o700, [0o600]], "folder 0700, bundle 0600");
+    // A failed read-back unlinks the bundle this call linked and removes the folders it created.
+    const nested = join(home, "rb", "deep");
+    const readback = await runCli(["purge", "example-doomed", "--confirm", "example-doomed", "--bundle", nested], env, repos, blobs, { ...open("brand_purger"), beforeRead: (path) => { if (path.endsWith(".bundle.json")) throw new Error("simulated read-back failure"); } });
+    assert.deepEqual([readback.exitCode, existsSync(join(home, "rb")), await counts(doomed.id)], [EXIT.UNEXPECTED, false, before], "no bundle, no folders, no deletion");
+    // A serialization failure inside the purge is a refusal that names the bundle left behind; a re-run in the same clock tick never overwrites it.
+    const tick = { ...open("brand_purger"), now: () => new Date("2026-03-01T00:00:00.000Z") };
+    const raced = await runCli(argv, env, repos, blobs, { ...tick, openPurger: seam(async () => { throw Object.assign(new Error("could not serialize access"), { code: "40001" }); }).openPurger });
+    const orphan = join(bundle, "example-doomed.20260301T000000000Z.bundle.json");
+    assert.deepEqual([raced.exitCode, raced.lines[0].includes(`se dejó el paquete en ${orphan}`), await counts(doomed.id)], [6, true, before]);
+    const other = await runCli(argv, env, repos, blobs, { ...tick, now: () => new Date("2026-03-05T00:00:00.000Z"), openPurger: seam(async () => { throw new Error("connection lost"); }).openPurger });
+    assert.deepEqual([other.exitCode, /connection lost; se dejó el paquete en .*20260305/.test(other.lines[0])], [EXIT.UNEXPECTED, true], "any other failure keeps the bundle path too");
+    const orphanBytes = readFileSync(orphan);
+    const clash = await runCli(argv, env, repos, blobs, tick);
+    assert.deepEqual([clash.exitCode, /ya existe un paquete/.test(clash.lines[0]), readFileSync(orphan).equals(orphanBytes), await counts(doomed.id)], [6, true, true, before], "a name collision is refused and nothing is overwritten");
+    for (const [code, day] of [["23503", "02"], ["23001", "03"], ["40P01", "04"]]) assert.equal((await runCli(argv, env, repos, blobs, { ...tick, openPurger: seam(async () => { throw Object.assign(new Error("x"), { code }); }).openPurger, now: () => new Date(`2026-03-${day}T00:00:00.000Z`) })).exitCode, 6);
     // A chat message written while the purge runs is blocked (the carousel row is locked), so nothing is deleted unbundled.
     let blocked: unknown;
     const done = await runCli(argv, env, repos, blobs, seam(async () => {
@@ -598,8 +618,8 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     assert.equal((blocked as { code?: string }).code, "55P03", "the concurrent insert is blocked, not applied");
     assert.deepEqual([done.exitCode, /Quedan 1 objeto\(s\) en el bucket/.test(done.lines.join("\n"))], [0, true], done.lines.join("\n"));
     const files = readdirSync(bundle).sort();
-    assert.equal(files.length, 2, "a re-run needs no cleanup: the bundle name carries a timestamp");
-    const written = JSON.parse(readFileSync(join(bundle, files[1]), "utf-8"));
+    assert.equal(files.length, 7, "a re-run needs no cleanup: the bundle name carries a timestamp (6 earlier bundles were left by rolled-back purges)");
+    const written = JSON.parse(readFileSync(join(bundle, files.at(-1)!), "utf-8"));
     assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0007_import_runs.sql", before, doomed.id, 3, 1]);
     assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 15 tables are empty for the purged brand");
     assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");

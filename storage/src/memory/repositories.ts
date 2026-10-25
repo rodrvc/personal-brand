@@ -312,6 +312,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       assertAsset(patch, false);
       const cur = isAssetId(assetId) ? findAsset(brandId, assetId) : undefined;
       if (!cur) throw new NotFoundError(`asset ${assetId}`);
+      assertBrandActive(brandId);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
       const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
       const next = { ...cur, value: structuredClone({ ...cur.value, ...defined }), version: cur.version + 1, updatedAt: now().toISOString() };
@@ -321,6 +322,10 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
+  /** Refuses a write on an archived brand (the memory twin of the Postgres brand `FOR SHARE`). */
+  const assertBrandActive = (brandId: string, what = brandId) => {
+    if (brands.get(brandId)?.value.status === "archived") throw new BrandArchivedError(what);
+  };
   const ttsRows = new Map<string, TtsEntry[]>();
   const tts: TtsCacheRepository = {
     async get(brandId, narrationHash) {
@@ -334,6 +339,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     async record(brandId, narrationHash, entry) {
       assertTts(narrationHash, entry);
       if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      assertBrandActive(brandId);
       const list = ttsRows.get(`${brandId}/${narrationHash}`) ?? [];
       const cur = list.find((t) => t.sha256 === entry.sha256);
       if (cur) return structuredClone(cur);
@@ -420,6 +426,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   function writeContent(id: string, meta: WriteMeta, change: (cur: ContentRow) => Partial<ContentRow>): Versioned<ContentItemHead> {
     const cur = contentRows.get(id);
     if (!cur) throw new NotFoundError(`content item ${id}`);
+    assertBrandActive(cur.brandId, `of content item ${id}`);
     if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
     const next = { ...cur, ...change(cur), version: cur.version + 1, updatedAt: now().toISOString() };
     contentRows.set(id, next);
@@ -445,6 +452,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       const publishedAt = resolvePublishedAt(null, stage, input.publishedAt, null);
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      assertBrandActive(brandId);
       if (input.derivedFrom && contentRows.get(input.derivedFrom)?.brandId !== brandId) throw new InvalidInputError("derivedFrom must be an item of the same brand");
       const dup = [...contentRows.values()].find((c) => c.brandId === brandId && c.head.slug === input.slug);
       if (dup) throw new AlreadyExistsError(`content item "${input.slug}"`, dup.version);
@@ -496,7 +504,9 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   const exports: ExportRepository = {
     async reserveNextVersion(carouselId, carouselVersion, opts) {
       if (!Number.isInteger(carouselVersion) || carouselVersion < 1) throw new InvalidInputError("invalid carouselVersion");
-      if (!carouselRows.has(carouselId)) throw new NotFoundError(`carousel ${carouselId}`);
+      const parent = carouselRows.get(carouselId);
+      if (!parent) throw new NotFoundError(`carousel ${carouselId}`);
+      assertBrandActive(parent.brandId, `of carousel ${carouselId}`);
       const at = now();
       const cutoff = at.getTime() - (opts?.staleAfterMs ?? DEFAULT_EXPORT_STALE_MS);
       const existing = exportsOf(carouselId);
@@ -510,6 +520,8 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
     async complete(id, manifest) {
       assertJsonObject(manifest, "manifest");
+      const parent = exportRows.get(id) && carouselRows.get(exportRows.get(id)!.carouselId);
+      if (parent) assertBrandActive(parent.brandId, `of export ${id}`);
       return finishExport(id, "done", manifest);
     },
     async fail(id) {
@@ -524,7 +536,9 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   const chat: ChatRepository = {
     async append(carouselId, body) {
       assertJsonObject(body, "chat body");
-      if (!carouselRows.has(carouselId)) throw new NotFoundError(`carousel ${carouselId}`);
+      const parent = carouselRows.get(carouselId);
+      if (!parent) throw new NotFoundError(`carousel ${carouselId}`);
+      assertBrandActive(parent.brandId, `of carousel ${carouselId}`);
       const list = chatRows.get(carouselId) ?? [];
       const seq = list.length + 1;
       chatRows.set(carouselId, [...list, { seq, body: structuredClone(body), createdAt: now().toISOString() }]);
@@ -546,6 +560,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       assertRecipeRun(input, true);
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      assertBrandActive(brandId);
       const at = now().toISOString();
       const row: RunRow = {
         id: randomUUID(), brandId, version: 1, updatedAt: at, input: structuredClone(input.input.json), storyboard: structuredClone(input.storyboard ?? null),
@@ -569,6 +584,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       assertRecipeRun(patch);
       const cur = runRows.get(id);
       if (!cur) throw new NotFoundError(`recipe run ${id}`);
+      assertBrandActive(cur.brandId, `of recipe run ${id}`);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
       const next: RunRow = {
         ...cur, version: cur.version + 1, updatedAt: now().toISOString(),
@@ -592,6 +608,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     async record(runId, input) {
       assertRunArtifact(input);
       requireRun(runId);
+      assertBrandActive(runRows.get(runId)!.brandId, `of recipe run ${runId}`);
       const last = slotOf(runId, input.kind, input.cardIndex).at(-1);
       if (last && last.sha256 === input.sha256 && last.inputsHash === input.inputsHash) return structuredClone(last);
       const row: RunArtifact = { ...input, id: randomUUID(), runId, seq: artifactRows.length + 1, createdAt: now().toISOString() };

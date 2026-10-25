@@ -144,6 +144,20 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
                      ${r.bodyText}, ${meta.author}, ${meta.source}, ${meta.sourceHash ?? null}, ${at})`;
   }
 
+  /** Brand lock FOR SHARE, always the first lock of a content write (the same order as `purge`); refuses a missing or archived brand. */
+  async function shareBrand(tx: Tx, brandId: string, what = brandId): Promise<void> {
+    const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
+    if (!brand) throw new NotFoundError(`brand ${brandId}`);
+    if (brand.status === "archived") throw new BrandArchivedError(what);
+  }
+
+  /** Same, for a write that targets a child row: finds its brand, locks the brand, and leaves the child row for the caller to lock. */
+  async function shareBrandOf(tx: Tx, table: "carousels" | "content_items" | "recipe_runs", id: string, notFound: string): Promise<void> {
+    const [head] = isUuid(id) ? await tx`SELECT brand_id FROM ${tx(table)} WHERE id = ${id}` : [];
+    if (!head) throw new NotFoundError(notFound);
+    await shareBrand(tx, head.brand_id, `of ${notFound}`);
+  }
+
   async function writeBrand(id: string, meta: WriteMeta, patch: { displayName?: string; status?: string; cutoverAt?: Date }) {
     if (!isUuid(id)) throw new NotFoundError(`brand ${id}`);
     return sql.begin(async (tx) => {
@@ -404,6 +418,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       assertAsset(patch, false);
       if (!isUuid(brandId) || !isAssetId(assetId)) throw new NotFoundError(`asset ${assetId}`);
       return sql.begin(async (tx) => {
+        await shareBrand(tx, brandId);
         const [row] = await tx`UPDATE assets SET kind = COALESCE(${patch.kind ?? null}, kind), status = COALESCE(${patch.status ?? null}, status),
                                       tags = COALESCE(${patch.tags ?? null}, tags), family = COALESCE(${patch.family ?? null}, family),
                                       updated_at = ${now()}, version = version + 1
@@ -433,8 +448,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       assertTts(narrationHash, entry);
       if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
       return sql.begin(async (tx) => {
-        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
-        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        await shareBrand(tx, brandId);
         const [row] = await tx`INSERT INTO tts_cache (brand_id, narration_hash, sha256, seconds, voice, created_at)
                                VALUES (${brandId}, ${narrationHash}, ${entry.sha256}, ${entry.seconds}, ${json(tx, entry.voice)}, ${now()})
                                ON CONFLICT (brand_id, narration_hash, sha256) DO NOTHING RETURNING *`;
@@ -460,10 +474,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     if (!isUuid(id)) throw new NotFoundError(`carousel ${id}`);
     return sql.begin(async (tx) => {
       // Lock order: brand (FOR SHARE) then carousel, the same as `purge`, so an `archive` or a purge cannot commit in between.
-      const [head] = await tx`SELECT brand_id FROM carousels WHERE id = ${id}`;
-      if (!head) throw new NotFoundError(`carousel ${id}`);
-      const [brand] = await tx`SELECT status FROM brands WHERE id = ${head.brand_id} FOR SHARE`;
-      if (brand.status === "archived") throw new BrandArchivedError(`of carousel ${id}`);
+      await shareBrandOf(tx, "carousels", id, `carousel ${id}`);
       const [cur] = await tx`SELECT * FROM carousels WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!cur) throw new NotFoundError(`carousel ${id}`);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
@@ -539,6 +550,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
   async function writeContent(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
     if (!isUuid(id)) throw new NotFoundError(`content item ${id}`);
     return sql.begin(async (tx) => {
+      await shareBrandOf(tx, "content_items", id, `content item ${id}`);
       const [cur] = await tx`SELECT * FROM content_items WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!cur) throw new NotFoundError(`content item ${id}`);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
@@ -570,8 +582,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
       return sql.begin(async (tx) => {
-        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
-        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        await shareBrand(tx, brandId);
         if (input.derivedFrom) {
           const [parent] = await tx`SELECT 1 FROM content_items WHERE id = ${input.derivedFrom} AND brand_id = ${brandId}`;
           if (!parent) throw new InvalidInputError("derivedFrom must be an item of the same brand");
@@ -610,10 +621,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
    * never blocks saves; keyed by schema so schemas sharing a database do not contend.
    */
   const lockCounter = (tx: Tx, scope: string, carouselId: string) => tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || ${scope} || ':' || ${carouselId}, 0))`;
-  const requireCarousel = async (tx: Tx, carouselId: string) => {
-    const [found] = isUuid(carouselId) ? await tx`SELECT 1 FROM carousels WHERE id = ${carouselId}` : [];
-    if (!found) throw new NotFoundError(`carousel ${carouselId}`);
-  };
+  const requireCarousel = (tx: Tx, carouselId: string) => shareBrandOf(tx, "carousels", carouselId, `carousel ${carouselId}`);
 
   const exports: ExportRepository = {
     async reserveNextVersion(carouselId, carouselVersion, opts) {
@@ -631,21 +639,27 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
     async complete(id, manifest) {
       assertJsonObject(manifest, "manifest");
-      return finishExport(id, "done", manifest);
+      if (!isUuid(id)) throw new NotFoundError(`export ${id}`);
+      return sql.begin(async (tx) => {
+        const [parent] = await tx`SELECT c.brand_id FROM exports e JOIN carousels c ON c.id = e.carousel_id WHERE e.id = ${id}`;
+        if (!parent) throw new NotFoundError(`export ${id}`);
+        await shareBrand(tx, parent.brand_id, `of export ${id}`);
+        return finishExport(tx, id, "done", manifest);
+      });
     },
-    fail: (id) => finishExport(id, "failed"),
+    fail: (id) => finishExport(sql, id, "failed"),
     async list(carouselId) {
       if (!isUuid(carouselId)) return [];
       return (await sql`SELECT * FROM exports WHERE carousel_id = ${carouselId} ORDER BY version_no`).map(toExport);
     },
   };
 
-  async function finishExport(id: string, status: "done" | "failed", manifest?: Record<string, unknown>): Promise<CarouselExport> {
+  async function finishExport(q: Tx | Sql, id: string, status: "done" | "failed", manifest?: Record<string, unknown>): Promise<CarouselExport> {
     if (!isUuid(id)) throw new NotFoundError(`export ${id}`);
-    const [row] = await sql`UPDATE exports SET status = ${status}, manifest = ${manifest ? sql.json(manifest as postgres.JSONValue) : null}, finished_at = ${now()}
+    const [row] = await q`UPDATE exports SET status = ${status}, manifest = ${manifest ? sql.json(manifest as postgres.JSONValue) : null}, finished_at = ${now()}
                             WHERE id = ${id} AND status = 'running' RETURNING *`;
     if (row) return toExport(row);
-    const [cur] = await sql`SELECT * FROM exports WHERE id = ${id}`;
+    const [cur] = await q`SELECT * FROM exports WHERE id = ${id}`;
     if (!cur) throw new NotFoundError(`export ${id}`);
     if (status === "failed") return toExport(cur);
     throw new InvalidInputError(`export ${id} is ${cur.status}, not running`);
@@ -682,8 +696,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
       return sql.begin(async (tx) => {
-        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
-        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        await shareBrand(tx, brandId);
         const at = now();
         const [row] = await tx`INSERT INTO recipe_runs (brand_id, recipe, period_start, period_end, input, storyboard, schema_version, created_by, created_at, updated_at)
                                VALUES (${brandId}, ${input.recipe}, ${input.periodStart}, ${input.periodEnd}, ${json(tx, input.input.json)},
@@ -709,6 +722,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       assertRecipeRun(patch);
       if (!isUuid(id)) throw new NotFoundError(`recipe run ${id}`);
       return sql.begin(async (tx) => {
+        await shareBrandOf(tx, "recipe_runs", id, `recipe run ${id}`);
         const [cur] = await tx`SELECT version FROM recipe_runs WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!cur) throw new NotFoundError(`recipe run ${id}`);
         if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
@@ -727,8 +741,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       assertRunArtifact(input);
       if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
       return sql.begin(async (tx) => {
-        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
-        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        await shareBrandOf(tx, "recipe_runs", runId, `recipe run ${runId}`);
         await tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':run-artifact:' || ${runId}::text || ':' || ${input.kind}::text || ':' || coalesce(${input.cardIndex}::int::text, ''), 0))`;
         const [last] = await tx`SELECT * FROM run_artifacts WHERE run_id = ${runId} AND kind = ${input.kind} AND card_index IS NOT DISTINCT FROM ${input.cardIndex}::int ORDER BY seq DESC LIMIT 1`;
         if (last && last.sha256 === input.sha256 && last.inputs_hash === input.inputsHash) return toArtifact(last);
