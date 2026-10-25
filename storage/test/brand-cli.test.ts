@@ -713,6 +713,65 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.ok(envManifest.includes("@outputs/keep.json"), "a file in the env root is imported");
   assert.deepEqual(await verifyBrand(repos, envShop, blobs, envOutputs), []);
   assert.equal(contentRefusal("a.json", Buffer.from("{\"eyJ\":\"a.b.c\",\"sk_live\":\"x\"}")), null);
+  // The importer and `asset add` share these: signatures over the raw bytes of every type, docker auth, SVG active content.
+  assert.equal(contentRefusal("a.png", Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]), Buffer.from(`AKIA${"A".repeat(16)}`)]))?.kind, "unknown", "a token inside a binary is a guess, not a proof");
+  assert.equal(contentRefusal("f.ttf", Buffer.concat([Buffer.from([0, 1, 0, 0, 0]), Buffer.from("name table http://x.commailto:y@z.example")])), null, "a font name table is not a URL credential");
+  const started = Date.now();
+  assert.equal(contentRefusal("a.txt", Buffer.from("a-".repeat(100_000))), null);
+  assert.ok(Date.now() - started < 1000, "a long a-a-a- input is scanned in linear time");
+  assert.equal(contentRefusal("a.woff", Buffer.from([0x77, 0x4f, 0x46, 0x46, 0, 1, 2, 3])), null);
+  assert.equal(contentRefusal("c.json", Buffer.from('{"auth": "dXNlcjpwYXNzd29yZDEyMw=="}'))?.kind, "secret");
+  assert.equal(contentRefusal("c.json", Buffer.from('{"auth": "short"}')), null);
+  const hostile = [
+    "<svg><script>x()</script></svg>", '<svg onclick = "x()"/>', "<svg><foreignObject/></svg>", '<svg><a href="//example.test/x"/></svg>', '<svg><a href="javascript:x()"/></svg>',
+    '<svg><use href="&#106;avascript:x()"/></svg>', '<svg><use href="java\nscript:x()"/></svg>', "<svg:svg><svg:script>x()</svg:script></svg:svg>",
+    "<svg><a.b:script>x()</a.b:script></svg>", "<svg><é:script>x()</é:script></svg>", "<svg><svg:foreignObject/></svg>",
+    '<svg><animate attributeName="href" values="//evil"/></svg>', '<svg><set attributeName="href" to="//evil"/></svg>',
+    '<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///x">]><svg>&xxe;</svg>', '<?xml-stylesheet href="a.css"?><svg/>', "<svg><![CDATA[x]]></svg>", "<svg><?php x ?></svg>",
+    "<svg><style>@import url(https://example.test/a.css);</style></svg>", '<svg><rect style="fill:url(//example.test/a)"/></svg>',
+    '<svg><rect style="fill:url(&#x68;ttps://example.test/a)"/></svg>', '<svg><rect style="&#64;import"/></svg>', '<svg><rect style="fill:url(\\68ttps://example.test/a)"/></svg>',
+    '<svg><rect style="@\\69mport"/></svg>', "<!--> <script>alert(1)</script> --><svg/>", "<!---> <script>alert(1)</script> --><svg/>", "<!-- --!> <script>alert(1)</script> --><svg/>",
+    "<!--><img src=x onerror=alert(1)>--><svg/>", "<svg><!-- never closed", '<svg><rect fill="image-set(url(#a) 1x)"/></svg>', '<svg><rect style="background:-webkit-image-set(x 1x)"/></svg>',
+    '<svg><rect style="fill:cross-fade(a, b)"/></svg>', '<svg><rect style="fill:element(#a)"/></svg>', '<svg><rect style="fill:src(x)"/></svg>', '<svg><rect xlink:onload="x()"/></svg>',
+    '<rect a="<!--" onmouseover="alert(1)" b="-->" width="1"/>', '<svg a="<!--" onload="alert(1)" b="-->"/>', '<rect a="<!--" style="fill:url(https://example.test/a)" b="-->"/>',
+    '<svg xmlns="https://example.test/ns"/>', '<svg xml:base="https://example.test/"/>', '<svg><rect title=">" onload="x()"/></svg>', "<svg><rect fill=red/></svg>", '<svg><image href="https://example.test/a.png"/></svg>',
+  ];
+  for (const svg of hostile) assert.equal(contentRefusal("a.svg", Buffer.from(svg))?.kind, "unknown", svg);
+  const svgLogo = '<?xml version="1.0"?><!-- logo --><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><linearGradient id="g"><stop offset="0" stop-color="#111"/></linearGradient></defs><rect fill="url(#g)" width="4" height="4"/><text>Prices from 10:00 &amp; up</text></svg>';
+  assert.equal(contentRefusal("a.svg", Buffer.from(svgLogo)), null, "a normal logo, and text with a colon, are accepted");
+  // Linear time on 2 MB hostile inputs: each must finish well inside a second (they take milliseconds when linear, minutes when quadratic).
+  const MB2 = 2 * 1024 * 1024;
+  for (const [file, body] of [["a.svg", "url(" + " ".repeat(MB2) + "x"], ["a.svg", `<svg style="fill:url(${" ".repeat(MB2)}x"/>`], ["a.svg", "<svg" + " ".repeat(MB2) + "x"], ["a.svg", "<!--".repeat(MB2 / 4)],
+    ["a.svg", `<svg fill="${"a".repeat(MB2)}"/>`], ["a.png", "eyJ-".repeat(MB2 / 4)], ["a.txt", "eyJ-".repeat(MB2 / 4)], ["a.txt", "a-".repeat(MB2 / 2)]] as const) {
+    const t0 = Date.now();
+    contentRefusal(file, Buffer.from(body));
+    assert.ok(Date.now() - t0 < 1000, `${file} ${body.slice(0, 12)}: scanned in linear time`);
+  }
+  // Runs of ~6 MB must not overflow the regex stack (a RangeError would abort an import): refused or accepted, never thrown.
+  const MB6 = 6 * 1024 * 1024;
+  for (const [file, body] of [["a.txt", `ghp_${"a".repeat(MB6)}`], ["a.txt", `"auth": "${"A".repeat(MB6)}`], ["a.txt", "-----BEGIN " + "A".repeat(MB6)], ["a.txt", "eyJ" + "a".repeat(MB6) + ".eyJ"],
+    ["a.txt", "sk-" + "a".repeat(MB6)], ["a.txt", "password:" + "a".repeat(MB6)], ["a.svg", "<svg" + ' a="b"'.repeat(MB6 / 6) + "/>"], ["a.png", `AKIA${"A".repeat(MB6)}`], ["a.png", "-----BEGIN " + "A".repeat(MB6)]] as const) {
+    // contentRefusal catches a throw and answers "could not be scanned": that answer means a regex overflowed.
+    assert.notEqual(contentRefusal(file, Buffer.from(body))?.why, "suspicious content: could not be scanned", `${file} ${body.slice(0, 12)}`);
+  }
+  // A binary is searched by literal and only a window is decoded: a secret deep inside a large file is found without a string of the whole file.
+  const big = Buffer.alloc(32 * 1024 * 1024);
+  Buffer.from(`\n${`AKIA${"A".repeat(16)}`}\n`).copy(big, 20 * 1024 * 1024);
+  const originalToString = Buffer.prototype.toString;
+  let longest = 0;
+  Buffer.prototype.toString = function (this: Buffer, ...a: Parameters<Buffer["toString"]>) { longest = Math.max(longest, this.length); return originalToString.apply(this, a); };
+  try {
+    assert.equal(contentRefusal("big.mp4", big)?.kind, "unknown", "a token deep inside a large binary is found");
+    assert.equal(contentRefusal("clean.mp4", Buffer.alloc(32 * 1024 * 1024)), null);
+  } finally {
+    Buffer.prototype.toString = originalToString;
+  }
+  assert.ok(longest > 0 && longest < 64 * 1024, `only a window was decoded (${longest} bytes)`);
+  const jwt = `eyJ${"a".repeat(12)}.eyJ${"b".repeat(12)}.${"c".repeat(12)}`;
+  assert.equal(contentRefusal("a.txt", Buffer.from(`x ${jwt}`))?.kind, "secret", "a real JWT still matches");
+  assert.equal(contentRefusal("a.png", Buffer.concat([Buffer.from([0x89, 0x50]), Buffer.from(` ${jwt}`)]))?.kind, "unknown");
+  assert.equal(contentRefusal("a.svg", Buffer.from('<svg><image xlink:href="data:image/png;base64,iVBORw0KGgo="/></svg>')), null, "an inline raster image is allowed");
+  assert.equal(contentRefusal("a.svg", Buffer.from('<svg><use href="#a"/><path d="M0 0"/></svg>')), null, "an internal reference is not active content");
 
   // B3: a file that cannot be read inside a skipped folder is reported, so it counts as left behind at cutover.
   const strayShop = fixture(label, "example-stray-reel-shop");

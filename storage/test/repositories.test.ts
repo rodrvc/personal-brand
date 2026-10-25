@@ -61,6 +61,13 @@ try {
       owner: createPgRepositories(ownerSql, now),
       restricted: Boolean(role),
       rawSql: sql,
+      setRevisionTime: async (entityId: string, version: number, iso: string) => {
+        // The table is append-only by trigger; the superuser lifts it for this one fixture update.
+        await admin.begin(async (tx) => {
+          await tx.unsafe("SET LOCAL session_replication_role = replica");
+          await tx.unsafe(`UPDATE ${schema}.revisions SET created_at = $1::text::timestamptz WHERE entity_id = $2 AND version = $3`, [iso, entityId, version]);
+        });
+      },
       rawCarouselDocument: async (id: string) => (await sql`SELECT document FROM carousels WHERE id = ${id}`)[0].document,
       cleanup: async () => {
         await sql.end({ timeout: 1 });

@@ -1,13 +1,13 @@
-import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, fstatSync, linkSync, lstatSync, openSync, readSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, linkSync, lstatSync, openSync, readSync, readlinkSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { runChecks } from "@personal-brand/core/checks";
 
 import { putBlob } from "../blob/put-blob.ts";
-import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type WriteMeta } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal } from "../import/allowlist.ts";
+import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { contentRefusal, nameRefusal, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import { toCheckRules } from "../revision-policy.ts";
@@ -31,8 +31,10 @@ interface Ctx {
   repoRoot: string;
   /** Reads a file named on the command line (relative to where the user ran the command). */
   read(path: string): string;
-  /** Like `read`, for binary files, with its own size cap. */
-  readBytes(path: string, max: number): Buffer;
+  /** Like `read`, for binary files, with its own size cap; also returns the `fstat` of the descriptor it read. */
+  readBytes(path: string, max: number): { bytes: Buffer; stat: Stats };
+  /** The random part of the temporary sibling `asset get --out` writes first (a seam for tests). */
+  suffix(): string;
   /** Resolves a path named on the command line the same way `read` does (`~`, INIT_CWD). */
   resolve(path: string): string;
 }
@@ -80,7 +82,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   doc: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 4] },
   guidance: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   recipe: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 3] },
-  rules: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
+  rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
@@ -123,6 +125,7 @@ export const VERB_USAGE = [
   "  brand doc get|put <marca> <tokens|config|identity|spec|template> [<nombre>] [--file <ruta>] [--if-version <n>]",
   "  brand guidance list|get|put <marca> [<nombre>] [--file <ruta> --description <texto>] [--if-version <n>]",
   "  brand recipe get|put <marca> <receta> [--file <ruta>] [--if-version <n>]",
+  "  brand rules add <marca> --file <regla.json> | update <marca> <id> --file <cambios.json> --if-version <n> | disable <marca> <id> --if-version <n>",
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
   "  brand carousel status <marca> <carrusel> --status <estado> --if-version <n> [--scheduled-for <fecha>] [--published-at <fecha>]",
   "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
@@ -146,6 +149,9 @@ function ifVersion(args: Parsed): number | null | undefined {
 /** `--json` prints the value as one JSON document; otherwise the Spanish lines. */
 const out = (args: Parsed, value: unknown, lines: string[]): CliResult => ({ lines: args.flags.has("json") ? [JSON.stringify(value, null, 2)] : lines, exitCode: EXIT.OK });
 
+/** The result of a write verb in `--json`: stored values are brand data too. */
+const wrote = (args: Parsed, value: object, lines: string[]): CliResult => out(args, { trust: "brand-data", ...value }, lines);
+
 /** Whether `path` lies inside the repository (symlinks resolved; the path itself may not exist yet). */
 function insideRepo(ctx: Ctx, path: string): boolean {
   const rel = relative(realNearest(ctx.repoRoot), realNearest(ctx.resolve(path)));
@@ -156,17 +162,18 @@ function insideRepo(ctx: Ctx, path: string): boolean {
  * Reads a user-named file of at most `max` bytes: a regular file, never a followed symlink. The open, the type check
  * and the bounded read all go through one descriptor, so a file that grows meanwhile cannot get past the cap.
  */
-export function readInputBytes(path: string, max = MAX_INPUT_BYTES): Buffer {
+export function readInputBytes(path: string, max = MAX_INPUT_BYTES): { bytes: Buffer; stat: Stats } {
   let fd: number | undefined;
   try {
     // O_NOFOLLOW refuses a symlink; O_NONBLOCK keeps a FIFO from blocking the open (the type check then refuses it).
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-    if (!fstatSync(fd).isFile()) throw new InvalidInputError(`${path} is not a regular file`);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new InvalidInputError(`${path} is not a regular file`);
     const buf = Buffer.alloc(max + 1);
     let n = 0;
     for (let got = 1; got > 0 && n < buf.length; n += got) got = readSync(fd, buf, n, buf.length - n, null);
     if (n > max) throw new InvalidInputError(`${path} is larger than ${max / (1024 * 1024)} MB`);
-    return buf.subarray(0, n);
+    return { bytes: buf.subarray(0, n), stat };
   } catch (error) {
     if (error instanceof InvalidInputError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
@@ -177,7 +184,7 @@ export function readInputBytes(path: string, max = MAX_INPUT_BYTES): Buffer {
 }
 
 /** A `--file` as UTF-8 text, at most 1 MB. */
-export const readInputFile = (path: string): string => readInputBytes(path).toString("utf-8");
+export const readInputFile = (path: string): string => readInputBytes(path).bytes.toString("utf-8");
 
 function parseJson(raw: string): unknown {
   try {
@@ -292,7 +299,7 @@ async function doc(ctx: Ctx, args: Parsed, [sub, slug, kind, name = ""]: string[
   const raw = ctx.read(file);
   const body = TEXT_KINDS.includes(k) ? { text: raw, schemaVersion: 1 } : { json: parseJson(raw), schemaVersion: 1 };
   const put = await ctx.repos.documents.put(brand.id, k, name, body, meta(ctx, expected));
-  return out(args, put, [`Documento ${kind}${name ? `/${name}` : ""} guardado (versión ${put.version}).`]);
+  return wrote(args, put, [`Documento ${kind}${name ? `/${name}` : ""} guardado (versión ${put.version}).`]);
 }
 
 async function guidance(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -315,7 +322,7 @@ async function guidance(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   const description = args.values.get("description");
   if (!file || description === undefined || expected === undefined) return usage();
   const put = await ctx.repos.guidance.put(brand.id, name, { description, body: ctx.read(file) }, meta(ctx, expected));
-  return out(args, put, [`Guidance ${name} guardada (versión ${put.version}).`]);
+  return wrote(args, put, [`Guidance ${name} guardada (versión ${put.version}).`]);
 }
 
 async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -329,14 +336,45 @@ async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Prom
   const file = args.values.get("file");
   if (!file || expected === undefined) return usage();
   const put = await ctx.repos.recipes.put(brand.id, name, { params: parseJson(ctx.read(file)), schemaVersion: 1 }, meta(ctx, expected));
-  return out(args, put, [`Receta ${name} guardada (versión ${put.version}).`]);
+  return wrote(args, put, [`Receta ${name} guardada (versión ${put.version}).`]);
 }
 
-async function rules(ctx: Ctx, args: Parsed, [sub, slug]: string[]): Promise<CliResult> {
-  if (sub !== "list") return usage();
+/** A rule from a JSON file: all of kind, severity, appliesTo and message for `add`; any subset for `update`. Kind and params are validated by the repository. */
+function ruleFromFile(raw: string, complete: boolean): Partial<RuleInput> {
+  const parsed = parseJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new InvalidInputError("the file must hold a JSON object");
+  const o = parsed as Record<string, unknown>;
+  const fields = ["kind", "params", "severity", "appliesTo", "message"];
+  const unknown = Object.keys(o).find((k) => !fields.includes(k));
+  if (unknown !== undefined) throw new InvalidInputError(`unknown rule field "${unknown}"`);
+  const missing = complete ? ["kind", "severity", "appliesTo", "message"].find((k) => o[k] === undefined) : undefined;
+  if (missing) throw new InvalidInputError(`missing rule field "${missing}"`);
+  if (!Object.keys(o).length) throw new InvalidInputError("the file changes nothing");
+  if ((o.params !== undefined && (!o.params || typeof o.params !== "object" || Array.isArray(o.params))) || [o.kind, o.severity, o.message].some((v) => v !== undefined && typeof v !== "string") || (o.appliesTo !== undefined && !Array.isArray(o.appliesTo))) throw new InvalidInputError("a rule field has the wrong type");
+  return complete ? { params: {}, ...o } : o;
+}
+
+async function rules(ctx: Ctx, args: Parsed, [sub, slug, id]: string[]): Promise<CliResult> {
   const brand = await ctx.repos.brands.getBySlug(slug);
   const all = await ctx.repos.rules.list(brand.id, { includeDisabled: true });
-  return out(args, { trust: "brand-data", items: all }, trusted(all.length ? all.map((r) => `${r.id} ${r.value.kind} ${r.value.severity}${r.value.enabled ? "" : " (desactivada)"}: ${r.value.message}`) : ["Sin reglas."]));
+  if (sub === "list") {
+    if (id) return usage();
+    return out(args, { trust: "brand-data", items: all }, trusted(all.length ? all.map((r) => `${r.id} ${r.value.kind} ${r.value.severity}${r.value.enabled ? "" : " (desactivada)"}: ${r.value.message}`) : ["Sin reglas."]));
+  }
+  const file = args.values.get("file");
+  const expected = ifVersion(args);
+  if (sub === "add") {
+    if (id || !file || expected !== null) return usage();
+    const created = await ctx.repos.rules.create(brand.id, ruleFromFile(ctx.read(file), true) as RuleInput, meta(ctx, null, "structural"));
+    return wrote(args, created, [`Regla ${created.value.kind} creada (${created.id}).`]);
+  }
+  // update and disable name an existing rule of THIS brand: the repository takes only the id, so membership is checked here.
+  if (!id || !expected || (sub === "update") !== (file !== undefined)) return usage();
+  const current = all.find((r) => r.id === id);
+  if (!current) throw new NotFoundError(`rule ${id}`);
+  if (sub === "disable" && !current.value.enabled) return wrote(args, current, [`La regla ${id} ya estaba desactivada.`]);
+  const done = sub === "update" ? await ctx.repos.rules.update(id, ruleFromFile(ctx.read(file!), false), meta(ctx, expected)) : await ctx.repos.rules.disable(id, meta(ctx, expected, "structural"));
+  return wrote(args, done, [`Regla ${id} ${sub === "update" ? "actualizada" : "desactivada"} (versión ${done.version}).`]);
 }
 
 async function carousel(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -361,7 +399,7 @@ async function carousel(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
     const scheduledFor = args.values.get("scheduled-for");
     const publishedAt = args.values.get("published-at");
     const done = await ctx.repos.carousels.setStatus(cur.id, { status: status as never, ...(scheduledFor ? { scheduledFor } : {}), ...(publishedAt ? { publishedAt } : {}) }, meta(ctx, expected as number, "status"));
-    return out(args, done, [`Carrusel ${name} en estado ${done.value.status} (versión ${done.version}).`]);
+    return wrote(args, done, [`Carrusel ${name} en estado ${done.value.status} (versión ${done.version}).`]);
   }
   const json = parseJson(ctx.read(file!));
   if (!json || typeof json !== "object" || Array.isArray(json)) throw new InvalidInputError("the file must hold a JSON object");
@@ -370,11 +408,32 @@ async function carousel(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   if (expected === null) {
     if (!title) return usage();
     const created = await ctx.repos.carousels.create(brand.id, { slug: name, title, document }, meta(ctx, null, "structural"));
-    return out(args, created, [`Carrusel ${name} creado.`]);
+    return wrote(args, created, [`Carrusel ${name} creado.`]);
   }
   const cur = await ctx.repos.carousels.get(brand.id, name, rawBody);
   const saved = await ctx.repos.carousels.save(cur.id, { ...(title ? { title } : {}), document }, meta(ctx, expected as number));
-  return out(args, saved, [`Carrusel ${name} guardado (versión ${saved.version}).`]);
+  return wrote(args, saved, [`Carrusel ${name} guardado (versión ${saved.version}).`]);
+}
+
+/**
+ * The first refusal among the directories and the leaf of `path`, judged like the importer judges names: as typed, and by
+ * real path from $HOME down. A path outside $HOME, or a $HOME that itself sits inside a dot-directory, is judged whole.
+ */
+function pathRefusal(ctx: Ctx, path: string, lenientLeaf = false): Refusal | null {
+  const real = realNearest(ctx.resolve(path));
+  const home = realNearest(ctx.env.HOME || homedir());
+  const underHome = relative(home, real);
+  const wholeReal = underHome.startsWith("..") || isAbsolute(underHome) || home.split(sep).some((s) => s.startsWith("."));
+  const typed = path.split(/[\\/]/).filter((x) => x && x !== "." && x !== "..");
+  for (const segments of [typed, (wholeReal ? real : underHome).split(sep).filter(Boolean)]) {
+    for (const [i, segment] of segments.entries()) {
+      const leaf = i === segments.length - 1;
+      const refusal = nameRefusal(segment, !leaf);
+      // A destination may have any extension; only dot, key and secret-like names are refused for it.
+      if (refusal && !(lenientLeaf && leaf && refusal.why === "not a known content type")) return refusal;
+    }
+  }
+  return null;
 }
 
 async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promise<CliResult> {
@@ -395,20 +454,27 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
       const body = (await ctx.blobs.get(a.value.blobKey)).body;
       if (createHash("sha256").update(body).digest("hex") !== a.value.sha256) throw new Error(`the stored bytes of asset ${arg} do not match its hash`);
       if (insideRepo(ctx, target)) return refused("El destino debe quedar fuera del repo. No se escribió nada.");
+      if (pathRefusal(ctx, target, true)) return refused("El destino tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se escribió nada.");
       // Write a sibling first, then hard-link it into place: `link` fails on an existing target, so nothing is overwritten
       // and a failed write leaves no partial file at the target.
       const final = ctx.resolve(target);
-      const tmp = `${final}.${randomBytes(6).toString("hex")}.tmp`;
+      const tmp = `${final}.${ctx.suffix()}.tmp`;
       let created = false;
       try {
-        writeFileSync(tmp, body, { flag: "wx" });
+        // `wx` fails on a file that is already there; `created` is set only once this call owns the file, before any byte is written.
+        const fd = openSync(tmp, "wx");
         created = true;
+        try {
+          for (let done = 0; done < body.length; ) done += writeSync(fd, body, done);
+        } finally {
+          closeSync(fd);
+        }
         linkSync(tmp, final);
       } catch (error) {
         throw new InvalidInputError(`cannot write ${target} (${(error as NodeJS.ErrnoException).code ?? "error"}); an existing file is never overwritten`);
       } finally {
         // Only a sibling this call created is removed; a file that was already there is never touched.
-        if (created) unlinkSync(tmp);
+        if (created) try { unlinkSync(tmp); } catch { /* the original error (or the success) is not hidden by a failed cleanup */ }
       }
     }
     return out(args, { trust: "brand-data", ...a.value, version: a.version }, trusted([text(a.value), ...(target ? [`Guardado en ${target}.`] : [])]));
@@ -417,35 +483,35 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   if (!ctx.blobs) return noBucket();
   const name = basename(ctx.resolve(arg));
   const refuse = (why: string) => refused(`Archivo rechazado (${why}). No se subió nada.`);
-  // Every directory on the path as typed and on its real path (from $HOME down) is judged like a name: a dot-directory
-  // such as `.docker/` or `.aws/` is refused, as are secret-like names. `.` and `..` are navigation, not names.
-  const real = realNearest(ctx.resolve(arg));
-  const underHome = relative(realNearest(ctx.env.HOME || homedir()), real);
-  const typed = arg.split(/[\\/]/).filter((x) => x && x !== "." && x !== "..");
-  const realSegments = (underHome.startsWith("..") || isAbsolute(underHome) ? real : underHome).split(sep).filter(Boolean);
-  for (const [i, segment] of [...typed, ...realSegments].entries()) {
-    const byName = nameRefusal(segment, i !== typed.length - 1 && i !== typed.length + realSegments.length - 1);
-    if (byName) return refuse(byName.why);
-  }
+  // 1. Look at the file, 2. judge every directory and name on its path, 3. read through one descriptor, 4. check that what was read is what was judged.
+  if (!lstatSync(ctx.resolve(arg), { throwIfNoEntry: false })) throw new InvalidInputError(`cannot read ${arg} (ENOENT)`);
+  const judged = realNearest(ctx.resolve(arg));
+  const judgedStat = lstatSync(judged); // the real file, not a link to it
+  const byName = pathRefusal(ctx, arg);
+  if (byName) return refuse(byName.why);
   const ext = name.split(".").pop()!.toLowerCase();
   if (!Object.hasOwn(MAGIC, ext) && ext !== "webp" && !TEXT_ASSETS.includes(ext)) return refuse("tipo no admitido por asset add");
-  const bytes = ctx.readBytes(arg, MAX_ASSET_BYTES);
+  const { bytes, stat } = ctx.readBytes(arg, MAX_ASSET_BYTES);
+  if (stat.dev !== judgedStat.dev || stat.ino !== judgedStat.ino || realNearest(ctx.resolve(arg)) !== judged) return refuse("el archivo cambió mientras se leía");
+  if (stat.nlink > 1) return refuse("el archivo tiene enlaces duros: su ruta real no es verificable");
   // A binary type must start with the bytes of that type (the extension alone proves nothing); text is scanned for secrets.
   const genuine = ext === "webp" ? mimeOf(bytes, name) === "image/webp" : !Object.hasOwn(MAGIC, ext) || MAGIC[ext].some((m) => bytes.subarray(0, m.length / 2).toString("hex") === m);
   if (!genuine) return refuse(`el contenido no es ${ext}`);
   const byContent = contentRefusal(name, bytes);
-  if (byContent) return refuse(byContent.why);
+  if (byContent) return refuse(ext === "svg" && byContent.kind === "unknown" ? `${byContent.why}; reexporta como SVG plano (sin DOCTYPE ni <style>, atributos con comillas; p. ej. SVGO o Figma) o conviértelo a PNG` : byContent.why);
   const mime = mimeOf(bytes, name);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const kind = args.values.get("kind") ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
   const tags = args.values.get("tags")?.split(",").map((t) => t.trim()).filter(Boolean);
   const family = args.values.get("family");
-  // Everything the registration checks is checked here first, so a refused write leaves no blob behind.
+  // Everything the registration checks is checked here first, so a refused write leaves no blob behind. Upload and
+  // register are two steps, but a retry is safe: `putBlob` accepts identical bytes under their hash-derived key, so
+  // after a failed register the same command uploads nothing new and registers (only a registered row is "ya registrado").
   if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (family && family.length > 100)) throw new InvalidInputError("invalid --kind, --tags (at most 20 of 50 characters) or --family (at most 100 characters)");
   try {
     await putBlob(ctx.blobs, brand.id, bytes, mime);
     const done = await ctx.repos.assets.register(brand.id, { sha256, kind: kind as AssetKind, mime, bytes: bytes.length, origin: "manual", status: "candidate", ...(tags?.length ? { tags } : {}), ...(family ? { family } : {}) }, meta(ctx, null, "structural"));
-    return out(args, done, [`Asset ${done.value.assetId} registrado (candidato).`]);
+    return wrote(args, done, [`Asset ${done.value.assetId} registrado (candidato).`]);
   } catch (error) {
     if (error instanceof AlreadyExistsError) return { lines: [`Ese archivo ya está registrado como asset ${sha256.slice(0, 16)}.`], exitCode: EXIT.CONFLICT };
     throw error;
@@ -464,15 +530,15 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
       const name = args.values.get("name");
       if (!name || /[\p{Cc}\u2028\u2029]/u.test(name)) return usage();
       const b = await repos.brands.create({ slug: p[0], displayName: name }, meta(ctx, null, "structural"));
-      return out(args, { slug: b.value.slug, status: b.value.status }, [`Marca "${p[0]}" creada.`]);
+      return wrote(args, { slug: b.value.slug, status: b.value.status }, [`Marca "${p[0]}" creada.`]);
     }
     case "archive":
     case "unarchive": {
       const target = verb === "archive" ? "archived" : "active";
       const b = await repos.brands.getBySlug(p[0]);
-      if (b.value.status === target) return out(args, { slug: p[0], status: target }, [`La marca "${p[0]}" ya estaba ${verb === "archive" ? "archivada" : "activa"}.`]);
+      if (b.value.status === target) return wrote(args, { slug: p[0], status: target }, [`La marca "${p[0]}" ya estaba ${verb === "archive" ? "archivada" : "activa"}.`]);
       const done = await repos.brands[verb](b.id, meta(ctx, b.version, "archive"));
-      return out(args, { slug: p[0], status: done.value.status }, [`Marca "${p[0]}" ${verb === "archive" ? "archivada" : "reactivada"}.`]);
+      return wrote(args, { slug: p[0], status: done.value.status }, [`Marca "${p[0]}" ${verb === "archive" ? "archivada" : "reactivada"}.`]);
     }
     case "purge": return purge(ctx, args, p[0]);
     case "show": return show(ctx, args, p[0]);

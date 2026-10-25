@@ -17,6 +17,8 @@ export interface Harness {
   rawCarouselDocument?(id: string): Promise<unknown>;
   /** A raw `brand_app` connection, to probe constraints and grants (Postgres only). */
   rawSql?: import("postgres").Sql;
+  /** Moves one revision's `created_at` to the given instant, microseconds included (Postgres only; the app clock has milliseconds). */
+  setRevisionTime?(entityId: string, version: number, iso: string): Promise<void>;
   cleanup(): Promise<void>;
 }
 /** `now` is the clock the repositories must use, so the suite can move time. */
@@ -203,6 +205,10 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       const all = await r.revisions.listSince(a.id, "brand_guidance", "1970-01-01T00:00:00Z");
       assert.deepEqual(all.map((x) => x.version).sort(), [1, 1, 1, 2], "every guidance revision of the brand, none of another brand");
       assert.ok(all.every((x) => x.brandId === a.id && x.entityType === "brand_guidance"));
+      // Exclusive at millisecond resolution on both backends: a revision whose time only differs from the cursor below the millisecond is not "since" it.
+      const last = all.at(-1)!;
+      await h.setRevisionTime?.(last.entityId, last.version, last.createdAt.replace("Z", "400Z"));
+      assert.deepEqual(await r.revisions.listSince(a.id, "brand_guidance", last.createdAt), [], "sub-millisecond digits do not pass the cursor");
       assert.deepEqual(await r.revisions.listSince(a.id, "brand_recipe", "1970-01-01T00:00:00Z"), [], "scoped by entity type");
       assert.deepEqual(await r.revisions.listSince(a.id, "brand_guidance", all.at(-1)!.createdAt), [], "the cursor is exclusive");
       assert.deepEqual(await r.revisions.listSince("00000000-0000-4000-8000-000000000000", "brand_guidance", "1970-01-01T00:00:00Z"), []);
