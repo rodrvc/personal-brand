@@ -86,7 +86,7 @@ function tooBroad(real: string, dir: string, root: string, env: NodeJS.ProcessEn
  * folder itself, `$HOME` or a folder that holds the home, the brand folders or another brand's folder, or an `outputs.reels` that
  * leaves the root, or a config file that cannot be read). The caller reports `unusable` as left-behind data; a missing root is a `notice`.
  */
-export function resolveOutputs(dir: string, root: string, slug: string, env: NodeJS.ProcessEnv, notices: string[]): { outputs: OutputsRoot | null; unusable?: string } {
+export function resolveOutputs(dir: string, root: string, slug: string, env: NodeJS.ProcessEnv, notices: string[], quietMissing = false): { outputs: OutputsRoot | null; unusable?: string } {
   const fromEnv = env.BRAND_OUTPUTS_ROOT?.trim();
   const { config, problem } = readOutputsConfig(dir);
   if (problem) return { outputs: null, unusable: problem };
@@ -99,7 +99,7 @@ export function resolveOutputs(dir: string, root: string, slug: string, env: Nod
   } catch (error) {
     // Only a path that is not there is "missing"; any other failure (EACCES, ELOOP...) means data may be there and unreadable.
     if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return { outputs: null, unusable: `outputs root ${base} cannot be resolved (${(error as NodeJS.ErrnoException).code ?? "error"}): not read` };
-    if (fromEnv || config.base_dir) notices.push(`outputs root ${base} does not exist`);
+    if ((fromEnv || config.base_dir) && !quietMissing) notices.push(`outputs root ${base} does not exist`);
     return { outputs: null };
   }
   if (real === sep || (real !== root && within(real, root))) return { outputs: null, unusable: `outputs root ${real} is "/" or an ancestor of the brand folder: not read` };

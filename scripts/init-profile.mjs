@@ -21,5 +21,8 @@ scripts/brand-denylist.local.txt (ignorado por git) y revisa el árbol con:
 Para probar el motor sin marca real usa los perfiles ficticios profiles/example*.
 `;
 
-console.error(NOTICE);
-process.exit(2);
+// `--help` just prints the pointer (exit 0). Any other run exits 2 ON PURPOSE: automation that used to
+// create a profile through this script must fail loudly, not carry on believing a folder exists.
+const asksHelp = process.argv.slice(2).some((a) => a === "--help" || a === "-h");
+(asksHelp ? console.log : console.error)(NOTICE);
+process.exit(asksHelp ? 0 : 2);

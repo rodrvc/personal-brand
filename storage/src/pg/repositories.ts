@@ -792,15 +792,18 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  const toDrill = (r: Row): RestoreDrill => ({ id: r.id, databaseName: r.database_name, status: r.status, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, recordedAt: iso(r.recorded_at)!, detail: r.detail });
+  const toDrill = (r: Row): RestoreDrill => ({ id: r.id, databaseName: r.database_name, status: r.status, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, recordedAt: iso(r.recorded_at)!, ageMs: Number(r.age_ms), detail: r.detail });
   const restoreDrills: RestoreDrillRepository = {
     async record(input) {
       const [row] = await sql`INSERT INTO restore_drills (database_name, status, started_at, finished_at, detail)
-                              VALUES (${input.databaseName}, ${input.status}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.detail)}) RETURNING *`;
+                              VALUES (${input.databaseName}, ${input.status}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.detail)})
+                              RETURNING *, (extract(epoch FROM now() - recorded_at) * 1000)::float8 AS age_ms`;
       return toDrill(row);
     },
+    // Equal recorded_at (two rows in one transaction share now()) is broken by the random uuid: not insertion order. Drills are separate commands, so a tie does not arise in practice.
     async latest() {
-      const [row] = await sql`SELECT * FROM restore_drills WHERE database_name = current_database() ORDER BY recorded_at DESC, id LIMIT 1`;
+      const [row] = await sql`SELECT *, (extract(epoch FROM now() - recorded_at) * 1000)::float8 AS age_ms FROM restore_drills WHERE database_name = current_database()
+                          ORDER BY recorded_at DESC, id LIMIT 1`;
       return row ? toDrill(row) : null;
     },
   };

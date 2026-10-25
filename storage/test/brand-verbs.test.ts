@@ -625,7 +625,7 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const files = readdirSync(bundle).sort();
     assert.equal(files.length, earlier + 1, "a re-run needs no cleanup: the bundle name carries a timestamp, so the final run adds exactly one file");
     const written = JSON.parse(readFileSync(join(bundle, files.at(-1)!), "utf-8"));
-    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0008_restore_drills.sql", before, doomed.id, 3, 1]);
+    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0009_restore_drills_column_grants.sql", before, doomed.id, 3, 1]);
     assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 15 tables are empty for the purged brand");
     assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");
     assert.equal((await blobs.list("brands/")).length, 2, "the bucket never loses an object");

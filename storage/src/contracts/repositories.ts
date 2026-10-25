@@ -396,13 +396,15 @@ export interface RestoreDrill {
   finishedAt: string;
   /** The store's clock at insert (server `now()`); the newest drill is decided by this, not by the client-supplied times. */
   recordedAt: string;
-  /** Per-table row counts when verified; the failure text when failed. Never data. */
+  /** The store's own clock minus `recordedAt`, in ms (server `now() - recorded_at`): the age the gate judges, so no client clock decides it. */
+  ageMs: number;
+  /** Per-table row counts when verified; a failure code and a short, redacted error line when failed. Never data. */
   detail: Record<string, unknown>;
 }
 
 /** Insert-only log of backup restore drills; the import backup gate reads the newest one. */
 export interface RestoreDrillRepository {
-  record(input: Omit<RestoreDrill, "id" | "recordedAt">): Promise<RestoreDrill>;
+  record(input: Omit<RestoreDrill, "id" | "recordedAt" | "ageMs">): Promise<RestoreDrill>;
   /** The newest drill by `recordedAt` of the current database, or null when none was ever run. */
   latest(): Promise<RestoreDrill | null>;
 }

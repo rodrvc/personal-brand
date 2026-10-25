@@ -9,10 +9,10 @@ import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, PurgeRefusedError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
-import { DEFAULT_LEGACY_PREFIX, LEGACY_SOURCE, LegacyBucketError, withLegacyBucket } from "../import/legacy-bucket.ts";
+import { DEFAULT_LEGACY_PREFIX, LEGACY_SOURCE, LegacyBucketError, OUTPUTS_MARKER, withLegacyBucket } from "../import/legacy-bucket.ts";
 import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
-import { createPgRepositories, drillRefusal, DrillToolMissingError, openPurger, runBackupDrill, type Purger } from "../pg/index.ts";
+import { createPgRepositories, drillRefusal, DrillNotRunError, openPurger, runBackupDrill, type DrillFailureCode, type DrillResult, type Purger } from "../pg/index.ts";
 
 export type { CliResult };
 
@@ -97,11 +97,11 @@ export function isLocalDatabase(url: string | undefined): boolean {
  * Backup gate (design section 10): a write to a remote database needs a recent verified restore drill, read from that
  * database itself. Null when the write may go on. Local databases never reach it.
  */
-async function backupGate(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv, now: Date): Promise<CliResult | null> {
+async function backupGate(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv): Promise<CliResult | null> {
   let sql: Sql | null = null;
   try {
     if (!repos) sql = connect(env);
-    const why = await drillRefusal((repos ?? createPgRepositories(sql!)).restoreDrills, now);
+    const why = await drillRefusal((repos ?? createPgRepositories(sql!)).restoreDrills);
     return why ? { lines: [REMOTE_REFUSAL, why], exitCode: EXIT.REFUSED } : null;
   } catch (error) {
     return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
@@ -110,21 +110,44 @@ async function backupGate(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv
   }
 }
 
-/** `brand backup drill`: dumps `DATABASE_URL`, restores it into a scratch database (`DATABASE_DRILL_URL`, default the same server), verifies it and records the result. */
+const DRILL_STATUS: Record<DrillResult["status"], string> = { verified: "verificado", failed: "falló" };
+/** Spanish reason of each failure code; being a total `Record`, a code added in drill.ts does not compile until it is mapped here. */
+const DRILL_WHY: Record<DrillFailureCode, (detail: Record<string, unknown>) => string> = {
+  no_tables: () => "el esquema no tiene tablas",
+  counts_differ: (d) => `las filas no coinciden tras restaurar (${(d.differing as string[] | undefined)?.join(", ")})`,
+  tool_failed: () => "pg_dump o pg_restore fallaron (el detalle queda en el registro)",
+  verify_failed: () => "no se pudieron leer los conteos de filas (el detalle queda en el registro)",
+};
+
+/** The Spanish report of a finished drill, and its exit code: a leaked scratch database or a failed drill is not a success. */
+function describeDrill(outcome: DrillResult): CliResult {
+  const leaked = outcome.detail.scratchLeaked;
+  const why = outcome.status === "failed" ? `: ${DRILL_WHY[outcome.detail.code as DrillFailureCode]?.(outcome.detail) ?? "motivo desconocido"}` : "";
+  if (leaked) return { lines: [`El simulacro terminó (${DRILL_STATUS[outcome.status]}${why}), pero no se pudo borrar la base temporal "${leaked}": bórrala a mano.`], exitCode: EXIT.UNEXPECTED };
+  if (outcome.status === "verified") return { lines: [`Simulacro verificado: ${Object.keys(outcome.detail.tables as object).length} tablas restauradas con las mismas filas.`], exitCode: EXIT.OK };
+  return { lines: [`El simulacro falló${why}.`], exitCode: EXIT.UNEXPECTED };
+}
+
+/**
+ * `brand backup drill`: dumps `DATABASE_URL` (a direct connection, not a pooler), restores it into a scratch database (`DATABASE_DRILL_URL`,
+ * default the same server), verifies it and records the result. The outcome is reported even when it cannot be recorded.
+ */
 async function backupDrill(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv, now: () => Date, run = runBackupDrill): Promise<CliResult> {
   if (!env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
+  let outcome: DrillResult;
+  try {
+    outcome = await run({ sourceUrl: env.DATABASE_URL, scratchUrl: env.DATABASE_DRILL_URL, pgDump: env.PG_DUMP_BIN, pgRestore: env.PG_RESTORE_BIN, prepare: env.DATABASE_PREPARE !== "false", now });
+  } catch (error) {
+    return { lines: [error instanceof DrillNotRunError ? `No se hizo el simulacro: ${error.message}.` : `Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
+  }
+  const report = describeDrill(outcome);
   let sql: Sql | null = null;
   try {
-    const outcome = await run({ sourceUrl: env.DATABASE_URL, scratchUrl: env.DATABASE_DRILL_URL, pgDump: env.PG_DUMP_BIN, pgRestore: env.PG_RESTORE_BIN, now });
     if (!repos) sql = connect(env);
     await (repos ?? createPgRepositories(sql!)).restoreDrills.record(outcome);
-    const leaked = outcome.detail.scratchLeaked;
-    if (leaked) return { lines: [`El simulacro terminó (${outcome.status}), pero no se pudo borrar la base temporal "${leaked}": bórrala a mano.`], exitCode: EXIT.UNEXPECTED };
-    if (outcome.status === "verified") return { lines: [`Simulacro verificado: ${Object.keys(outcome.detail.tables as object).length} tablas restauradas con las mismas filas.`], exitCode: EXIT.OK };
-    const why = { no_tables: "el esquema no tiene tablas", counts_differ: `las filas no coinciden tras restaurar (${(outcome.detail.differing as string[] | undefined)?.join(", ")})` }[outcome.detail.code as string] ?? "pg_dump o pg_restore fallaron (el detalle queda en el registro)";
-    return { lines: [`El simulacro falló: ${why}.`], exitCode: EXIT.UNEXPECTED };
+    return report;
   } catch (error) {
-    return { lines: [error instanceof DrillToolMissingError ? `No se hizo el simulacro: ${error.message}.` : `Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
+    return { lines: [...report.lines, `No se pudo registrar el resultado (${(error as Error).message}): el candado de respaldo no cambió.`], exitCode: EXIT.UNEXPECTED };
   } finally {
     await sql?.end({ timeout: 1 });
   }
@@ -297,7 +320,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
       ownerRefused = ownerRefusal([target.slug], env, args.values.get("owner-opt-in"));
       if (ownerRefused && target.identity) return { lines: [ownerRefused], exitCode: EXIT.REFUSED };
       if (!isLocalDatabase(env.DATABASE_URL)) {
-        const gate = await backupGate(repos, env, now());
+        const gate = await backupGate(repos, env);
         if (gate) return gate;
       }
     }
@@ -324,22 +347,24 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
       await verbSql?.end({ timeout: 1 });
     }
   }
-  let from: string;
-  let legacy: string | null = null; // the slug, when the source is a legacy bucket
+  /** Where a brand is read from: a folder, or a legacy bucket (by slug). Never an empty-string placeholder. */
+  let source: { kind: "folder"; from: string } | { kind: "legacy"; slug: string };
   if (verb === "import") {
     const asked = args.values.get("from")!;
     if (LEGACY_SOURCE.test(asked)) {
-      legacy = asked.replace(LEGACY_SOURCE, "");
-      if (!SLUG_FORMAT.test(legacy)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
-    }
-    from = legacy ? "" : fromCwd(asked, env);
-    const refused = ownerRefusal(legacy ? [legacy] : folderNames(from), env, args.values.get("owner-opt-in"));
+      const named = asked.replace(LEGACY_SOURCE, "");
+      if (!SLUG_FORMAT.test(named)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
+      source = { kind: "legacy", slug: named };
+    } else source = { kind: "folder", from: fromCwd(asked, env) };
+    // The brand's slug is the folder name (or the legacy slug) and nothing inside the files can declare another, so this guard covers both sources.
+    const refused = ownerRefusal(source.kind === "legacy" ? [source.slug] : folderNames(source.from), env, args.values.get("owner-opt-in"));
     if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
-    if (legacy && !blobs) return { lines: ["Falta el bucket (S3_BUCKET, S3_ACCESS_KEY_ID y S3_SECRET_ACCESS_KEY): no se puede leer legacy-bucket."], exitCode: EXIT.UNEXPECTED };
+    if (source.kind === "legacy" && !blobs) return { lines: ["Falta el bucket (S3_BUCKET, S3_ACCESS_KEY_ID y S3_SECRET_ACCESS_KEY): no se puede leer legacy-bucket."], exitCode: EXIT.UNEXPECTED };
   } else {
     if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: EXIT.REFUSED };
     if (LEGACY_SOURCE.test(args.values.get("from") ?? "")) return { lines: ["cutover no admite legacy-bucket: importa con brand import --from legacy-bucket:<marca> y corta desde la carpeta de la marca."], exitCode: EXIT.REFUSED };
-    from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
+    const from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
+    source = { kind: "folder", from };
     const refused = ownerRefusal([slug!, ...folderNames(from)], env, args.values.get("owner-opt-in"));
     if (refused) return { lines: [refused], exitCode: EXIT.REFUSED };
     if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: EXIT.REFUSED };
@@ -347,25 +372,27 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
 
   // Backup gate (§10): a real write to a remote database needs a recent verified restore drill.
   if (!dryRun && !isLocalDatabase(env.DATABASE_URL)) {
-    const gate = await backupGate(repos, env, now());
+    const gate = await backupGate(repos, env);
     if (gate) return gate;
   }
-  if (!legacy && !existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: EXIT.NOT_FOUND };
+  if (source.kind === "folder" && !existsSync(source.from)) return { lines: [`No existe la carpeta ${source.from}.`], exitCode: EXIT.NOT_FOUND };
 
   if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
   let sql: Sql | null = null;
   try {
     if (!repos) sql = connect(env);
     const r = repos ?? createPgRepositories(sql!);
-    if (verb === "cutover") return await cutover(r, blobs, env, slug!, from, author, args.flags.has("partial"));
+    if (verb === "cutover" && source.kind === "folder") return await cutover(r, blobs, env, slug!, source.from, author, args.flags.has("partial"));
+    // Joined exactly like the editor does (`<prefix><slug>/`), so a bucket it wrote is read back as written.
     const prefix = env.S3_PREFIX ?? DEFAULT_LEGACY_PREFIX;
+    const noSlash = source.kind === "legacy" && prefix !== "" && !prefix.endsWith("/") ? [`Aviso: S3_PREFIX "${prefix}" no termina en "/": se leen las claves "${prefix}<marca>/" tal como las escribió el editor.`] : [];
     // A legacy bucket is copied into a temporary folder and imported by the same code as any folder; the copy is removed afterwards.
-    const report = legacy
-      ? await withLegacyBucket(blobs!, prefix, legacy, env, (src) => importBrand(r, { from: src.dir, dryRun, author, blobs, env: src.env, extraSkipped: src.skipped, quietNotices: src.quietNotices, origin: `legacy-bucket:${prefix}${legacy}` }))
-      : await importBrand(r, { from, dryRun, author, blobs, env });
-    return { lines: describe(report), exitCode: report.counts.conflict ? EXIT.CONFLICT : EXIT.OK };
+    const report = source.kind === "legacy"
+      ? await withLegacyBucket(blobs!, prefix, source.slug, env, (src) => importBrand(r, { from: src.dir, dryRun, author, blobs, env: src.env, extraSkipped: src.skipped, origin: `legacy-bucket:${prefix}${source.slug}`, outputsLabel: OUTPUTS_MARKER }))
+      : await importBrand(r, { from: source.from, dryRun, author, blobs, env });
+    return { lines: [...noSlash, ...describe(report)], exitCode: report.counts.conflict ? EXIT.CONFLICT : EXIT.OK };
   } catch (error) {
-    if (error instanceof LegacyBucketError) return { lines: [error.message], exitCode: error.empty ? EXIT.NOT_FOUND : EXIT.UNEXPECTED };
+    if (error instanceof LegacyBucketError) return { lines: [error.message], exitCode: error.kind === "empty" ? EXIT.NOT_FOUND : EXIT.REFUSED };
     if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: EXIT.REFUSED };
     return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
   } finally {

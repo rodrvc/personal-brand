@@ -80,10 +80,12 @@ const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * Same semantics as the Postgres repositories (versions, conflicts, revision policy). `now` is injectable for tests.
+ * `database` names the one database this store models: `restoreDrills.latest()` then reads only drills of that name, as the Postgres one
+ * does with `current_database()`; left out, it reads every drill.
  * It does not model database roles: the owner and app views are the same object, so write-permission
  * differences (rules and guidance are owner-only) are only enforced and tested against Postgres.
  */
-export function createMemoryRepositories(now: () => Date = () => new Date()): MemoryRepositories {
+export function createMemoryRepositories(now: () => Date = () => new Date(), database?: string): MemoryRepositories {
   const brands = new Map<string, Versioned<Brand>>();
   const docs = new Map<string, DocRow>();
   const log: Revision[] = [];
@@ -649,12 +651,15 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   const drillRows: RestoreDrill[] = [];
   const restoreDrills: RestoreDrillRepository = {
     async record(input) {
-      const row = { ...structuredClone(input), startedAt: parseInstant(input.startedAt, "startedAt")!.toISOString(), finishedAt: parseInstant(input.finishedAt, "finishedAt")!.toISOString(), recordedAt: now().toISOString(), id: randomUUID() };
+      const row = { ...structuredClone(input), startedAt: parseInstant(input.startedAt, "startedAt")!.toISOString(), finishedAt: parseInstant(input.finishedAt, "finishedAt")!.toISOString(), recordedAt: now().toISOString(), id: randomUUID(), ageMs: 0 };
       drillRows.push(row);
       return structuredClone(row);
     },
     async latest() {
-      return structuredClone([...drillRows].reverse().sort((a, b) => cmp(b.recordedAt, a.recordedAt))[0] ?? null) // stable: a tie goes to the later insert;
+      const mine = drillRows.filter((r) => database === undefined || r.databaseName === database);
+      // Newest recordedAt; a tie goes to the later insert (Postgres breaks it by random uuid, so a tie must not matter to a caller).
+      const newest = [...mine].reverse().sort((a, b) => cmp(b.recordedAt, a.recordedAt))[0];
+      return newest ? structuredClone({ ...newest, ageMs: now().getTime() - Date.parse(newest.recordedAt) }) : null;
     },
   };
 
