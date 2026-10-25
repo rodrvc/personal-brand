@@ -2,7 +2,7 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { BlobStore } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal } from "./allowlist.ts";
+import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT } from "./allowlist.ts";
 import { OUTPUTS_LABEL, type OutputsRoot } from "./outputs.ts";
 import { readRegular, sha256 } from "./shared.ts";
 
@@ -99,8 +99,9 @@ export function planLegacy(ctx: { root: string; outputs: OutputsRoot | null; use
     }
     const bytes = readRegular(base, join(base, rel), label, sink);
     const why = bytes && contentRefusal(basename(rel), bytes);
-    // An SVG outside the static-drawing allowlist blocks the cutover like any other unknown file; say how to get past it.
-    const hint = why && why.kind === "unknown" && /\.svg$/i.test(rel) ? "; reexpórtalo como SVG plano o conviértelo a PNG, o corta con --partial y agrégalo después" : "";
+    // An SVG outside the static-drawing allowlist blocks the cutover like any other unknown file, even one that passed before the
+    // screen existed (editor exports with a <style> block or editor namespaces): say so, and how to get past it (design §8).
+    const hint = why?.code === "svg-allowlist" ? `; el filtro de SVG es estricto y bloquea el corte a propósito: ${SVG_REEXPORT_HINT}, o corta con --partial y agrégalo después` : "";
     if (why) (why.kind === "secret" ? refused : unimported).add(`${label} (${why.why}${hint})`);
     else if (bytes) {
       files.set(label, { path: label, sha256: sha256(bytes), base, file: join(base, rel) });

@@ -8,8 +8,10 @@ import { join } from "node:path";
 import postgres from "postgres";
 
 import { FakeObjectStore } from "../src/blob/index.ts";
+import { putAt } from "../src/blob/put-blob.ts";
 import { runCli } from "../src/cli/brand.ts";
-import { EXIT, IDENTITY_KINDS, writeTarget } from "../src/cli/verbs.ts";
+import { carouselExportKey } from "../src/contracts/keys.ts";
+import { EXIT, IDENTITY_KINDS, runVerb, writeTarget } from "../src/cli/verbs.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
 import { createPgRepositories } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
@@ -382,6 +384,13 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const repointed = await runCli(["asset", "add", "acme-real", "lnk/x.png"], env, repos, blobs, { beforeRead: () => (rmSync(join(home, "lnk")), symlinkSync(join(home, "d2"), join(home, "lnk"))) });
   assert.equal(repointed.exitCode, 6, "the real path changed after the check");
   assert.equal((await w("asset", "get", "acme-real", id, "--out", "copy.bin")).exitCode, 0, "a destination may have any extension");
+  // R2: the lenient destination leaf follows the refusal's code, not its English text; a hidden or secret-like leaf is still refused.
+  assert.equal((await w("asset", "get", "acme-real", id, "--out", ".copy.png")).exitCode, 6, "a dotfile destination stays refused");
+  // R3: the handler itself rejects an unknown subcommand before any lookup (the CLI check in front of it is not the only guard).
+  const untouchable = new Proxy({}, { get: () => { throw new Error("the repositories were touched"); } });
+  const stray = { positionals: ["enable", "acme-real", "id"], values: new Map([["if-version", "1"]]), flags: new Set<string>() };
+  assert.equal((await runVerb({ repos: untouchable } as never, "rules", stray)).exitCode, 2, "an unknown rules subcommand never reaches disable");
+
   // The file read must be the file checked: a swap between the path check and the read is refused.
   writeFileSync(join(home, "swap.png"), png);
   writeFileSync(join(home, "swap-new.png"), Buffer.concat([png, Buffer.from("x")]));
@@ -406,6 +415,32 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   assert.equal((await w("asset", "add", "acme-real", "retry.png")).exitCode, 0, "the retry registers the asset");
   assert.equal((await w("asset", "add", "acme-real", "retry.png")).exitCode, 3, "only now it is already registered");
   assert.deepEqual([(await repos.assets.list(real.id)).length, (await blobs.list("")).length], [3, 3]);
+
+  // export pull (a read verb): one finished version out of the bucket, never overwriting, judged like asset get --out.
+  const c2 = await repos.carousels.get(real.id, "c2", (b) => b);
+  const finished = await repos.exports.reserveNextVersion(c2.id, c2.version);
+  await repos.exports.complete(finished.id, {});
+  for (const [name, body] of [["01.png", png], ["manifest.json", Buffer.from("{}")]] as const) await putAt(blobs, carouselExportKey(real.id, c2.id, 1, name), body);
+  const pulled = await w("export", "pull", "acme-real", "c2", "--out", "pulled");
+  assert.equal(pulled.exitCode, 0);
+  assert.deepEqual([readdirSync(join(home, "pulled")).sort(), readFileSync(join(home, "pulled", "01.png")).equals(png)], [["01.png", "manifest.json"], true]);
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "pulled")).exitCode, 2, "an existing file is never overwritten");
+  assert.deepEqual(readdirSync(join(home, "pulled")).sort(), ["01.png", "manifest.json"], "a refused pull leaves what was there");
+  await repos.exports.reserveNextVersion(c2.id, c2.version); // v2 stays `running`: it is not a finished export
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "pulled-b")).exitCode, 0, "the highest finished version is the default");
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "pulled-c", "--version", "2")).exitCode, 4, "a running export is not pulled");
+  for (const argv of [["export", "pull", "acme-real", "c2"], ["export", "pull", "acme-real", "c2", "--out", "x", "--version", "0"], ["export", "push", "acme-real", "c2", "--out", "x"]]) assert.equal((await w(...argv)).exitCode, 2, argv.join(" "));
+  assert.equal((await w("export", "pull", "acme-real", "nope", "--out", "pulled-d")).exitCode, 4);
+  const inRepoPull = await w("export", "pull", "acme-real", "c2", "--out", join(repoRoot, "pulled-out"));
+  assert.deepEqual([inRepoPull.exitCode, existsSync(join(repoRoot, "pulled-out"))], [6, false], "a destination inside the repo is refused");
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", ".hidden/pulled")).exitCode, 6);
+  assert.equal((await runCli(["export", "pull", "acme-real", "c2", "--out", "pulled-e"], env, repos)).exitCode, 1, "no bucket configured");
+  const second = await repos.exports.list(c2.id);
+  await repos.exports.complete(second[1].id, {});
+  await putAt(blobs, carouselExportKey(real.id, c2.id, 2, "01.png"), png);
+  await putAt(blobs, carouselExportKey(real.id, c2.id, 2, "id_rsa"), Buffer.from("x"));
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "pulled-f")).exitCode, 6, "one secret-like file stops the whole pull");
+  assert.equal(existsSync(join(home, "pulled-f")), false, "nothing was written");
 
   // Content writes never reach an archived brand, opt-in or not; a write verb's --json carries the trust label.
   await repos.brands.archive(real.id, { expectedVersion: (await repos.brands.getBySlug("acme-real")).version, author: "test", source: "cli", reason: "archive" });
