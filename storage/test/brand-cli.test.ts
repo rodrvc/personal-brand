@@ -93,7 +93,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   } } };
   const before = recorded;
   const raced = await runCli(["import", "--from", dir], env, racing);
-  assert.equal(raced.exitCode, 1);
+  assert.equal(raced.exitCode, 3);
   assert.match(raced.lines.join("\n"), /conflict guidance:tone/);
   assert.equal(recorded, before + 1, "a pass with a conflict still records its import run");
   assert.equal((await repos.guidance.get(brand.id, "tone")).body, "Racing edit");
@@ -105,7 +105,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match(edited.lines.join("\n"), /conflict document:spec/);
   assert.equal((await repos.documents.get(brand.id, "spec", "", identity)).value, "Edited in storage");
   const refused = await run("cutover", "example-coffee", "--confirm", "example-coffee", "--partial", "--from", dir);
-  assert.equal(refused.exitCode, 1, "a dirty verification does not cut over");
+  assert.equal(refused.exitCode, 6, "a dirty verification does not cut over");
   assert.equal((await repos.brands.getBySlug("example-coffee")).value.cutoverAt, null);
   assert.equal(existsSync(join(dir, ".storage-cutover")), false);
 
@@ -116,7 +116,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   writeFileSync(join(work, "outside-guard.txt"), "outside");
   symlinkSync(join(work, "outside-guard.txt"), join(clean, "stray-link.txt"));
   const guarded = await run("cutover", "example-other-shop", "--confirm", "example-other-shop", "--from", clean);
-  assert.equal(guarded.exitCode, 1, "data the importer does not carry yet blocks a cutover without --partial");
+  assert.equal(guarded.exitCode, 6, "data the importer does not carry yet blocks a cutover without --partial");
   assert.match(guarded.lines[0], /sin importar \(stray-link.txt \(not a regular file\)\).*--partial/);
   assert.doesNotMatch(guarded.lines[0], /config\.local/, "files never imported by design are not listed");
   await assert.rejects(() => repos.brands.getBySlug("example-other-shop"), /Not found/);
@@ -138,11 +138,12 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   // A planted dangling symlink is never followed.
   const planted = fixture(label, "example-planted-shop");
   symlinkSync(join(work, "nowhere"), join(planted, ".storage-cutover"));
-  assert.equal((await run("cutover", "example-planted-shop", "--confirm", "example-planted-shop", "--from", planted)).exitCode, 1);
+  assert.equal((await run("cutover", "example-planted-shop", "--confirm", "example-planted-shop", "--from", planted)).exitCode, 6);
   assert.equal(existsSync(join(work, "nowhere")), false);
   assert.equal((await repos.brands.getBySlug("example-planted-shop").catch(() => null)), null, "refused before importing anything");
   // Name must match the slug; the profiles root comes from BRAND_PROFILES_DIR (a temp dir here, never <repo>/profiles).
-  assert.match((await run("cutover", "example-coffee", "--confirm", "example-coffee", "--partial", "--from", clean)).lines[0], /igual que la marca/);
+  const misnamed = await run("cutover", "example-coffee", "--confirm", "example-coffee", "--partial", "--from", clean);
+  assert.deepEqual([misnamed.exitCode, /igual que la marca/.test(misnamed.lines[0])], [6, true]);
   fixture(label, "example-home-shop");
   const home = await runCli(["cutover", "example-home-shop", "--confirm", "example-home-shop", "--partial"], { ...env, BRAND_PROFILES_DIR: join(work, label) }, spied);
   assert.equal(home.exitCode, 0, home.lines.join("\n"));
@@ -184,7 +185,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     return repos.brands.getBySlug(...a);
   } } };
   const shiftedRun = await runCli(["cutover", "example-shifting-shop", "--confirm", "example-shifting-shop", "--from", shifting], env, shifted);
-  assert.equal(shiftedRun.exitCode, 1, shiftedRun.lines.join("\n"));
+  assert.equal(shiftedRun.exitCode, 6, shiftedRun.lines.join("\n"));
   assert.match(shiftedRun.lines[0], /sin importar \(.*notes\.txt.*\).*--partial/);
   assert.equal(existsSync(join(shifting, ".storage-cutover")), false);
   assert.equal((await repos.brands.getBySlug("example-shifting-shop")).value.cutoverAt, null, "the real import ran but the brand is not cut over");
@@ -322,7 +323,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     return row;
   }) as typeof repos.carousels.get } };
   const editRaced = await runCli(["import", "--from", rich], env, editRace);
-  assert.equal(editRaced.exitCode, 1);
+  assert.equal(editRaced.exitCode, 3);
   assert.match(editRaced.lines.join("\n"), /conflictos 1/);
   assert.equal((await repos.carousels.get(rid, "intro", identity)).value.title, "Edited in the app");
 
@@ -334,7 +335,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   mkdirSync(join(mover, "content", "published"), { recursive: true });
   writeFileSync(join(mover, "content", "published", "idea-promote-me.md"), "---\npublicado: 2026-04-01\n---\nBody\n");
   const moved = await run("import", "--from", mover);
-  assert.equal(moved.exitCode, 1, moved.lines.join("\n"));
+  assert.equal(moved.exitCode, 3, moved.lines.join("\n"));
   assert.match(moved.lines.join("\n"), /conflictos 1/);
   assert.match(moved.lines.join("\n"), /Conflictos: content:idea-promote-me \(cannot publish from idea/);
   assert.doesNotMatch(moved.lines.join("\n"), /Omitidos:.*idea-promote-me/, "a refused move is a conflict with its reason, not a skipped entry");
@@ -388,7 +389,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   await repos.assets.update(lid, logoId, { status: "hidden" }, { expectedVersion: logoRow.version, author: "editor", source: "editor", reason: "save" });
   put(`meta/${logoId}.json`, JSON.stringify({ kind: "logo", tags: [], status: "approved" }));
   const hidden = await run("import", "--from", lib);
-  assert.equal(hidden.exitCode, 1);
+  assert.equal(hidden.exitCode, 3);
   assert.match(hidden.lines.join("\n"), new RegExp(`Conflictos: asset:${logoId} \\(storage changed since the last import\\)`));
   assert.equal((await asset(logoId)).status, "hidden", "a reclassification made in storage is never overwritten");
 
@@ -410,7 +411,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   // The index is a cache: size drift never conflicts, and a malformed or wrongly-shaped one is ignored and reported.
   put("index.json", JSON.stringify({ entries: [{ id: logoId, w: 99, h: 99 }, { id: lateId, w: 64, h: 32 }, null, "x"] }));
   const resized = await run("import", "--from", lib);
-  assert.equal(resized.exitCode, 1, "only the earlier reclassification conflict remains");
+  assert.equal(resized.exitCode, 3, "only the earlier reclassification conflict remains");
   assert.match(resized.lines.join("\n"), /conflictos 1\b/);
   assert.doesNotMatch(resized.lines.join("\n"), new RegExp(`${lateId}.*changed in the folder`));
   assert.deepEqual(await asset(lateId).then((a) => [a.width, a.height]), [null, null], "a size is only borrowed at registration");
@@ -419,7 +420,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   for (const bad of ["{not json", JSON.stringify({ entries: { a: 1 } }), JSON.stringify([1])]) {
     put("index.json", bad);
     const broken = await run("import", "--from", lib);
-    assert.equal(broken.exitCode, 1, "the earlier conflict remains, nothing new");
+    assert.equal(broken.exitCode, 3, "the earlier conflict remains, nothing new");
     assert.match(broken.lines.join("\n"), /assets\/index\.json \(unreadable cache: ignored\)/);
   }
   assert.deepEqual(await verifyBrand(repos, lib, blobs, env), [`asset:${logoId}`]);
@@ -554,7 +555,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   for (const kept of Object.keys(allowed)) assert.ok(refManifest.includes(kept), `${kept} is allowed and kept: brand tokens and numbered ids are not secrets`);
   assert.equal(refManifest.some((k) => /\.env|\.git|\.pem|\.key|id_rsa|id_ed|node_modules|credentials|deploy-token|leaky|tokens-ref|archive|blob\.bin|\.xyz|\.p12|\.html|\.css|pgp|dburl|config\.local/.test(k)), false, "no refused path reaches the manifest");
   const blocked = await run("cutover", "example-refusal-shop", "--confirm", "example-refusal-shop", "--from", refShop);
-  assert.equal(blocked.exitCode, 1, "a suspicious name or an unknown type blocks a cutover without --partial");
+  assert.equal(blocked.exitCode, 6, "a suspicious name or an unknown type blocks a cutover without --partial");
   assert.match(blocked.lines[0], /slide\.html \(not a known content type\)/);
   assert.match(blocked.lines[0], /deploy-token\.txt \(suspicious name\)/);
   assert.match(blocked.lines[0], /leaky\.md/);
@@ -569,7 +570,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const linkDir = fixture(label, "example-linked-dir-shop");
   symlinkSync(join(work), join(linkDir, "linked-dir"));
   const linked = await run("cutover", "example-linked-dir-shop", "--confirm", "example-linked-dir-shop", "--from", linkDir);
-  assert.equal(linked.exitCode, 1);
+  assert.equal(linked.exitCode, 6);
   assert.match(linked.lines[0], /linked-dir \(not a regular file\)/);
 
   // Outputs root (S7b2b3a): `outputs.base_dir` is a second root, confined by realpath. Clips become `clip` artifacts of their card; the
@@ -612,7 +613,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   for (const data of [...Object.values(fakeSecrets), ...Object.values(outGuesses)]) await assert.rejects(() => blobs.get(blobKey(outBrand, sha(Buffer.from(data)))), "no refused content was uploaded");
   assert.deepEqual(await verifyBrand(repos, outShop, blobs, env), [], "verify reads the same second root");
   const outCut = await run("cutover", "example-outputs-shop", "--confirm", "example-outputs-shop", "--from", outShop);
-  assert.equal(outCut.exitCode, 1, "the guesses and the link in the second root block a cutover");
+  assert.equal(outCut.exitCode, 6, "the guesses and the link in the second root block a cutover");
   for (const reason of ["@outputs/credentials.json (suspicious name)", "@outputs/deploy-token.txt (suspicious name)", "@outputs/padded.txt (suspicious content", "@outputs/nul.txt (suspicious content", "@outputs/linked.txt (not a regular file)"]) assert.ok(outCut.lines[0].includes(reason), `${reason} blocks the cutover`);
   assert.doesNotMatch(outCut.lines[0], /\.env|cert\.pem|id_rsa|stripe|jwt/, "proven secrets in the second root do not block");
   // Clips: a re-import is a no-op; a re-rendered clip is an update that keeps the old take in history; a foreign clip in storage is a conflict.
@@ -674,7 +675,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     const out = (await run("import", "--from", shop, "--dry-run")).lines.join("\n");
     assert.ok(out.includes("@outputs/ (outputs") && out.includes(why), `${name} is reported as skipped`);
     const cut = await run("cutover", name, "--confirm", name, "--from", shop);
-    assert.equal(cut.exitCode, 1, `${name} blocks a cutover`);
+    assert.equal(cut.exitCode, 6, `${name} blocks a cutover`);
     assert.match(cut.lines[0], /@outputs\/ \(outputs/);
   }
   assert.match((await runCli(["import", "--from", outShop, "--dry-run"], env, spied)).lines.join("\n"), /Omitidos: .*@outputs\/ \(no blob store\)/);
@@ -687,7 +688,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
     chmodSync(sealed, 0o000);
     try {
       const cut = await run("cutover", "example-sealed-out-shop", "--confirm", "example-sealed-out-shop", "--from", sealedShop);
-      assert.equal(cut.exitCode, 1);
+      assert.equal(cut.exitCode, 6);
       assert.match(cut.lines[0], /@outputs\/ \(outputs root .* cannot be resolved \(EACCES\)/);
     } finally {
       chmodSync(sealed, 0o755);
@@ -719,7 +720,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   mkdirSync(join(strayShop, "reels", "stray"));
   symlinkSync(join(work, "outside-guard.txt"), join(strayShop, "reels", "stray", "link.txt"));
   const strayCut = await run("cutover", "example-stray-reel-shop", "--confirm", "example-stray-reel-shop", "--from", strayShop);
-  assert.equal(strayCut.exitCode, 1);
+  assert.equal(strayCut.exitCode, 6);
   assert.match(strayCut.lines.join("\n"), /reels\/stray\/link\.txt \(not a regular file\)/);
 
   // W2: "no longer in the source" is a notice, not left-behind data: a cutover right after is not refused.
@@ -792,7 +793,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match((await run("import", "--from", expShop)).lines.join("\n"), /Creados 0, actualizados 0, sin cambios \d+, conflictos 0\./);
   writeFileSync(join(expRoot, "editor", "launch", "v10", "manifest.json"), JSON.stringify({ version: 10, edited: true }));
   const expClash = await run("import", "--from", expShop);
-  assert.equal(expClash.exitCode, 1);
+  assert.equal(expClash.exitCode, 3);
   assert.match(expClash.lines.join("\n"), /Conflictos: export:launch\/v10 \(differs from storage; never rewritten\)/);
   assert.deepEqual((await repos.exports.list(launched.id)).at(-1)!.manifest, { version: 10 }, "a stored export is never rewritten");
 
@@ -818,7 +819,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.deepEqual((await repos.exports.list(resumeCarousel.id)).map((e) => [e.versionNo, e.status]), [[1, "running"]]);
   writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-b");
   const changedFile = await run("import", "--from", resumeShop);
-  assert.equal(changedFile.exitCode, 1);
+  assert.equal(changedFile.exitCode, 3);
   assert.match(changedFile.lines.join("\n"), /Conflictos: export:launch\/v1 \(.*already exists with different content/, "different bytes under a stored key are a reported conflict, not an aborted pass");
   writeFileSync(join(resumeRoot, "editor", "launch", "v1", "01.png"), "png-a");
   const resumed = await run("import", "--from", resumeShop);
@@ -903,7 +904,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(uploaded.filter((k) => k.endsWith("/02.png")).length, 0, "the changed file is never uploaded");
   const raceBrand = (await repos.brands.getBySlug("example-export-race-shop")).id;
   assert.deepEqual(await repos.exports.list((await repos.carousels.get(raceBrand, "launch", identity)).id), [], "no export row is reserved for the changed version");
-  assert.equal((await runCli(["cutover", "example-export-race-shop", "--confirm", "example-export-race-shop", "--from", raceExp], env, spied, edits)).exitCode, 1, "a cutover is refused while the export is a conflict");
+  assert.equal((await runCli(["cutover", "example-export-race-shop", "--confirm", "example-export-race-shop", "--from", raceExp], env, spied, edits)).exitCode, 6, "a cutover is refused while the export is a conflict");
 
   // A take whose card left the plan and came back with a new mp3 is the import's own (`_imported.released`), not "changed in storage".
   const backShop = fixture(label, "example-returning-take-shop");
@@ -955,7 +956,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const homeShop = problem("example-home-out-shop", 'outputs:\n  base_dir: "~"\n');
   const homeOut = (await runCli(["import", "--from", homeShop, "--dry-run"], atHome, spied, blobs)).lines.join("\n");
   assert.match(homeOut, /@outputs\/ \(outputs root .* is the home directory or holds it/);
-  assert.equal((await runCli(["cutover", "example-home-out-shop", "--confirm", "example-home-out-shop", "--from", homeShop], atHome, spied, blobs)).exitCode, 1);
+  assert.equal((await runCli(["cutover", "example-home-out-shop", "--confirm", "example-home-out-shop", "--from", homeShop], atHome, spied, blobs)).exitCode, 6);
   const homeSub = problem("example-home-sub-shop", "outputs:\n  base_dir: ~/outputs\n");
   assert.match((await runCli(["import", "--from", homeSub, "--dry-run"], atHome, spied, blobs)).lines.join("\n"), /Carpeta de salidas leída/, "a folder inside the home is a usable root");
   const holder = join(work, `${label}-holder`);
@@ -1010,7 +1011,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   // An unreadable or unparseable config file is a notice, not silence; a file that changed after it was hashed is not uploaded.
   const badConfig = problem("example-bad-config-shop", "outputs: [unclosed\n");
   assert.match((await run("import", "--from", badConfig, "--dry-run")).lines.join("\n"), /Omitidos: .*@outputs\/ \(config\.local\.yaml could not be parsed: outputs root unknown\)/);
-  assert.equal((await run("cutover", "example-bad-config-shop", "--confirm", "example-bad-config-shop", "--from", badConfig)).exitCode, 1, "an unknown outputs root blocks a cutover");
+  assert.equal((await run("cutover", "example-bad-config-shop", "--confirm", "example-bad-config-shop", "--from", badConfig)).exitCode, 6, "an unknown outputs root blocks a cutover");
   assert.throws(() => rereadChecked(innerShop, join(innerShop, "profile.md"), "profile.md", "0".repeat(64)), /changed while the import was running/);
 
   // An example cuts over without --partial: everything is imported, or kept as a legacy blob, and blobs are verified.
@@ -1037,7 +1038,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
       return real(...a);
     };
     const out = await runCli(["import", "--from", shop], env, competing, blobs);
-    assert.equal(out.exitCode, 1, out.lines.join("\n"));
+    assert.equal(out.exitCode, 3, out.lines.join("\n"));
     assert.match(out.lines.join("\n"), /Conflictos: \S+ \(created in storage during the pass\)/);
     assert.equal((await repos.importRuns.list((await repos.brands.getBySlug(name)).id))[0].report.aborted, undefined, "the pass finished");
   }
@@ -1073,7 +1074,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   writeFileSync(join(wr, "carousels", "with-chat", "chat.jsonl"), '{"role":"user","text":"other"}\n{"role":"user","text":"two"}\n');
   writeFileSync(join(wr, "carousels", "with-chat", "carousel.json"), cdoc("Chatty 2", "draft"));
   const diverged = await run("import", "--from", wr);
-  assert.equal(diverged.exitCode, 1);
+  assert.equal(diverged.exitCode, 3);
   assert.match(diverged.lines.join("\n"), /Conflictos: carousel:with-chat \(chat log diverged from storage\)/);
   assert.deepEqual([(await repos.carousels.get(wid, "with-chat", identity)).value.title, (await repos.chat.list(chatty.id)).map((m) => m.body.text)], ["Chatty", ["one", "two"]], "a diverged chat log is never rewritten");
 
@@ -1082,7 +1083,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal((await run("cutover", "example-wrong-shop", "--confirm", "example-wrong-shop", "--partial", "--from", wrong)).exitCode, 0);
   writeFileSync(join(wrong, ".storage-cutover"), JSON.stringify({ brandId: "someone-else" }));
   const mismatched = await run("cutover", "example-wrong-shop", "--confirm", "example-wrong-shop", "--from", wrong);
-  assert.deepEqual([mismatched.exitCode, /no corresponde a la marca/.test(mismatched.lines[0])], [1, true]);
+  assert.deepEqual([mismatched.exitCode, /no corresponde a la marca/.test(mismatched.lines[0])], [6, true]);
   assert.match(readFileSync(join(wrong, ".storage-cutover"), "utf-8"), /someone-else/);
 
   // Owner guard: a brand that is not an example is refused (dry run included) before any repository call or folder read.
@@ -1131,7 +1132,8 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal((await run("frobnicate")).exitCode, 2, "an unknown verb prints usage");
 
   // Remaining CLI error branches.
-  assert.match((await run("import", "--from", join(work, label, "example-nope"))).lines[0], /No existe la carpeta/);
+  const missingDir = await run("import", "--from", join(work, label, "example-nope"));
+  assert.deepEqual([missingDir.exitCode, /No existe la carpeta/.test(missingDir.lines[0])], [4, true], "a missing --from folder is not found");
   const empty = join(work, label, "example-empty-shop");
   mkdirSync(empty);
   assert.deepEqual((await run("import", "--from", empty)).lines, [`Error: Nothing to import under ${empty}`]);
