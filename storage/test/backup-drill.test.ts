@@ -100,6 +100,10 @@ const local = await runCli(["create", "example-local", "--name", "Local"], { DAT
 assert.equal(local.exitCode, 0, "a local database needs no drill");
 assert.equal((await runCli(["backup", "restore"], REMOTE, createMemoryRepositories())).exitCode, 2, "an unknown backup subcommand is a usage error");
 
+// Everything below needs a real server and the pg_dump / pg_restore client tools. It covers: the verified path and its exact scratch cleanup,
+// every failure code, a dump that fails, a child that dies (the sibling is killed, not left blocked on the pipe), the deadline (reported as a
+// timeout), a missing tool (found before any lock or CREATE DATABASE), a setup failure (throws, records nothing), the orphan sweep, 0009.
+// The gate tests above run on the memory store, whose rows are self-attested like Postgres': whoever may insert a row can write a verified one.
 const url = process.env.DATABASE_URL;
 const dumpBin = process.env.PG_DUMP_BIN ?? "pg_dump";
 const restoreBin = process.env.PG_RESTORE_BIN ?? "pg_restore";
@@ -120,11 +124,15 @@ else {
       const verified = await runBackupDrill({ sourceUrl: url, schema, pgDump: dumpBin, pgRestore: restoreBin });
       assert.equal(verified.status, "verified", JSON.stringify(verified.detail));
       assert.equal((verified.detail.tables as Record<string, number>).brands, 1, "the restored copy has the brand row");
-      // A scratch database a killed earlier run left behind is swept by this one, so the count can only go down.
-      assert.ok((await scratchCount()) <= before, "the scratch database is dropped");
+      // A scratch database a killed earlier run left behind is swept by this one: the count falls by exactly the swept ones, and this run's own is gone.
+      assert.equal(verified.detail.scratchLeaked, undefined);
+      assert.equal(await scratchCount(), before - ((verified.detail.swept as string[] | undefined)?.length ?? 0), "the scratch database is dropped");
       before = await scratchCount();
       await repos.restoreDrills.record(verified);
-      assert.equal((await repos.restoreDrills.latest())?.status, "verified");
+      const recorded = await repos.restoreDrills.latest();
+      assert.equal(recorded?.status, "verified");
+      // The age is the store's own clock, in milliseconds: a wrong unit or sign here would open or close the remote write gate.
+      assert.ok(Number.isFinite(recorded!.ageMs) && recorded!.ageMs >= -1000 && recorded!.ageMs < 60_000, `ageMs ${recorded!.ageMs}`);
       console.log("  ok - backup drill: dump, restore into a scratch database, row counts match, scratch dropped");
 
       const failed = await runBackupDrill({ sourceUrl: url, schema: `${schema}_missing`, pgDump: dumpBin, pgRestore: restoreBin });
@@ -140,10 +148,10 @@ else {
       const empty = await runBackupDrill({ sourceUrl: url, schema: `${schema}_empty`, pgDump: dumpBin, pgRestore: restoreBin });
       assert.deepEqual([empty.status, empty.detail.code], ["failed", "no_tables"]);
 
-      // A restore that loses a row is `counts_differ`: the real restore runs, then a wrapper adds a brand row to the scratch copy.
+      // A restore whose copy has a row the source lacks is `counts_differ`: the real restore runs, then a wrapper ADDS a brand row to the scratch copy.
       const bin = mkdtempSync(join(tmpdir(), "drill-shims-"));
-      const lossy = join(bin, "pg_restore_lossy.mjs");
-      writeFileSync(lossy, `#!/usr/bin/env node
+      const extraRow = join(bin, "pg_restore_extra_row.mjs");
+      writeFileSync(extraRow, `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import postgres from ${JSON.stringify(import.meta.resolve("postgres"))};
 const real = spawn(${JSON.stringify(restoreBin)}, process.argv.slice(2), { stdio: "inherit" });
@@ -159,11 +167,11 @@ real.on("exit", async (code) => {
   process.exit(code ?? 1);
 });
 `);
-      chmodSync(lossy, 0o755);
-      const lossyResult = await runBackupDrill({ sourceUrl: url, schema, pgDump: dumpBin, pgRestore: lossy });
-      assert.deepEqual([lossyResult.status, lossyResult.detail.code, lossyResult.detail.differing], ["failed", "counts_differ", ["brands"]], JSON.stringify(lossyResult.detail));
+      chmodSync(extraRow, 0o755);
+      const extraRowResult = await runBackupDrill({ sourceUrl: url, schema, pgDump: dumpBin, pgRestore: extraRow });
+      assert.deepEqual([extraRowResult.status, extraRowResult.detail.code, extraRowResult.detail.differing], ["failed", "counts_differ", ["brands"]], JSON.stringify(extraRowResult.detail));
       assert.equal(await scratchCount(), before);
-      console.log("  ok - backup drill: an empty schema is no_tables and a restore that changes the rows is counts_differ");
+      console.log("  ok - backup drill: an empty schema is no_tables and a restore that adds a row is counts_differ");
 
       let guard: NodeJS.Timeout | undefined;
       // When the restore dies the dump is killed instead of blocking on the pipe until the timeout.
@@ -177,6 +185,17 @@ real.on("exit", async (code) => {
       const killed = await Promise.race([runBackupDrill({ sourceUrl: url, schema, pgDump: yes, pgRestore: die }), timer]).finally(() => clearTimeout(guard));
       assert.deepEqual([killed.status, killed.detail.code], ["failed", "tool_failed"]);
       console.log("  ok - backup drill: a failed child ends its sibling");
+
+      // A dump and a restore that never finish are cut at the deadline, and the recorded error says it was a timeout.
+      const sleeper = join(bin, "restore_sleeps.sh");
+      writeFileSync(sleeper, "#!/bin/sh\nexec sleep 30\n");
+      chmodSync(sleeper, 0o755);
+      const timedOut = await runBackupDrill({ sourceUrl: url, schema, pgDump: yes, pgRestore: sleeper, timeoutMs: 700 });
+      assert.deepEqual([timedOut.status, timedOut.detail.code, /timeout/.test(String(timedOut.detail.error))], ["failed", "tool_failed", true], JSON.stringify(timedOut.detail));
+      // A missing tool is found before anything is locked, swept or created.
+      const dbsBefore = await scratchCount();
+      await assert.rejects(() => runBackupDrill({ sourceUrl: url, schema, pgDump: dumpBin, pgRestore: join(bin, "no_such_restore") }), DrillToolMissingError);
+      assert.equal(await scratchCount(), dbsBefore);
 
       // A setup failure (no CREATEDB right on that URL) is not a drill: it throws and records nothing.
       await assert.rejects(() => runBackupDrill({ sourceUrl: url, scratchUrl: "postgres://nobody:wrong@127.0.0.1:1/nope", schema, pgDump: dumpBin, pgRestore: restoreBin }), DrillNotRunError);
@@ -205,10 +224,21 @@ real.on("exit", async (code) => {
       assert.equal((await admin`SELECT count(*)::int AS n FROM pg_database WHERE datname = 'drill_0123456789ac'`)[0].n, 1);
       await busy.end({ timeout: 1 });
       await admin.unsafe(`DROP DATABASE drill_0123456789ac`);
-      // recorded_at cannot be set by the owner role (0009).
-      if ((await admin`SELECT 1 FROM pg_roles WHERE rolname = 'brand_owner'`).length) {
-        const can = (col: string) => admin.unsafe(`SELECT has_column_privilege('brand_owner', '${schema}.restore_drills', '${col}', 'INSERT') AS ok`).then((r) => r[0].ok);
-        assert.deepEqual([await can("detail"), await can("recorded_at")], [true, false]);
+      // recorded_at cannot be set by the owner role (0009). The migration grants only when the role exists, so the test makes sure it does
+      // (creating it only if absent, and dropping only what it created) and migrates a dedicated schema after that.
+      const ownerExisted = (await admin`SELECT 1 FROM pg_roles WHERE rolname = 'brand_owner'`).length > 0;
+      const grantSchema = `${schema}_grants`;
+      let roleReady = ownerExisted;
+      if (!ownerExisted) roleReady = await admin.unsafe(`CREATE ROLE brand_owner NOLOGIN`).then(() => true, (error) => (console.log(`SKIP 0009 column grant - cannot create brand_owner: ${error.message}`), false));
+      if (roleReady) {
+        try {
+          await migrate(admin, { schema: grantSchema });
+          const can = (col: string) => admin.unsafe(`SELECT has_column_privilege('brand_owner', '${grantSchema}.restore_drills', '${col}', 'INSERT') AS ok`).then((r) => r[0].ok);
+          assert.deepEqual([await can("detail"), await can("recorded_at"), await can("id")], [true, false, false]);
+        } finally {
+          await admin.unsafe(`DROP SCHEMA IF EXISTS ${grantSchema} CASCADE`);
+          if (!ownerExisted) await admin.unsafe(`DROP ROLE brand_owner`).catch((error) => console.log(`WARN could not drop the brand_owner role the test created: ${error.message}`));
+        }
       }
       console.log("  ok - backup drill: setup failure records nothing; orphan scratch databases are swept");
 

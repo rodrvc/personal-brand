@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { blobKey, carouselExportKey, reelExportKey } from "../src/contracts/keys.ts";
+import { blobKey, carouselExportKey, legacyProfileBase, reelExportKey } from "../src/contracts/keys.ts";
 
 const brand = "11111111-1111-4111-8111-111111111111";
 const other = "22222222-2222-4222-8222-222222222222";
@@ -17,5 +17,8 @@ assert.throws(() => carouselExportKey(brand, other, 1, "../x"), /Invalid file na
 assert.throws(() => carouselExportKey(brand, other, 1, ".."), /Invalid file name/);
 assert.throws(() => carouselExportKey(brand, other, 1, "."), /Invalid file name/);
 assert.throws(() => carouselExportKey(brand, other, 1, "a b"), /Invalid file name/);
+
+// The legacy base joins the prefix exactly as typed: no slash is added or removed.
+assert.deepEqual([legacyProfileBase("profiles/", "example"), legacyProfileBase("tenant", "example"), legacyProfileBase("", "example")], ["profiles/example/", "tenantexample/", "example/"]);
 
 console.log("keys: ok");

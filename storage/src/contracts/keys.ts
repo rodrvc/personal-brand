@@ -15,6 +15,14 @@ export function brandPrefix(brandId: string): string {
   return `brands/${uuid("brandId", brandId)}/`;
 }
 
+/**
+ * The legacy (pre-storage) layout: where the editor kept one profile in a bucket, `<prefix><slug>/` (ends with `/`). The prefix is joined
+ * AS TYPED, never normalized: a prefix without a trailing `/` is a different key space, and the editor's objects live under exactly that.
+ */
+export function legacyProfileBase(prefix: string, slug: string): string {
+  return `${prefix}${slug}/`;
+}
+
 export function blobKey(brandId: string, sha256: string): string {
   if (!SHA256.test(sha256)) throw new Error(`Invalid sha256: "${sha256}"`);
   return `brands/${uuid("brandId", brandId)}/blobs/sha256/${sha256.slice(0, 2)}/${sha256}`;
