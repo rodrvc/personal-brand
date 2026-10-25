@@ -5,13 +5,13 @@ import { putBlob } from "../blob/put-blob.ts";
 import { blobKey, InvalidInputError, ObjectNotFoundError, type AssetKind, type AssetOrigin, type AssetStatus, type BlobStore } from "../contracts/index.ts";
 import { canon, found, readRegular, sha256, type CollectContext, type Item } from "./shared.ts";
 
-const KINDS: AssetKind[] = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
+export const KINDS: AssetKind[] = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
 const STATUSES: AssetStatus[] = ["candidate", "approved", "hidden"];
 const FONT_EXT = [".woff2", ".woff", ".ttf", ".otf"];
 const MIME_BY_EXT: Record<string, string> = { ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf", ".svg": "image/svg+xml" };
 
 /** The file's own bytes decide PNG / JPEG / WebP (never the extension); everything else falls back to the extension. */
-function mimeOf(bytes: Buffer, rel: string): string {
+export function mimeOf(bytes: Buffer, rel: string): string {
   if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
   if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
   if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";

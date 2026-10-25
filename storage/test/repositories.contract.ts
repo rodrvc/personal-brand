@@ -196,6 +196,16 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.equal((await o.put(a.id, "content-fit", { description: "v2", body: "# New" }, meta({ expectedVersion: 1 }))).version, 2);
       const revs = await r.revisions.list("brand_guidance", put.id);
       assert.deepEqual(revs.map((x) => [x.version, x.bodyText]), [[1, "# Criteria"], [2, "# New"]], "guidance history supports `--since` diffs");
+      assert.deepEqual((await r.guidance.list(a.id)).map((x) => x.id).sort(), [put.id, (await r.guidance.get(a.id, "alpha")).id, (await r.guidance.get(a.id, "big")).id].sort(), "list carries the entity ids that revisions use");
+      // listSince: one query across entities, brand-scoped, type-scoped and exclusive of the cursor.
+      const other = await r.brands.create({ slug: "example", displayName: "E" }, meta());
+      await o.put(other.id, "elsewhere", { description: "", body: "z" }, meta());
+      const all = await r.revisions.listSince(a.id, "brand_guidance", "1970-01-01T00:00:00Z");
+      assert.deepEqual(all.map((x) => x.version).sort(), [1, 1, 1, 2], "every guidance revision of the brand, none of another brand");
+      assert.ok(all.every((x) => x.brandId === a.id && x.entityType === "brand_guidance"));
+      assert.deepEqual(await r.revisions.listSince(a.id, "brand_recipe", "1970-01-01T00:00:00Z"), [], "scoped by entity type");
+      assert.deepEqual(await r.revisions.listSince(a.id, "brand_guidance", all.at(-1)!.createdAt), [], "the cursor is exclusive");
+      assert.deepEqual(await r.revisions.listSince("00000000-0000-4000-8000-000000000000", "brand_guidance", "1970-01-01T00:00:00Z"), []);
     },
 
     async "recipes: put/get with schema version, conflicts, brand scoping"(r) {
@@ -210,6 +220,9 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.equal((await r.recipes.put(a.id, "weekly-roundup", { params: { period: "day" }, schemaVersion: 4 }, meta({ expectedVersion: 1 }))).version, 2);
       await assert.rejects(() => r.recipes.put(a.id, "weekly-roundup", input, meta({ expectedVersion: 1 })), VersionConflictError);
       await assert.rejects(() => r.recipes.get(other.id, "weekly-roundup", identity), NotFoundError);
+      await r.recipes.put(a.id, "daily", { params: { period: "day" }, schemaVersion: 1 }, meta());
+      assert.deepEqual((await r.recipes.list(a.id)).map((x) => [x.recipe, x.version]), [["daily", 1], ["weekly-roundup", 2]], "list is ordered by recipe and brand-scoped");
+      assert.deepEqual(await r.recipes.list(other.id), []);
       for (const bad of [{ params: [1], schemaVersion: 1 }, { params: {}, schemaVersion: 0 }]) await assert.rejects(() => r.recipes.put(a.id, "reel-week", bad, meta()), InvalidInputError);
       await assert.rejects(() => r.recipes.put(a.id, "Bad Recipe", input, meta()), InvalidInputError);
       await assert.rejects(() => r.recipes.get(a.id, "weekly-roundup", () => { throw new Error("invalid params"); }), /invalid params/);

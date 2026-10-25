@@ -8,7 +8,7 @@ import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
-import { EXIT, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, writeTarget, type CliResult } from "./verbs.ts";
+import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories } from "../pg/index.ts";
 
@@ -228,21 +228,31 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   const dryRun = args.flags.has("dry-run");
   const author = `cli:${env.USER ?? "unknown"}`;
   if (Object.hasOwn(VERB_SPECS, verb!)) {
-    // Identity writes to a brand that is not an example need the owner's opt-in (decision 11; content writes do not),
-    // every write on a remote database needs a restored backup; reads stay open. The slug format is checked first.
+    // A mistyped subcommand is a usage error whatever the brand: it must not surface as an owner or backup refusal.
+    if (hasUnknownSubcommand(verb!, args.positionals)) return { lines: USAGE, exitCode: EXIT.USAGE };
+    // D13: on a brand that is not an example, identity writes always need the owner's opt-in; a content write needs it
+    // only until the brand is cut over (checked below, once connected). Every write on a remote database is refused
+    // (it needs a restored backup); reads stay open. The slug format is checked first.
     const target = writeTarget(verb!, args.positionals);
+    let ownerRefused: string | null = null;
     if (target !== null) {
       if (typeof target.slug !== "string" || !SLUG_FORMAT.test(target.slug)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
-      // D13: unconditional in S8b1, content writes included. S8b2 adds the content exemption (`!target.identity` on a cut-over brand) with its cutoverAt lookup and tests.
-      const refusal = ownerRefusal([target.slug], env, args.values.get("owner-opt-in"));
-      if (refusal) return { lines: [refusal], exitCode: EXIT.REFUSED };
+      ownerRefused = ownerRefusal([target.slug], env, args.values.get("owner-opt-in"));
+      if (ownerRefused && target.identity) return { lines: [ownerRefused], exitCode: EXIT.REFUSED };
       if (!isLocalDatabase(env.DATABASE_URL)) return { lines: [REMOTE_REFUSAL], exitCode: EXIT.REFUSED };
     }
     if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
     let verbSql: Sql | null = null;
     try {
       if (!repos) verbSql = connect(env);
-      return await runVerb({ repos: repos ?? createPgRepositories(verbSql!), env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), resolve: (path) => fromCwd(path, env) }, verb!, args);
+      const verbRepos = repos ?? createPgRepositories(verbSql!);
+      // A content write never touches an archived brand; without the opt-in it also needs a brand already cut over (a missing brand is refused too: fail closed).
+      if (target && !target.identity) {
+        const brand = await verbRepos.brands.getBySlug(target.slug).catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
+        if (brand && brand.value.status !== "active") return { lines: [`La marca "${target.slug}" está archivada: no se escribe contenido en ella. No se hizo nada.`], exitCode: EXIT.REFUSED };
+        if (ownerRefused && !brand?.value.cutoverAt) return { lines: [`${ownerRefused} (Una escritura de contenido sin aprobación solo se permite en una marca ya cortada a storage.)`], exitCode: EXIT.REFUSED };
+      }
+      return await runVerb({ repos: verbRepos, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => readInputBytes(fromCwd(path, env), max), resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {

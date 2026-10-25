@@ -81,6 +81,8 @@ export interface Revision {
 export interface RevisionRepository {
   list(entityType: RevisionEntity, entityId: string): Promise<Revision[]>;
   get(entityType: RevisionEntity, entityId: string, version: number): Promise<Revision>;
+  /** One brand's revisions of one entity type created strictly after `since` (an ISO instant), oldest first (then entity id, then version). One query, however many entities changed. */
+  listSince(brandId: string, entityType: RevisionEntity, since: string): Promise<Revision[]>;
 }
 
 export interface RuleInput {
@@ -117,12 +119,14 @@ export interface GuidanceEnvelope {
 
 /** Writes need the owner role. Names match `^[a-z0-9-]+$`. */
 export interface GuidanceRepository {
-  list(brandId: string): Promise<Array<{ name: string; description: string; version: number; updatedAt: string }>>;
+  list(brandId: string): Promise<Array<{ id: string; name: string; description: string; version: number; updatedAt: string }>>;
   get(brandId: string, name: string): Promise<GuidanceEnvelope>;
   put(brandId: string, name: string, input: { description: string; body: string }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
 export interface RecipeRepository {
+  /** Ordered by recipe name. */
+  list(brandId: string): Promise<Array<{ recipe: string; version: number; updatedAt: string }>>;
   get<T>(brandId: string, recipe: string, validate: BodyValidator<T>): Promise<Versioned<T>>;
   put(brandId: string, recipe: string, input: { params: unknown; schemaVersion: number }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
 }
