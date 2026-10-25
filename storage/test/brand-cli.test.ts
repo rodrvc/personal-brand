@@ -44,7 +44,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
 
   assert.equal((await run()).exitCode, 2, "no verb prints usage");
   const remote = await runCli(["import", "--from", dir], REMOTE, repos);
-  assert.equal(remote.exitCode, 1);
+  assert.equal(remote.exitCode, 6);
   assert.match(remote.lines[0], /remota/);
   const noUrl = await runCli(["import", "--from", dir], {});
   assert.deepEqual([noUrl.exitCode, /DATABASE_URL/.test(noUrl.lines[0])], [1, true], "a missing DATABASE_URL is a clean message, not a stack trace");
@@ -110,7 +110,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(existsSync(join(dir, ".storage-cutover")), false);
 
   const clean = fixture(label, "example-other-shop");
-  assert.equal((await run("cutover", "example-other-shop", "--confirm", "nope", "--from", clean)).exitCode, 1);
+  assert.equal((await run("cutover", "example-other-shop", "--confirm", "nope", "--from", clean)).exitCode, 6);
   assert.equal(existsSync(join(clean, ".storage-cutover")), false, "no marker without a matching --confirm");
   assert.equal(await resolveBrandSource(repos.brands, "example-other-shop"), "folder");
   writeFileSync(join(work, "outside-guard.txt"), "outside");
@@ -128,7 +128,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await resolveBrandSource(repos.brands, "example-other-shop"), "storage");
 
   const reimport = await run("import", "--from", clean);
-  assert.equal(reimport.exitCode, 1);
+  assert.equal(reimport.exitCode, 6);
   assert.match(reimport.lines[0], /ya fue cortada/);
   assert.match((await run("cutover", "example-other-shop", "--confirm", "example-other-shop", "--from", clean)).lines[0], /marcador presente/);
   unlinkSync(join(clean, ".storage-cutover"));
@@ -1096,7 +1096,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   ] as const;
   const refusedBy = async (argv: string[], [env, extra]: ReturnType<typeof withOptIn>, repo = untouchable) => {
     const out = await runCli([...argv, ...extra], env, repo);
-    assert.deepEqual([out.exitCode, /aprobación explícita del dueño/.test(out.lines[0])], [1, true], `${argv.join(" ")} ${JSON.stringify(extra)} ${JSON.stringify(env)}`);
+    assert.deepEqual([out.exitCode, /aprobación explícita del dueño/.test(out.lines[0])], [6, true], `${argv.join(" ")} ${JSON.stringify(extra)} ${JSON.stringify(env)}`);
   };
   const forBrand = (slug: string, dir = join(profilesDir, slug)) => [["import", "--from", dir], ["import", "--from", dir, "--dry-run"], ["cutover", slug, "--confirm", slug, "--from", dir], ["cutover", slug, "--confirm", slug]];
   for (const opt of [withOptIn(), withOptIn("acme-demo"), withOptIn(undefined, "acme-demo"), withOptIn("other", "acme-demo"), withOptIn("*", "*"), withOptIn("acme-demo", "other"), withOptIn("acme-demo", "acme-demo ", true)]) {

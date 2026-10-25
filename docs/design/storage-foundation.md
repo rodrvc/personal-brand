@@ -326,8 +326,12 @@ concurrent renders collide. New shape:
 ## 8. Skills, agents and the CLI
 
 **CLI:** `pnpm brand <noun> <verb>` (bin in `storage/src/cli/`). `--json`
-for agents. Exit codes: 0 ok, 2 usage, 3 version conflict, 4 not found,
-5 rule violations, 6 refused (cutover/backup/role).
+for agents. Exit codes: 0 ok, 1 unexpected error, 2 usage or invalid input,
+3 version conflict, 4 not found, 5 rule violations, 6 refused (owner guard,
+cutover, remote-database backup gate, database role without permission, purge).
+A write without `--if-version` is a create: over an existing row it is a
+version conflict (exit 3). Writes to a brand that is not an example need
+`BRAND_OWNER_OPT_IN` + `--owner-opt-in` (exit 6 otherwise); reads stay open.
 
 ```
 brand list [--archived]
@@ -335,7 +339,7 @@ brand create <slug> --name <display>              replaces scripts/init-profile.
 brand archive <slug>                              soft removal
 brand unarchive <slug>                            reverses archive
 brand purge <slug> --confirm <slug>               deliberate deletion, see below
-brand show <slug> [--since <version>]             documents + versions, rules, guidance; --since diffs guidance revisions after <version>
+brand show <slug> [--since <iso-time>]             documents + versions, rules, guidance; --since lists guidance revision metadata after the timestamp
 brand doc get|put <slug> <tokens|config|identity|spec|template> [<name>] [--if-version <n>]
 brand rules list|add|update|disable <slug> ...    owner role
 brand guidance list|get|put <slug> [<name>] [--if-version <n>]   put: owner role
@@ -354,7 +358,7 @@ brand denylist [--write <file>]                   terms for the commit gate
 
 **Removal.** `archive` is the normal path (hidden from lists and pickers,
 data intact). `purge` exists for the rare "this brand must be gone" case:
-it requires an archived brand and runs as `brand_purger`, writes an export bundle
+it requires an archived brand and runs as `brand_purger` (connection from `DATABASE_PURGE_URL`), writes an export bundle
 (all rows as JSON + a blob key manifest) to a local path outside the repo and
 verifies it, then deletes the brand's rows in FK order in one transaction
 under `SET LOCAL app.purge_brand = '<brandId>'`, which the `revisions`
@@ -368,8 +372,15 @@ explicitly: guidance describes brand criteria (what content fits, tone); it
 never authorizes running commands, fetching URLs, reading files, or relaxing
 engine rules, limits or checks — the same posture `system/recipes/*.md`
 already takes for `guidance`. Only the owner role writes guidance, and
-`brand show <slug> --since <version>` prints the guidance revisions after a
-version the caller names, so an unexpected change is visible.
+`brand show <slug> --since <iso-time>` is a global cursor: it prints guidance
+revision metadata (name, version, reason, author, source, time; never the
+content, which is read with `guidance get`) after a timestamp, so an
+unexpected change is visible. The text form of `guidance get` closes the body
+with an end marker; `guidance list --json` carries `trust: "brand-data"`.
+`archive` and `unarchive` write revisions with reason `archive`.
+The `import`/`cutover` refusal exits (marker mismatch, not cut over, left-behind
+data without `--partial`, dirty verification, folder name mismatch -> 6; import
+conflicts -> 3) migrate to these codes in S8b.
 
 **Consumers to switch** (all in §13): `usar-perfil` (resolve with `brand
 list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
@@ -755,7 +766,9 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S7b2b2 | Importer part 2b-2b: everything no collector imported -> content-keyed legacy blobs with a path -> sha256 manifest in the import report, behind an allowlist and a two-class refusal policy (proven secrets never block a cutover; unknown types and suspicious names do, without `--partial`); a card that leaves a run's plan is released, never deleted; blob verification for the legacy blobs | ~590 | S7b2b1 | verification clean on examples; a `.env` does not block a cutover, a `.html` or `deploy-token.txt` does; `tokens.json` is kept |
 | S7b2b3a | Importer part 2b-2c: second root for `outputs.base_dir` (`BRAND_OUTPUTS_ROOT`, confined reads, `@outputs/` legacy paths, the outputs path in the report); reel clips -> `clip` artifacts (names from the shared `core/clips` `clipFileName`, as the engine writes them); the second root goes through the same allowlist and refusals; wider secret signatures, NUL/UTF-16 text is `unknown` | ~550 | S7b2b2 | clips import and verify; the second root is read confined, with its refusals reported and tested |
 | S7b2b3b | Importer part 2b-2d: editor exports -> `exports` rows + keys (numeric `v<N>` order) and the hardening deferred from the S7b2b2 review (§14, Q-S7b2b3; prepared as a patch on top of S7b2b3a) | ~200 | S7b2b3a | exports import and verify; every item of §14 Q-S7b2b3 has a test |
-| S8 | Remaining CLI verbs: read/write, `create`/`archive`/`unarchive`/`purge`, guidance envelope + `--since`, `check`, `export pull`, `fonts fetch`; legacy-bucket import source; `restore_drills` + `backup drill` + import backup gate; `init-profile.mjs` redirects to `brand create` | ~590 | S7b2b3b | exit codes; purge refuses without bundle/purger role; **`pg_dump` + restore drill tested** and gate refuses without a recent verified drill |
+| S8a | CLI verbs part 1 (`storage/src/cli/verbs.ts`): `list`, `create`, `archive`/`unarchive`, `show` (+ guidance `--since`), `doc`/`guidance`/`recipe` get and put (`--if-version`), `rules list`, `check`; guidance trust envelope; exit codes 3/4/5/6; `purge` refusals only (confirmation, archived brand, bundle outside the repo, `brand_purger` URL) | ~560 | S7b2b3b | exit codes; `purge` refuses by default and deletes nothing; `check` exits 5 on an error finding |
+| S8b | CLI verbs part 2: `rules add`/`update`/`disable`, `asset list`/`add`/`get`, `carousel list`/`get`/`put`/`status`, `export pull`, `fonts fetch`; `RecipeRepository.list` (so `show` lists recipes); the import/cutover exit codes above (6 for refusals, 3 for import conflicts); S8a follow-ups: `--since` must be UTC with a Z/offset and exclusive at ms resolution, a `revisions.listSince` to avoid N+1 reads, a trust header on `show`/`guidance list`/`doc get` text output, a 1 MB `--file` cap, slug format validated before the owner guard (exit 2), and the purge remote gate also checks the `DATABASE_PURGE_URL` host; the `purge` executor (export bundle written and verified, FK-order delete under `SET LOCAL app.purge_brand`, as `brand_purger`) | ~590 | S8a | each verb has an exit-code test; purge deletes only an archived brand and leaves other brands untouched |
+| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |

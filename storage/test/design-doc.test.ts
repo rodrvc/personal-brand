@@ -22,5 +22,6 @@ for (const [slice, deps] of rows) for (const d of deps) assert.ok(exists(d), `${
 assert.ok(["S7b2b1", "S7b2b2", "S7b2b3a", "S7b2b3b"].every((k) => rows.has(k)), "S7b2b1, S7b2b2, S7b2b3a and S7b2b3b are rows");
 assert.ok(rows.get("S7b2b3a")?.includes("S7b2b2"), "S7b2b3a depends on S7b2b2");
 assert.ok(rows.get("S7b2b3b")?.includes("S7b2b3a"), "S7b2b3b depends on S7b2b3a");
-assert.ok(rows.get("S8")?.includes("S7b2b3b"), "S8 depends on S7b2b3b");
+assert.ok(rows.get("S8a")?.includes("S7b2b3b"), "S8a depends on S7b2b3b");
+assert.ok(rows.get("S8b")?.includes("S8a") && rows.get("S8c")?.includes("S8b"), "S8a, S8b and S8c form a chain");
 console.log("design doc slice table: ok");
