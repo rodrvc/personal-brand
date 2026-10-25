@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,10 +10,11 @@ import postgres from "postgres";
 import { FakeObjectStore } from "../src/blob/index.ts";
 import { putAt } from "../src/blob/put-blob.ts";
 import { runCli } from "../src/cli/brand.ts";
-import { carouselExportKey } from "../src/contracts/keys.ts";
+import { carouselExportKey, carouselExportPrefix } from "../src/contracts/keys.ts";
 import { EXIT, IDENTITY_KINDS, runVerb, writeTarget } from "../src/cli/verbs.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
-import { createPgRepositories } from "../src/pg/index.ts";
+import { ObjectNotFoundError, PurgeRefusedError } from "../src/contracts/index.ts";
+import { createPgRepositories, openPurger, PURGE_TABLES } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
 
 const work = mkdtempSync(join(tmpdir(), "brand-verbs-"));
@@ -167,8 +168,8 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.match((await run("purge", "example-shop", "--confirm", "example-shop", "--bundle", repoRoot)).lines[0], /fuera del repo/);
   assert.match((await run("purge", "example-shop", "--confirm", "example-shop", "--bundle", `${repoRoot}/..bundle`)).lines[0], /fuera del repo/, "a sibling named like '..x' inside the repo is still inside it");
   assert.match((await run("purge", "example-shop", "--confirm", "example-shop", "--bundle", bundle)).lines[0], /DATABASE_PURGE_URL/);
-  const last = await runCli(["purge", "example-shop", "--confirm", "example-shop", "--bundle", bundle], { ...env, DATABASE_PURGE_URL: "postgres://purger@localhost/x" }, repos);
-  assert.deepEqual([last.exitCode, /todavía no está disponible/.test(last.lines[0])], [6, true]);
+  const last = await runCli(["purge", "example-shop", "--confirm", "example-shop", "--bundle", bundle], { ...env, DATABASE_PURGE_URL: "postgres://purger@db.example.com/x" }, repos);
+  assert.deepEqual([last.exitCode, /no apunta a una base de datos local/.test(last.lines[0]), existsSync(bundle)], [6, true, false], "a remote purge URL is refused before anything is read or written");
   assert.equal((await repos.brands.getBySlug("example-shop")).value.status, "archived", "a refused purge deletes nothing");
   assert.deepEqual(await count(), counted, "row counts are the same before and after the refused purges");
   const relative = await runCli(["purge", "example-shop", "--confirm", "example-shop", "--bundle", "out/bundle"], { ...env, INIT_CWD: repoRoot }, repos);
@@ -441,6 +442,33 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   await putAt(blobs, carouselExportKey(real.id, c2.id, 2, "id_rsa"), Buffer.from("x"));
   assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "pulled-f")).exitCode, 6, "one secret-like file stops the whole pull");
   assert.equal(existsSync(join(home, "pulled-f")), false, "nothing was written");
+  // --out through a symlink into the repo is judged by its real path; --out naming a file is refused.
+  symlinkSync(join(repoRoot, "storage"), join(home, "outlink"));
+  assert.deepEqual([(await w("export", "pull", "acme-real", "c2", "--out", "outlink/pulled-g", "--version", "1")).exitCode, existsSync(join(repoRoot, "storage", "pulled-g"))], [6, false]);
+  writeFileSync(join(home, "afile"), "x");
+  assert.equal((await w("export", "pull", "acme-real", "c2", "--out", "afile", "--version", "1")).exitCode, 2, "--out must not be an existing non-directory");
+  assert.equal(readFileSync(join(home, "afile"), "utf-8"), "x");
+  // A failed pull undoes exactly what this call wrote. Version 3 has two files; the second one's temporary name is already taken.
+  const third = await repos.exports.reserveNextVersion(c2.id, c2.version);
+  await repos.exports.complete(third.id, {});
+  for (const name of ["a.png", "b.png"]) await putAt(blobs, carouselExportKey(real.id, c2.id, 3, name), png);
+  mkdirSync(join(home, "rb"));
+  writeFileSync(join(home, "rb", "b.png.fixed.tmp"), "someone else's file");
+  const half = await runCli(["export", "pull", "acme-real", "c2", "--out", "rb"], env, repos, blobs, { suffix: () => "fixed" });
+  assert.deepEqual([half.exitCode, /rolled back 1 file/.test(half.lines[0]), readdirSync(join(home, "rb"))], [2, true, ["b.png.fixed.tmp"]], "the linked file is undone, the pre-existing directory and file stay");
+  // A fetch that fails midway, into a directory this call created: the directory goes too.
+  const flaky = Object.create(blobs) as FakeObjectStore;
+  flaky.get = async (key: string) => { if (key.endsWith("b.png")) throw new Error("bucket gone"); return blobs.get(key); };
+  const broke = await runCli(["export", "pull", "acme-real", "c2", "--out", "rb2/x/y"], env, repos, flaky);
+  assert.deepEqual([broke.exitCode, /bucket gone; rolled back 1 file/.test(broke.lines[0]), existsSync(join(home, "rb2"))], [1, true, false]);
+  const gone = Object.create(blobs) as FakeObjectStore;
+  gone.get = async (key: string) => { if (key.endsWith("b.png")) throw new ObjectNotFoundError(key); return blobs.get(key); };
+  assert.equal((await runCli(["export", "pull", "acme-real", "c2", "--out", "rb2/x/y"], env, repos, gone)).exitCode, 4, "a missing object keeps its class: exit 4");
+  assert.equal((await runCli(["export", "pull", "acme-real", "c2", "--out", "rb2/x/y"], env, repos, blobs)).exitCode, 0, "and the retry succeeds");
+  // The refusal names the bucket key quoted and ASCII-only.
+  await putAt(blobs, `${carouselExportPrefix(real.id, c2.id, 3)}evil\u001b[31m.png`, png);
+  const evil = await w("export", "pull", "acme-real", "c2", "--out", "pulled-h");
+  assert.deepEqual([evil.exitCode, evil.lines[0].includes("\u001b"), evil.lines[0].includes('"evil?[31m.png"')], [6, false, true]);
 
   // Content writes never reach an archived brand, opt-in or not; a write verb's --json carries the trust label.
   await repos.brands.archive(real.id, { expectedVersion: (await repos.brands.getBySlug("acme-real")).version, author: "test", source: "cli", reason: "archive" });
@@ -497,6 +525,96 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   console.log("  ok - D13 content exemption, carousel/asset/rules verbs");
 }
 
+/** The purge executor on the real `brand_purger` role: one transaction, bundle first, FK-order delete; other brands and the bucket stay untouched. */
+async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): Promise<void> {
+  const login = (user: string) => { const u = new URL(url); u.username = user; u.password = "local-dev-only"; return postgres(u.toString(), { connection: { search_path: schema }, onnotice: () => {} }); };
+  const owner = login("brand_owner");
+  const home = join(work, "purge-exec");
+  mkdirSync(home, { recursive: true });
+  const env = { USER: "tester", HOME: home, INIT_CWD: home, DATABASE_PURGE_URL: "postgres://brand_purger@localhost/x" };
+  const repos = createPgRepositories(owner) as MemoryRepositories;
+  const blobs = new FakeObjectStore();
+  const meta = { expectedVersion: null, author: "t", source: "cli" as const, reason: "structural" as const };
+  const hex = (c: string) => c.repeat(64);
+  try {
+    // One row in EVERY table of the brand.
+    const seed = async (slug: string) => {
+      const b = await repos.brands.create({ slug, displayName: slug }, meta);
+      await repos.documents.put(b.id, "identity", "", { text: "# id\n", schemaVersion: 1 }, meta);
+      const rule = await repos.rules.create(b.id, { kind: "max_length", params: { field: "title", max: 5, slides: "cover" }, severity: "warning", appliesTo: ["carousel"], message: "Short." }, meta);
+      await repos.rules.update(rule.id, { message: "Shorter." }, { ...meta, expectedVersion: 1 });
+      await repos.guidance.put(b.id, "tone", { description: "d", body: "Warm." }, meta);
+      await repos.recipes.put(b.id, "weekly", { params: {}, schemaVersion: 1 }, meta);
+      const c = await repos.carousels.create(b.id, { slug: "c1", title: "C", document: { json: { slides: [] }, schemaVersion: 1 } }, meta);
+      const exp = await repos.exports.reserveNextVersion(c.id, c.version);
+      await repos.exports.complete(exp.id, {});
+      await repos.chat.append(c.id, { text: "hi" });
+      await repos.assets.register(b.id, { sha256: hex("a"), kind: "photo", mime: "image/png", bytes: 1, origin: "manual", status: "candidate" }, meta);
+      await repos.tts.record(b.id, "n1", { sha256: hex("b"), seconds: 1, voice: {} });
+      const idea = await repos.content.create(b.id, { slug: "i1", title: "I" }, meta);
+      await repos.content.create(b.id, { slug: "i2", title: "I2", derivedFrom: idea.id }, meta); // a RESTRICT key between two rows of the brand
+      const run = await repos.runs.create(b.id, { recipe: "weekly", periodStart: "2026-01-01", periodEnd: "2026-01-02", input: { json: {}, schemaVersion: 1 } }, meta);
+      await repos.runArtifacts.record(run.id, { kind: "clip", cardIndex: 0, cardId: "c", sha256: hex("c"), inputsHash: "h" });
+      await repos.importRuns.record({ brandId: b.id, sourceKind: "folder", sourceRootHash: hex("d"), startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", report: {} });
+      await putAt(blobs, carouselExportKey(b.id, c.id, 1, "01.png"), Buffer.from("png"));
+      return { ...b, carouselId: c.id };
+    };
+    const counts = (id: string) => admin.begin(async (tx) => {
+      await tx.unsafe(`SET LOCAL search_path TO ${schema}`);
+      return Object.fromEntries(await Promise.all(PURGE_TABLES.map(async ([t, scope]) => [t, (await tx.unsafe(`SELECT count(*)::int AS n FROM ${t} t WHERE ${scope.replace("$1", `'${id}'`)}`))[0].n])));
+    });
+    const doomed = await seed("example-doomed");
+    const kept = await seed("example-kept");
+    const keptBefore = await counts(kept.id);
+    assert.equal(PURGE_TABLES.length, 15);
+    assert.ok(Object.values(await counts(doomed.id)).every((n) => (n as number) >= 1), "every table has a row to purge");
+    const bundle = join(home, "bundle");
+    const argv = ["purge", "example-doomed", "--confirm", "example-doomed", "--bundle", bundle];
+    const open = (user: string) => ({ openPurger: () => openPurger(login(user)) });
+    // Runs `after` inside the purge transaction, once the bundle is written (the callback seam).
+    const seam = (after: () => Promise<void>) => ({ openPurger: async () => { const p = await openPurger(login("brand_purger")); return { ...p, purge: (id: string, write: Parameters<typeof p.purge>[1]) => p.purge(id, async (data) => { await write(data); await after(); }) }; } });
+    // An active brand is never purged.
+    assert.equal((await runCli(["purge", "example-kept", "--confirm", "example-kept", "--bundle", bundle], env, repos, blobs, open("brand_purger"))).exitCode, 6);
+    assert.deepEqual(await counts(kept.id), keptBefore);
+    await repos.brands.archive(doomed.id, { ...meta, expectedVersion: 1, reason: "archive" });
+    // Wrong role, or a purge URL on another database: refused before anything is read or written.
+    const wrong = await runCli(argv, env, repos, blobs, open("brand_owner"));
+    assert.deepEqual([wrong.exitCode, /no como brand_purger/.test(wrong.lines[0]), existsSync(bundle)], [6, true, false]);
+    await assert.rejects(() => openPurger(login("brand_purger"), (async () => [{ db: "other", port: 1 }]) as unknown as postgres.Sql), /bases de datos distintas/);
+    // A failure after the bundle is written rolls the whole transaction back: every row is still there, and the bundle stays.
+    const before = await counts(doomed.id);
+    const failed = await runCli(argv, env, repos, blobs, seam(async () => { throw new PurgeRefusedError("simulated failure"); }));
+    assert.deepEqual([failed.exitCode, await counts(doomed.id)], [6, before], "all rows intact after a rollback");
+    assert.deepEqual([statSync(bundle).mode & 0o777, readdirSync(bundle).map((f) => statSync(join(bundle, f)).mode & 0o777)], [0o700, [0o600]], "folder 0700, bundle 0600");
+    // A chat message written while the purge runs is blocked (the carousel row is locked), so nothing is deleted unbundled.
+    let blocked: unknown;
+    const done = await runCli(argv, env, repos, blobs, seam(async () => {
+      blocked = await admin.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL search_path TO ${schema}`);
+        await tx.unsafe("SET LOCAL lock_timeout = '300ms'");
+        await tx.unsafe("INSERT INTO chat_messages (carousel_id, seq, body) VALUES ($1, 99, '{}')", [doomed.carouselId]);
+      }).catch((e) => e);
+    }));
+    assert.equal((blocked as { code?: string }).code, "55P03", "the concurrent insert is blocked, not applied");
+    assert.deepEqual([done.exitCode, /Quedan 1 objeto\(s\) en el bucket/.test(done.lines.join("\n"))], [0, true], done.lines.join("\n"));
+    const files = readdirSync(bundle).sort();
+    assert.equal(files.length, 2, "a re-run needs no cleanup: the bundle name carries a timestamp");
+    const written = JSON.parse(readFileSync(join(bundle, files[1]), "utf-8"));
+    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0007_import_runs.sql", before, doomed.id, 3, 1]);
+    assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 15 tables are empty for the purged brand");
+    assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");
+    assert.equal((await blobs.list("brands/")).length, 2, "the bucket never loses an object");
+    assert.equal((await runCli(argv, env, repos, blobs, open("brand_purger"))).exitCode, 4, "the brand is gone");
+    // The append-only guard still holds for the purger without the flag.
+    const purger = login("brand_purger");
+    await assert.rejects(() => purger`DELETE FROM revisions WHERE brand_id = ${kept.id}`, /append-only/);
+    await purger.end({ timeout: 1 });
+  } finally {
+    await owner.end({ timeout: 1 });
+  }
+  console.log("  ok - postgres: purge executor as brand_purger");
+}
+
 /** Runs `guidance put` as the least-privilege app role: the database refuses it and the CLI maps that to exit 6. */
 async function appRoleRefused(url: string, schema: string): Promise<void> {
   const u = new URL(url);
@@ -537,6 +655,7 @@ try {
         const [app] = await admin`SELECT 1 FROM pg_roles WHERE rolname = 'brand_app'`;
         assert.ok(app, "role brand_app is missing: provision it (docker compose init) before running this test");
         await appRoleRefused(url, schema);
+        await purgeExecutor(admin, url, schema);
       } finally {
         await sql.end({ timeout: 1 });
       }

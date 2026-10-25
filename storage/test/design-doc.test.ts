@@ -23,5 +23,5 @@ assert.ok(["S7b2b1", "S7b2b2", "S7b2b3a", "S7b2b3b"].every((k) => rows.has(k)), 
 assert.ok(rows.get("S7b2b3a")?.includes("S7b2b2"), "S7b2b3a depends on S7b2b2");
 assert.ok(rows.get("S7b2b3b")?.includes("S7b2b3a"), "S7b2b3b depends on S7b2b3a");
 assert.ok(rows.get("S8a")?.includes("S7b2b3b"), "S8a depends on S7b2b3b");
-assert.ok(rows.get("S8b1")?.includes("S8a") && rows.get("S8b2")?.includes("S8b1") && rows.get("S8b3a")?.includes("S8b2") && rows.get("S8b3b1")?.includes("S8b3a") && rows.get("S8b3b2")?.includes("S8b3b1") && rows.get("S8c")?.includes("S8b3b2"), "S8a, S8b1, S8b2, S8b3a, S8b3b1, S8b3b2 and S8c form a chain");
+assert.ok(rows.get("S8b1")?.includes("S8a") && rows.get("S8b2")?.includes("S8b1") && rows.get("S8b3a")?.includes("S8b2") && rows.get("S8b3b1")?.includes("S8b3a") && rows.get("S8b3b2")?.includes("S8b3b1") && rows.get("S8b3b3")?.includes("S8b3b2") && rows.get("S8c")?.includes("S8b3b3"), "S8a, S8b1, S8b2, S8b3a, S8b3b1, S8b3b2, S8b3b3 and S8c form a chain");
 console.log("design doc slice table: ok");

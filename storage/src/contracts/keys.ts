@@ -10,6 +10,11 @@ function uuid(label: string, value: string): string {
   return value;
 }
 
+/** The prefix of every object a brand owns in the bucket (ends with `/`). */
+export function brandPrefix(brandId: string): string {
+  return `brands/${uuid("brandId", brandId)}/`;
+}
+
 export function blobKey(brandId: string, sha256: string): string {
   if (!SHA256.test(sha256)) throw new Error(`Invalid sha256: "${sha256}"`);
   return `brands/${uuid("brandId", brandId)}/blobs/sha256/${sha256.slice(0, 2)}/${sha256}`;

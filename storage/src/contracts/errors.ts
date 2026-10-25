@@ -31,8 +31,8 @@ export class VersionConflictError extends Error {
 
 /** A repository lookup found no row. */
 export class NotFoundError extends Error {
-  constructor(what: string) {
-    super(`Not found: ${what}`);
+  constructor(what: string, options?: ErrorOptions) {
+    super(`Not found: ${what}`, options);
     this.name = "NotFoundError";
   }
 }
@@ -51,5 +51,21 @@ export class InvalidInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InvalidInputError";
+  }
+}
+
+/** A content write reached an archived brand; archived brands take no content writes (design §8). */
+export class BrandArchivedError extends Error {
+  constructor(what: string) {
+    super(`Brand ${what} is archived`);
+    this.name = "BrandArchivedError";
+  }
+}
+
+/** The purge refused before deleting anything (wrong database role, not local, changed since the bundle). The message is user-facing Spanish. */
+export class PurgeRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PurgeRefusedError";
   }
 }

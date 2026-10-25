@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 
 import {
+  BrandArchivedError,
   NotFoundError,
   AlreadyExistsError,
   InvalidInputError,
@@ -381,8 +382,9 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
       return sql.begin(async (tx) => {
-        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
         if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        if (brand.status === "archived") throw new BrandArchivedError(`${brandId}`);
         const [row] = await tx`INSERT INTO assets (brand_id, asset_id, sha256, blob_key, kind, mime, width, height, bytes, origin, status, tags, family, generation, created_at, updated_at)
                                VALUES (${brandId}, ${input.sha256.slice(0, 16)}, ${input.sha256}, ${blobKey(brandId, input.sha256)}, ${input.kind}, ${input.mime},
                                        ${input.width ?? null}, ${input.height ?? null}, ${input.bytes}, ${input.origin}, ${input.status}, ${input.tags ?? []},
@@ -457,6 +459,11 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
   async function writeCarousel(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
     if (!isUuid(id)) throw new NotFoundError(`carousel ${id}`);
     return sql.begin(async (tx) => {
+      // Lock order: brand (FOR SHARE) then carousel, the same as `purge`, so an `archive` or a purge cannot commit in between.
+      const [head] = await tx`SELECT brand_id FROM carousels WHERE id = ${id}`;
+      if (!head) throw new NotFoundError(`carousel ${id}`);
+      const [brand] = await tx`SELECT status FROM brands WHERE id = ${head.brand_id} FOR SHARE`;
+      if (brand.status === "archived") throw new BrandArchivedError(`of carousel ${id}`);
       const [cur] = await tx`SELECT * FROM carousels WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!cur) throw new NotFoundError(`carousel ${id}`);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
@@ -485,8 +492,9 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
       return sql.begin(async (tx) => {
-        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
         if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        if (brand.status === "archived") throw new BrandArchivedError(`${brandId}`);
         const at = now();
         const [row] = await tx`INSERT INTO carousels (brand_id, slug, title, status, document, document_schema_version, created_at, updated_at)
                                VALUES (${brandId}, ${input.slug}, ${input.title}, ${input.status ?? "draft"}, ${json(tx, stripStatus(input.document.json))},

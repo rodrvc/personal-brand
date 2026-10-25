@@ -744,15 +744,15 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   for (const svg of hostile) assert.equal(contentRefusal("a.svg", Buffer.from(svg))?.kind, "unknown", svg);
   const svgLogo = '<?xml version="1.0"?><!-- logo --><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><linearGradient id="g"><stop offset="0" stop-color="#111"/></linearGradient></defs><rect fill="url(#g)" width="4" height="4"/><text>Prices from 10:00 &amp; up</text></svg>';
   assert.equal(contentRefusal("a.svg", Buffer.from(svgLogo)), null, "a normal logo, and text with a colon, are accepted");
-  // Linear time on hostile inputs, judged by a ratio and not by a wall clock: a 4 MB run may take at most 16x a 1 MB run (a
-  // linear scan takes about 4x; a quadratic one about 16x and more, and a slow host slows both runs alike). Best of three runs each.
+  // Linear time on hostile inputs, judged by a ratio and not by a wall clock: a 4 MB run may take at most 8x a 1 MB run, plus a
+  // fixed margin (a linear scan takes about 4x; a quadratic one about 16x and more, and a slow host slows both runs alike). Best of three runs each.
   const MB = 1024 * 1024;
   const best = (file: string, body: string) => Math.min(...[1, 2, 3].map(() => { const t0 = performance.now(); contentRefusal(file, Buffer.from(body)); return performance.now() - t0; }));
   const hostileRuns: [string, (n: number) => string][] = [["a.svg", (n) => "url(" + " ".repeat(n) + "x"], ["a.svg", (n) => `<svg style="fill:url(${" ".repeat(n)}x"/>`], ["a.svg", (n) => "<svg" + " ".repeat(n) + "x"], ["a.svg", (n) => "<!--".repeat(n / 4)],
     ["a.svg", (n) => `<svg fill="${"a".repeat(n)}"/>`], ["a.png", (n) => "eyJ-".repeat(n / 4)], ["a.txt", (n) => "eyJ-".repeat(n / 4)], ["a.txt", (n) => "a-".repeat(n / 2)]];
   for (const [file, make] of hostileRuns) {
     const small = Math.max(best(file, make(MB)), 1);
-    assert.ok(best(file, make(4 * MB)) < small * 16 + 50, `${file} ${make(16).slice(0, 12)}: scanned in linear time`);
+    assert.ok(best(file, make(4 * MB)) < small * 8 + 50, `${file} ${make(16).slice(0, 12)}: scanned in linear time`);
   }
   // Runs of ~6 MB must not overflow the regex stack (a RangeError would abort an import): refused or accepted, never thrown.
   const MB6 = 6 * 1024 * 1024;

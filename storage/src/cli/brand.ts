@@ -6,12 +6,12 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { S3ObjectStore } from "../blob/index.ts";
-import { NotFoundError, type BlobStore } from "../contracts/index.ts";
+import { NotFoundError, PurgeRefusedError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
-import { createPgRepositories } from "../pg/index.ts";
+import { createPgRepositories, openPurger, type Purger } from "../pg/index.ts";
 
 export type { CliResult };
 
@@ -218,6 +218,8 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: No
 export interface CliHooks {
   suffix?: () => string;
   beforeRead?: (path: string) => void;
+  /** Replaces the `DATABASE_PURGE_URL` connection of `purge` (the host gate still runs first). */
+  openPurger?: () => Promise<Purger>;
 }
 
 /**
@@ -259,7 +261,12 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (brand && brand.value.status !== "active") return { lines: [`La marca "${target.slug}" está archivada: no se escribe contenido en ella. No se hizo nada.`], exitCode: EXIT.REFUSED };
         if (ownerRefused && !brand?.value.cutoverAt) return { lines: [`${ownerRefused} (Una escritura de contenido sin aprobación solo se permite en una marca ya cortada a storage.)`], exitCode: EXIT.REFUSED };
       }
-      return await runVerb({ repos: verbRepos, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), resolve: (path) => fromCwd(path, env) }, verb!, args);
+      const purgerFor = async () => {
+        const url = env.DATABASE_PURGE_URL;
+        if (!url || !isLocalDatabase(url)) throw new PurgeRefusedError("DATABASE_PURGE_URL no apunta a una base de datos local: la purga solo corre en local");
+        return hooks.openPurger ? hooks.openPurger() : openPurger(connect(env, url), verbSql ?? undefined);
+      };
+      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {
