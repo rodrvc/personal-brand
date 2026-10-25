@@ -41,16 +41,17 @@ the hooks and CI both run is a Python script.
 ## Registering a brand
 
 ```bash
-pnpm init:profile
+BRAND_OWNER_OPT_IN=<slug> pnpm --filter @personal-brand/storage brand create <slug> --name "<display name>" --owner-opt-in <slug>
 ```
 
-An interactive terminal prompt. It copies `profiles/example/` as the starting
-point, asks which of the brand's terms must be watched, appends them to the
-local file, and refuses to finish unless the new folder is genuinely outside
-git.
+A brand lives in storage (`brand create`, owner opt-in required). `pnpm
+init:profile` only prints this pointer and writes nothing. Then add the
+brand's terms (slug, domain, handle, city) to `scripts/brand-denylist.local.txt`
+by hand (git-ignored). A brand made with `brand create` is not renderable by
+today's modules until its cutover (D12; S9a/S10).
 
-Creating a profile by hand instead skips the term registration — and a gate
-with no terms to search for reports success without checking anything.
+Skipping the term registration is the risk: a gate with no terms to search
+for reports success without checking anything.
 
 ## Running the editor
 

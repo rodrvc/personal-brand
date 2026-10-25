@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { AlreadyExistsError, blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
+import { OUTPUTS_MARKER } from "./legacy-bucket.ts";
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectExports } from "./exports.ts";
@@ -61,6 +62,8 @@ export interface ImportReport {
    * different since the latest import run's manifest (empty on a first run).
    */
   legacy: { count: number; manifest: Record<string, string>; changed: string[] };
+  /** Where the source lives when it is not a folder (`legacy-bucket:<prefix><slug>`); then `outputsRoot` is the label `_outputs/`, not a temporary path. */
+  origin?: string;
   /** Set when the pass threw part-way; the counts then cover only the items done before it. */
   aborted?: string;
 }
@@ -195,7 +198,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
-export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date }): Promise<ImportReport> {
+export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date; extraSkipped?: string[]; quietNotices?: string[]; origin?: string }): Promise<ImportReport> {
   const dir = resolve(opts.from);
   const slug = basename(dir);
   const now = opts.now ?? (() => new Date());
@@ -204,6 +207,9 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
   const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
+  // In place: the report shares these arrays with the items, which add notices while they are written.
+  skipped.unshift(...(opts.extraSkipped ?? []));
+  for (const quiet of opts.quietNotices ?? []) if (notices.includes(quiet)) notices.splice(notices.indexOf(quiet), 1);
 
   if (!opts.dryRun && !brand) {
     const meta: WriteMeta = { expectedVersion: null, author: opts.author, source: "import", reason: "import" };
@@ -213,7 +219,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
   const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot,
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.origin && outputsRoot ? OUTPUTS_MARKER : outputsRoot, ...(opts.origin ? { origin: opts.origin } : {}),
     legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),

@@ -27,12 +27,10 @@ It is safe to run again at any time.
 Then register a brand:
 
 ```bash
-pnpm init:profile
+BRAND_OWNER_OPT_IN=<slug> pnpm --filter @personal-brand/storage brand create <slug> --name "<display name>" --owner-opt-in <slug>
 ```
 
-An interactive terminal prompt. It asks for a slug, copies `profiles/example/`
-as the starting point, asks which of the brand's terms must be watched, and
-refuses to finish unless the new folder is genuinely outside git.
+Brands live in storage; `pnpm init:profile` only prints this pointer. See `docs/SETUP.md`.
 
 Everyday commands:
 
@@ -86,7 +84,7 @@ plain list of everything you meant to keep out of sight.
 ├─ app/               desktop module (Tauri) — deprecated, superseded by editor/
 ├─ core/              shared logic between modules
 ├─ profiles/
-│  ├─ example/        fictional profile, tracked — the template init:profile copies
+│  ├─ example/        fictional profile, tracked — the template for the example brands
 │  └─ example-personal/
 ├─ scripts/           setup, profile registration, the commit gate
 └─ docs/              architecture and rules

@@ -142,7 +142,7 @@ The engine / brand boundary
 
 Next
 ----
-  pnpm init:profile     register a brand and its watched terms
+  pnpm init:profile     where to register a brand (prints a pointer; see docs/SETUP.md)
   pnpm check            typecheck + tests
 `);
 }
