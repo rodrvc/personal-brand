@@ -244,6 +244,11 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (!row) throw new NotFoundError(`revision ${entityType}/${entityId}@${version}`);
       return toRevision(row);
     },
+    async listSince(brandId, entityType, since) {
+      if (!isUuid(brandId)) return [];
+      return (await sql`SELECT * FROM revisions WHERE brand_id = ${brandId} AND entity_type = ${entityType} AND created_at > ${new Date(since)}
+                        ORDER BY created_at, entity_id, version`).map(toRevision);
+    },
   };
 
   const rules: BrandRuleRepository = {
@@ -324,8 +329,8 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
   const guidance: GuidanceRepository = {
     async list(brandId) {
       if (!isUuid(brandId)) return [];
-      const rows = await sql`SELECT name, description, version, updated_at FROM brand_guidance WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
-      return rows.map((r) => ({ name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
+      const rows = await sql`SELECT id, name, description, version, updated_at FROM brand_guidance WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
     },
     async get(brandId, name) {
       const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_guidance WHERE brand_id = ${brandId} AND name = ${name}` : [];
@@ -340,6 +345,11 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
   };
 
   const recipes: RecipeRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT recipe, version, updated_at FROM brand_recipes WHERE brand_id = ${brandId} ORDER BY recipe COLLATE "C"`;
+      return rows.map((r) => ({ recipe: r.recipe, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
     async get(brandId, recipe, validate) {
       const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_recipes WHERE brand_id = ${brandId} AND recipe = ${recipe}` : [];
       if (!r) throw new NotFoundError(`recipe ${recipe}`);

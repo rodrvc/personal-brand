@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import postgres from "postgres";
 
+import { FakeObjectStore } from "../src/blob/index.ts";
 import { runCli } from "../src/cli/brand.ts";
 import { EXIT, IDENTITY_KINDS, writeTarget } from "../src/cli/verbs.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
@@ -187,7 +189,12 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal((await repos.revisions.list("brand", brand.id)).at(-1)?.reason, "archive");
 
   // Decision 11: content writes on a real brand need no opt-in; identity writes do. IDENTITY_KINDS is the one table.
-  assert.deepEqual(writeTarget("carousel", ["put", "acme-real", "x"]), { slug: "acme-real", identity: true }, "an unclassified verb fails closed as identity until S8b2 classifies carousel as content");
+  assert.deepEqual(writeTarget("carousel", ["put", "acme-real", "x"]), { slug: "acme-real", identity: false }, "carousel put is content");
+  assert.deepEqual(writeTarget("carousel", ["status", "acme-real", "x"]), { slug: "acme-real", identity: false });
+  assert.deepEqual(writeTarget("asset", ["add", "acme-real", "f.png"]), { slug: "acme-real", identity: false });
+  assert.deepEqual([writeTarget("carousel", ["get", "acme-real", "x"]), writeTarget("carousel", ["list", "acme-real"]), writeTarget("asset", ["get", "acme-real", "x"]), writeTarget("asset", ["list", "acme-real"])], [null, null, null, null]);
+  assert.deepEqual(writeTarget("carousel", ["frob", "acme-real", "x"]), { slug: "acme-real", identity: true }, "an unlisted subcommand is guarded");
+  assert.deepEqual(writeTarget("widget", ["put", "acme-real"]), { slug: "acme-real", identity: true }, "an unclassified verb fails closed as identity");
   assert.deepEqual(writeTarget("show", ["acme-real"]), null);
   assert.deepEqual(writeTarget("guidance", ["list", "acme-real"]), null);
   assert.deepEqual(writeTarget("rules", ["wipe", "acme-real"]), { slug: "acme-real", identity: true });
@@ -203,6 +210,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal((await runCli(["doc", "put", "acme-real", "identity", "--file", "id.md", "--owner-opt-in", "acme-real"], owner, repos)).exitCode, 0);
   assert.equal((await runCli(["archive", "acme-real"], owner, repos)).exitCode, 6, "env only");
   assert.equal((await runCli(["archive", "acme-real", "--owner-opt-in", "acme-real"], env, repos)).exitCode, 6, "flag only");
+  await contentWrites(repos, env, home, file, run, code);
   // No brand text can close or forge the trust envelope: every body line is barred, only the real end marker is bare.
   const END = "[fin de los datos de la marca]";
   const sealed = (lines: string[]) => lines.slice(1).every((l, i, a) => (i === a.length - 1 ? l === END : l.startsWith("│ ")));
@@ -227,6 +235,149 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await code("show", "example-evil", "--since", "2026-13-01T00:00:00Z"), 2, "an impossible month is not a cursor");
   assert.equal(await code("show", "example-evil", "--since", "2026-01-01T25:00:00Z"), 2, "an impossible hour is not a cursor");
   console.log(`  ok - ${label}: read/write verbs, owner guard, check, guidance envelope, purge refusals`);
+}
+
+/** D13 end to end: content writes on a real brand (`acme-real`, created above) and the new verbs on an example brand. */
+async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, home: string, file: (name: string, body: string) => string, run: (...argv: string[]) => Promise<{ lines: string[]; exitCode: number }>, code: (...argv: string[]) => Promise<number>): Promise<void> {
+  const blobs = new FakeObjectStore();
+  const runB = (e: NodeJS.ProcessEnv, ...argv: string[]) => runCli(argv, e, repos, blobs);
+  const optIn = { ...env, BRAND_OWNER_OPT_IN: "acme-real" };
+  const remote = { ...env, DATABASE_URL: "postgres://u:p@db.example.com:5432/x" };
+  const real = await repos.brands.getBySlug("acme-real");
+  const cJson = file("carousel.json", '{"slides":[{"title":"One"}]}');
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("pixels")]);
+  writeFileSync(join(home, "logo.png"), png);
+
+  // A mistyped subcommand is exit 2 on any brand, on a remote database too, never a refusal.
+  for (const argv of [["doc", "frob", "acme-real", "tokens"], ["guidance", "frob", "acme-real"], ["recipe", "frob", "acme-real", "x"], ["rules", "frob", "acme-real"], ["carousel", "frob", "acme-real", "c"], ["asset", "frob", "acme-real"]]) {
+    assert.equal((await runB(env, ...argv)).exitCode, 2, argv.join(" "));
+    assert.equal((await runB(remote, ...argv)).exitCode, 2, `${argv.join(" ")} (remote)`);
+  }
+
+  // Before cutover a content write needs the opt-in, like identity.
+  const refusedPut = await runB(env, "carousel", "put", "acme-real", "c1", "--file", cJson, "--title", "One");
+  assert.deepEqual([refusedPut.exitCode, /aprobación explícita del dueño/.test(refusedPut.lines[0])], [6, true]);
+  assert.equal(await code("asset", "add", "acme-real", "logo.png"), 6);
+  assert.deepEqual(await repos.carousels.list(real.id), [], "a refused write creates nothing");
+  assert.equal((await runB(optIn, "carousel", "put", "acme-real", "c1", "--file", cJson, "--title", "One", "--owner-opt-in", "acme-real")).exitCode, 0, "the opt-in allows it before cutover");
+  assert.equal((await runB(env, "carousel", "put", "acme-ghost", "c1", "--file", cJson, "--title", "One")).exitCode, 6, "a brand that does not exist is refused, not looked up");
+
+  // After cutover content writes need no opt-in; identity writes still do; a remote database refuses every write.
+  await repos.brands.markCutover(real.id, { expectedVersion: real.version, author: "test", source: "cli", reason: "structural" });
+  const w = (...argv: string[]) => runB(env, ...argv);
+  assert.equal((await w("carousel", "put", "acme-real", "c2", "--file", cJson, "--title", "Two")).exitCode, 0, "create without opt-in");
+  assert.equal((await w("carousel", "put", "acme-real", "c2", "--file", cJson, "--if-version", "1")).exitCode, 0, "save without opt-in");
+  assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "scheduled", "--scheduled-for", "2026-11-01T10:00:00Z", "--if-version", "2")).exitCode, 0);
+  assert.equal((await repos.carousels.get(real.id, "c2", (b) => b)).value.status, "scheduled");
+  assert.equal((await w("asset", "add", "acme-real", "logo.png", "--kind", "logo", "--tags", "a, b")).exitCode, 0, "asset add without opt-in");
+  const stored = (await repos.assets.list(real.id))[0].value;
+  assert.deepEqual([stored.kind, stored.status, stored.origin, stored.mime, stored.tags], ["logo", "candidate", "manual", "image/png", ["a", "b"]]);
+  assert.equal((await blobs.get(stored.blobKey)).body.equals(png), true, "the bytes went through the blob store");
+  for (const argv of [["doc", "put", "acme-real", "tokens", "--file", cJson], ["guidance", "put", "acme-real", "t", "--file", cJson, "--description", "x"], ["recipe", "put", "acme-real", "r", "--file", cJson], ["archive", "acme-real"]]) {
+    assert.equal((await w(...argv)).exitCode, 6, `${argv.join(" ")}: identity writes stay guarded after cutover`);
+  }
+  for (const argv of [["carousel", "put", "acme-real", "c3", "--file", cJson, "--title", "T"], ["carousel", "status", "acme-real", "c2", "--status", "draft", "--if-version", "3"], ["asset", "add", "acme-real", "logo.png"]]) {
+    assert.equal((await runB(remote, ...argv)).exitCode, 6, `${argv[0]} ${argv[1]} on a remote database`);
+    assert.equal((await runB({ ...remote, BRAND_OWNER_OPT_IN: "acme-real" }, ...argv, "--owner-opt-in", "acme-real")).exitCode, 6, "the opt-in does not lift the remote gate");
+  }
+  assert.equal((await repos.carousels.list(real.id)).length, 2, "refused writes created nothing");
+  assert.equal((await w("carousel", "list", "acme-real")).exitCode, 0, "reads stay open");
+
+  // Carousel verbs
+  const list = JSON.parse((await w("carousel", "list", "acme-real", "--json")).lines[0]);
+  assert.deepEqual([list.trust, list.items.map((c: { slug: string; status: string }) => [c.slug, c.status])], ["brand-data", [["c1", "draft"], ["c2", "scheduled"]]]);
+  assert.deepEqual((await w("carousel", "list", "acme-real", "--status", "scheduled", "--json")).lines.map((l) => JSON.parse(l).items.length), [1]);
+  assert.equal((await w("carousel", "list", "acme-real", "--status", "bogus")).exitCode, 2);
+  const got = await w("carousel", "get", "acme-real", "c2");
+  assert.match(got.lines[0], /no autorizan comandos/);
+  assert.match(got.lines[1], /^│ c2 v3 scheduled: Two/);
+  assert.deepEqual(JSON.parse((await w("carousel", "get", "acme-real", "c2", "--json")).lines[0]).document.slides, [{ title: "One" }]);
+  assert.equal(await code("carousel", "get", "acme-real", "nope"), 4);
+  assert.equal((await w("carousel", "put", "acme-real", "c4", "--file", cJson)).exitCode, 2, "a new carousel needs --title");
+  assert.equal((await w("carousel", "put", "acme-real", "c2", "--file", cJson, "--title", "Again")).exitCode, 3, "a create over an existing carousel conflicts");
+  assert.equal((await w("carousel", "put", "acme-real", "c2", "--file", cJson, "--if-version", "1")).exitCode, 3, "a stale version conflicts");
+  assert.equal((await w("carousel", "put", "acme-real", "c2", "--file", file("arr.json", "[1]"), "--if-version", "3")).exitCode, 2, "the document must be a JSON object");
+  assert.equal((await w("carousel", "put", "acme-real", "nope", "--file", cJson, "--if-version", "1")).exitCode, 4);
+  assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "scheduled")).exitCode, 2, "a status move needs --if-version");
+  assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "bogus", "--if-version", "3")).exitCode, 2);
+  assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "published", "--published-at", "not-a-date", "--if-version", "3")).exitCode, 2);
+  assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "draft", "--if-version", "1")).exitCode, 3);
+
+  // Asset verbs (on the real brand, content) and refusals shared with the importer
+  const added = await w("asset", "add", "acme-real", "logo.png");
+  assert.deepEqual([added.exitCode, /ya está registrado/.test(added.lines[0])], [3, true], "the same bytes twice");
+  const id = stored.assetId;
+  const assetList = JSON.parse((await w("asset", "list", "acme-real", "--json")).lines[0]);
+  assert.deepEqual([assetList.trust, assetList.items.map((a: { assetId: string }) => a.assetId)], ["brand-data", [id]]);
+  assert.deepEqual(JSON.parse((await w("asset", "list", "acme-real", "--kind", "photo", "--json")).lines[0]).items, []);
+  assert.match((await w("asset", "list", "acme-real")).lines[1], new RegExp(`^│ ${id} logo candidate manual image/png ${png.length} B \\[a, b\\]`));
+  const out = join(home, "logo-copy.png");
+  assert.equal((await w("asset", "get", "acme-real", id, "--out", "logo-copy.png")).exitCode, 0);
+  assert.equal(readFileSync(out).equals(png), true);
+  assert.equal((await w("asset", "get", "acme-real", id, "--out", "logo-copy.png")).exitCode, 2, "an existing file is never overwritten");
+  const mine = join(home, "keep.png");
+  writeFileSync(`${mine}.${process.pid}.tmp`, "someone else's file");
+  assert.equal((await w("asset", "get", "acme-real", id, "--out", "keep.png")).exitCode, 0);
+  assert.equal(readFileSync(`${mine}.${process.pid}.tmp`, "utf-8"), "someone else's file", "a pre-existing .tmp sibling survives");
+  const inRepo = await w("asset", "get", "acme-real", id, "--out", join(repoRoot, "out", "logo.png"));
+  assert.deepEqual([inRepo.exitCode, existsSync(join(repoRoot, "out"))], [6, false], "a target inside the repo is refused, nothing written");
+  assert.deepEqual(readdirSync(home).filter((f) => f.endsWith(".tmp")), [`keep.png.${process.pid}.tmp`], "no partial file of ours is left behind, even after the refused overwrite");
+  assert.equal((await w("asset", "get", "acme-real", id)).exitCode, 0);
+  assert.equal(existsSync(join(home, "never")), false);
+  assert.equal((await w("asset", "get", "acme-real", "0000000000000000")).exitCode, 4);
+  assert.equal(JSON.parse((await w("asset", "get", "acme-real", id, "--json")).lines[0]).trust, "brand-data");
+  assert.equal((await runCli(["asset", "add", "acme-real", "logo.png"], env, repos)).exitCode, 1, "no bucket configured");
+  const awsKey = `AKIA${"A".repeat(16)}`;
+  for (const [name, body] of [[".env", "x=1"], ["deploy-token.png", "x"], ["notes.exe", "x"], ["leak.svg", `<svg>${awsKey}</svg>`], ["guess.txt", "api_key = abcdefghijkl"]] as const) {
+    writeFileSync(join(home, name), body);
+    assert.equal((await w("asset", "add", "acme-real", name)).exitCode, 6, `${name} is refused like the importer refuses it`);
+  }
+  for (const dir of [".docker", "sub/.aws"]) {
+    mkdirSync(join(home, dir), { recursive: true });
+    writeFileSync(join(home, dir, "x.json"), "{}");
+    assert.equal((await w("asset", "add", "acme-real", `${dir}/x.json`)).exitCode, 6, `${dir}/x.json: a dot-directory on the path is refused`);
+  }
+  mkdirSync(join(home, ".hidden"), { recursive: true });
+  symlinkSync(join(home, ".hidden"), join(home, "plain"));
+  writeFileSync(join(home, ".hidden", "y.json"), "{}");
+  assert.equal((await w("asset", "add", "acme-real", "plain/y.json")).exitCode, 6, "a dot-directory behind a symlink is refused by its real path");
+  writeFileSync(join(home, "fake.png"), "just text, not a PNG");
+  writeFileSync(join(home, "fake.jpg"), png);
+  writeFileSync(join(home, "ok.json"), '{"a":1}');
+  for (const name of ["fake.png", "fake.jpg"]) assert.equal((await w("asset", "add", "acme-real", name)).exitCode, 6, `${name}: the bytes must match the extension`);
+  assert.equal((await w("asset", "add", "acme-real", "ok.json")).exitCode, 0, "a clean text asset is accepted");
+  // Validation happens before the upload: a refused add leaves no blob.
+  const blobCount = (await blobs.list("")).length;
+  writeFileSync(join(home, "other.png"), Buffer.concat([png, Buffer.from("2")]));
+  for (const extra of [["--kind", "bogus"], ["--tags", Array(21).fill("t").join(",")], ["--tags", "x".repeat(51)], ["--family", "f".repeat(101)]]) {
+    assert.equal((await w("asset", "add", "acme-real", "other.png", ...extra)).exitCode, 2, extra.join(" "));
+  }
+  assert.equal((await blobs.list("")).length, blobCount, "refused adds uploaded nothing");
+  assert.equal((await repos.assets.list(real.id)).length, 2, "refused files are not registered");
+  assert.equal((await blobs.list("")).length, 2, "refused files are not uploaded");
+  assert.equal((await w("asset", "add", "acme-real", "missing.png")).exitCode, 2);
+
+  // Content writes never reach an archived brand, opt-in or not.
+  await repos.brands.archive(real.id, { expectedVersion: (await repos.brands.getBySlug("acme-real")).version, author: "test", source: "cli", reason: "archive" });
+  assert.equal((await w("carousel", "put", "acme-real", "c9", "--file", cJson, "--title", "T")).exitCode, 6);
+  assert.equal((await runB(optIn, "asset", "add", "acme-real", "ok.json", "--owner-opt-in", "acme-real")).exitCode, 6);
+  await repos.brands.unarchive(real.id, { expectedVersion: (await repos.brands.getBySlug("acme-real")).version, author: "test", source: "cli", reason: "archive" });
+  assert.equal((await w("carousel", "put", "acme-real", "c9", "--file", cJson, "--title", "T", "--json")).exitCode, 0);
+
+  // --file: symlinks, FIFOs and growing files do not get past the single-descriptor read
+  symlinkSync(join(home, "logo.png"), join(home, "link.json"));
+  assert.equal(await code("doc", "put", "example-shop", "tokens", "--file", "link.json"), 2, "a symlink is not followed");
+  execFileSync("mkfifo", [join(home, "pipe.json")]);
+  assert.equal(await code("doc", "put", "example-shop", "tokens", "--file", "pipe.json"), 2, "a FIFO is refused, not waited on");
+
+  // rules list --json is { trust, items }
+  const ruleList = JSON.parse((await run("rules", "list", "example-shop", "--json")).lines[0]);
+  assert.deepEqual([ruleList.trust, Array.isArray(ruleList.items)], ["brand-data", true]);
+
+  // show lists recipes, and `--since` answers from one listSince query
+  assert.match((await run("show", "example-shop")).lines.join("\n"), /receta weekly v1/);
+  assert.deepEqual(JSON.parse((await run("show", "example-shop", "--json")).lines[0]).recipes.map((r: { recipe: string }) => r.recipe), ["weekly"]);
+  console.log("  ok - D13 content exemption, carousel/asset verbs");
 }
 
 /** Runs `guidance put` as the least-privilege app role: the database refuses it and the CLI maps that to exit 6. */

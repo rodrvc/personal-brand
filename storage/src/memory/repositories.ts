@@ -173,6 +173,11 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       if (!found) throw new NotFoundError(`revision ${entityType}/${entityId}@${version}`);
       return structuredClone(found);
     },
+    async listSince(brandId, entityType, since) {
+      const after = Date.parse(since);
+      return structuredClone(log.filter((r) => r.brandId === brandId && r.entityType === entityType && Date.parse(r.createdAt) > after)
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || cmp(a.entityId, b.entityId) || a.version - b.version));
+    },
   };
 
   const ruleRows = new Map<string, Versioned<BrandRule> & { brandId: string; createdAt: string }>();
@@ -236,7 +241,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   const guidance: GuidanceRepository = {
     async list(brandId) {
       return [...keyed.brand_guidance.values()].filter((r) => r.brandId === brandId).sort((a, b) => cmp(a.key, b.key))
-        .map((r) => ({ name: r.key, description: r.data.description as string, version: r.version, updatedAt: r.updatedAt }));
+        .map((r) => ({ id: r.id, name: r.key, description: r.data.description as string, version: r.version, updatedAt: r.updatedAt }));
     },
     async get(brandId, name) {
       const r = findKeyed("brand_guidance", brandId, name);
@@ -250,6 +255,10 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   };
 
   const recipes: RecipeRepository = {
+    async list(brandId) {
+      return [...keyed.brand_recipes.values()].filter((r) => r.brandId === brandId).sort((a, b) => cmp(a.key, b.key))
+        .map((r) => ({ recipe: r.key, version: r.version, updatedAt: r.updatedAt }));
+    },
     async get(brandId, recipe, validate) {
       const r = findKeyed("brand_recipes", brandId, recipe);
       if (!r) throw new NotFoundError(`recipe ${recipe}`);
