@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { FakeObjectStore } from "../src/blob/index.ts";
 import { runCli } from "../src/cli/brand.ts";
-import { extractFontFaces, MAX_FONT_BYTES } from "../src/cli/fonts.ts";
+import { downloadFonts, extractFontFaces, FontPolicyError, MAX_FONT_BYTES } from "../src/cli/fonts.ts";
 import { createMemoryRepositories } from "../src/memory/index.ts";
 
 const work = mkdtempSync(join(tmpdir(), "brand-fonts-"));
@@ -126,6 +126,33 @@ try {
   const long = network({ [HREF]: () => new Response(`@font-face { font-family: '${"x".repeat(101)}'; src: url(${a}); }`) });
   const longRun = await fonts("example-quoted", long.doFetch);
   assert.deepEqual([longRun.exitCode, /familia/.test(longRun.lines[0]), long.seen], [6, true, [HREF]], "an over-long family is a policy refusal, not a --family error");
+
+  // Identical bytes behind two URLs keep the FIRST face's family; --json lists the asset ids that already existed, not hashes.
+  const firstWins = await setup("example-first", HREF);
+  const faces = `@font-face { font-family: 'First Family'; src: url(${a}); }\n@font-face { font-family: 'Second Family'; src: url(${b}); }`;
+  const twins = network({ [HREF]: () => new Response(faces), [a]: () => new Response(woff2("twin")), [b]: () => new Response(woff2("twin")) });
+  assert.equal((await fonts("example-first", twins.doFetch)).exitCode, 0);
+  const [only] = await repos.assets.list(firstWins);
+  assert.deepEqual([(await repos.assets.list(firstWins)).length, only.value.family], [1, "First Family"]);
+  const json = JSON.parse((await run({ fetch: twins.doFetch }, "fonts", "fetch", "example-first", "--json")).lines[0]);
+  assert.deepEqual([json.added, json.existing], [[], [only.value.assetId]], "existing holds the asset ids");
+
+  // A failure mid-registration says what is already in place and keeps the error class (a re-run skips the registered fonts).
+  const partial = await setup("example-partial", HREF);
+  let calls = 0;
+  const flaky = { ...repos, assets: { ...repos.assets, register: (...args: Parameters<typeof repos.assets.register>) => (++calls === 2 ? Promise.reject(new Error("connection lost")) : repos.assets.register(...args)) } } as typeof repos;
+  const two2 = network({ [HREF]: () => new Response(css(a, b)), [a]: () => new Response(woff2("pa")), [b]: () => new Response(woff2("pb")) });
+  const cut = await runCli(["fonts", "fetch", "example-partial"], env, flaky, blobs, { fetch: two2.doFetch });
+  assert.deepEqual([cut.exitCode, /connection lost; registro parcial: 1 fuente\(s\)/.test(cut.lines[0]), (await repos.assets.list(partial)).length], [1, true, 1], cut.lines.join("\n"));
+  assert.match((await fonts("example-partial", two2.doFetch)).lines.join("\n"), /1 registradas \(candidatas\), 1 ya estaban/);
+
+  // The 60 s run deadline is a parameter: a network that never answers is cut off when it passes.
+  const hangs = ((_url: string, init?: RequestInit) => new Promise((_, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason)))) as unknown as typeof fetch;
+  const t1 = Date.now();
+  const keepAlive = setTimeout(() => {}, 5000); // AbortSignal.timeout timers are unref'd: without this the process would just exit
+  await assert.rejects(() => downloadFonts(hangs, HREF, 30), (e) => e instanceof FontPolicyError && /tiempo agotado/.test(e.message));
+  clearTimeout(keepAlive);
+  assert.ok(Date.now() - t1 < 5000, "the deadline cut the request");
 
   const noHref = await setup("example-plain");
   assert.deepEqual([(await fonts("example-plain", none.doFetch)).exitCode, none.seen, (await repos.assets.list(noHref)).length], [0, [], 0], "no googleFontsHref: nothing to fetch");

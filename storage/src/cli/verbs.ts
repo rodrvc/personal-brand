@@ -12,7 +12,7 @@ import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "..
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
-import { downloadFonts, FontPolicyError, type FontFile } from "./fonts.ts";
+import { downloadFonts, FontPolicyError, MAX_FAMILY_CHARS, type FontFile } from "./fonts.ts";
 import { toCheckRules } from "../revision-policy.ts";
 
 export interface CliResult {
@@ -328,7 +328,7 @@ async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
     if (["40001", "40P01", "23503", "23001"].includes((error as { code?: string }).code ?? "")) {
       return refused(`La purga se revirtió porque otra escritura chocó con ella (${(error as Error).message}); vuelve a ejecutarla. No se borró nada${left}.`);
     }
-    throw left ? Object.assign(new Error(`${(error as Error).message}${left}`), { cause: error }) : error;
+    throw left ? withNote(error, left) : error;
   } finally {
     await purger.close();
   }
@@ -623,8 +623,6 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const judgedStat = lstatSync(judged); // the real file, not a link to it
   const byName = pathRefusal(ctx, arg);
   if (byName) return refuse(byName.why);
-  const ext = name.split(".").pop()!.toLowerCase();
-  if (!Object.hasOwn(MAGIC, ext) && ext !== "webp" && !TEXT_ASSETS.includes(ext)) return refuse("tipo no admitido por asset add");
   const { bytes, stat } = ctx.readBytes(arg, MAX_ASSET_BYTES);
   if (stat.dev !== judgedStat.dev || stat.ino !== judgedStat.ino || realNearest(ctx.resolve(arg)) !== judged) return refuse("el archivo cambió mientras se leía");
   if (stat.nlink > 1) return refuse("el archivo tiene enlaces duros: su ruta real no es verificable");
@@ -636,11 +634,13 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
 }
 
 type Judged = { sha256: string; mime: string; kind: AssetKind; tags?: string[]; family?: string };
+/** `exists` is the asset id of the row already there: an asset id is the first 16 hex characters of the sha256 by construction. */
 type Registered = { exists: string } | { done: Awaited<ReturnType<ImportRepos["assets"]["register"]>> };
 
 /** Pure half of `asset add`, shared with `fonts fetch`: magic bytes, secret scan and the field limits. Nothing is uploaded, so a caller can judge many files before committing any. */
 function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: string; family?: string }): Judged | { refused: string } {
   const ext = name.split(".").pop()!.toLowerCase();
+  if (!Object.hasOwn(MAGIC, ext) && ext !== "webp" && !TEXT_ASSETS.includes(ext)) return { refused: "tipo no admitido por asset add" };
   // A binary type must start with the bytes of that type (the extension alone proves nothing); text is scanned for secrets.
   const genuine = ext === "webp" ? mimeOf(bytes, name) === "image/webp" : !Object.hasOwn(MAGIC, ext) || MAGIC[ext].some((m) => bytes.subarray(0, m.length / 2).toString("hex") === m);
   if (!genuine) return { refused: `el contenido no es ${ext}` };
@@ -648,7 +648,7 @@ function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: stri
   if (byContent) return { refused: byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why };
   const kind = o.kind ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
   const tags = o.tags?.split(",").map((t) => t.trim()).filter(Boolean);
-  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (o.family && o.family.length > 100)) throw new InvalidInputError("invalid --kind, --tags (at most 20 of 50 characters) or --family (at most 100 characters)");
+  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (o.family && o.family.length > MAX_FAMILY_CHARS)) throw new InvalidInputError(`invalid --kind, --tags (at most 20 of 50 characters) or --family (at most ${MAX_FAMILY_CHARS} characters)`);
   return { sha256: createHash("sha256").update(bytes).digest("hex"), mime: mimeOf(bytes, name), kind: kind as AssetKind, ...(tags?.length ? { tags } : {}), ...(o.family ? { family: o.family } : {}) };
 }
 
@@ -661,6 +661,13 @@ async function commitBytes(ctx: Ctx, brandId: string, bytes: Buffer, j: Judged):
     if (error instanceof AlreadyExistsError) return { exists: j.sha256.slice(0, 16) };
     throw error;
   }
+}
+
+/** Appends `note` to the message of `error` and returns the same object, so its class (and the exit code it maps to) survives. */
+function withNote(error: unknown, note: string): unknown {
+  if (!(error instanceof Error)) return new Error(`${String(error)}${note}`);
+  error.message += note;
+  return error;
 }
 
 /** `brand fonts fetch <slug>`: downloads the web fonts the tokens' `googleFontsHref` names, under the policy in `fonts.ts`, and registers them as candidate assets. */
@@ -684,13 +691,21 @@ async function fonts(ctx: Ctx, args: Parsed, [sub, slug]: string[]): Promise<Cli
   for (const f of files) {
     const j = judgeBytes(f.name, f.bytes, { kind: "font", family: f.family });
     if ("refused" in j) return refused(`Fuente ${f.name} rechazada (${j.refused}). No se subió nada.`);
-    judged.set(j.sha256, { file: f, j });
+    // Identical bytes under several URLs: the first face's family is the one registered.
+    if (!judged.has(j.sha256)) judged.set(j.sha256, { file: f, j });
   }
   const added: string[] = [];
   const existing: string[] = [];
-  for (const { file, j } of judged.values()) {
-    const outcome = await commitBytes(ctx, brand.id, file.bytes, j);
-    ("done" in outcome ? added : existing).push("done" in outcome ? outcome.done.value.assetId : outcome.exists);
+  try {
+    for (const { file, j } of judged.values()) {
+      const outcome = await commitBytes(ctx, brand.id, file.bytes, j);
+      if ("done" in outcome) added.push(outcome.done.value.assetId);
+      else existing.push(outcome.exists);
+    }
+  } catch (error) {
+    // Registration is not atomic: say what is already in place. A re-run skips those fonts (same bytes, same asset id).
+    if (added.length) throw withNote(error, `; registro parcial: ${added.length} fuente(s) ya quedaron registradas (${added.join(", ")}); vuelve a ejecutar el mismo comando`);
+    throw error;
   }
   return wrote(args, { added, existing }, [`Fuentes: ${added.length} registradas (candidatas), ${existing.length} ya estaban.`]);
 }

@@ -431,7 +431,7 @@ whose read-back or directory fsync fails is unlinked and its created folders rem
 `.woff2` `url(...)` of its `@font-face` rules, exactly what `fetch-fonts.ts` did. Now: https only, no credentials or port, hosts limited to
 `fonts.googleapis.com` and `fonts.gstatic.com`, redirects followed by hand (at most 3) with every hop judged like the first, a 256 KiB cap on the
 stylesheet, 2 MiB per font, 32 distinct fonts (duplicate URLs count once), a 15 s timeout per request and a 60 s deadline per run. A font URL must end in `.woff2` (a query or fragment is refused), and every URL is judged before the first download. All fonts are downloaded and judged before the first upload, then registered as `candidate`
-assets through the same checks as `asset add` (magic bytes, secret scan), all judged before the first upload: one refused font leaves nothing registered.
+assets through the same checks as `asset add` (file type, magic bytes, secret scan): one refused font leaves nothing registered. Identical bytes under several URLs register once, with the first face's family. A failure mid-registration names the fonts already registered (a re-run skips them). Fetched fonts keep `origin: manual` (owner decision, S8c1): `reference` means the `references/` moodboard, and the origin is fixed at registration.
 
 **Guidance trust envelope.** `brand guidance get --json` returns
 `{ "trust": "brand-data", "name", "version", "body" }`. `usar-perfil` states
@@ -584,11 +584,36 @@ even `import_runs`; **verification report** (counts, then re-download every
 blob and compare sha256, re-read every row and compare a canonical-JSON
 hash).
 
-- **Backup gate:** a non-dry-run against a non-localhost `DATABASE_URL` is
-  refused unless `restore_drills` has a `verified` row for that target DB
-  newer than 30 days (a `pg_dump` restored elsewhere and passing the
-  verification pass; recorded by `brand backup drill`). No self-reported
-  flag. Dumps are stored outside the brand bucket.
+- **Backup gate:** a write (non-dry-run import or cutover, and every `brand`
+  write verb) against a non-localhost `DATABASE_URL` is refused unless the
+  newest `restore_drills` row of that database is `verified` and finished less
+  than `RECENT_DRILL_MS` ago (30 days, `storage/src/pg/drill.ts`). A later failed
+  drill closes the gate again. `brand backup drill` runs `pg_dump` of the
+  product schema, pipes it into `pg_restore` on a fresh scratch database
+  (`DATABASE_DRILL_URL`, default the same server; dropped afterwards, and only
+  a database the drill created is ever dropped), compares the row count of
+  every table and records the row in the drilled database (insert-only). The
+  libpq password travels in the environment, never on a command line;
+  `PG_DUMP_BIN` / `PG_RESTORE_BIN` choose the binaries. A missing binary
+  records nothing. Local databases are never gated. No self-reported flag.
+  Dumps stream between the two processes and are never written to disk.
+  The dump and the row counts read one exported snapshot, so a concurrent
+  write cannot fake a mismatch; the drill's own dump leaves out the data of
+  `restore_drills`, and the comparison skips that table (this protects nothing
+  else). The child process gets a minimal
+  environment (`PATH`, `HOME`, `LANG` and explicit `PG*` values; `?ssl=require`
+  maps to `PGSSLMODE`, and a non-local host defaults to `require`). The scratch
+  database lives on the source server unless `DATABASE_DRILL_URL` is set; if
+  its drop fails the drill reports the exact `drill_xxx` name, exits non-zero
+  and records `scratchLeaked`. The newest drill is decided by the server's
+  `recorded_at`, a drill dated more than 5 minutes ahead is distrusted, and
+  `latest()` reads only rows of the current database; the scratch copy has a
+  different name, so it never satisfies the gate. Known limit: a provider
+  backup or PITR restore that keeps the same database name inherits the
+  verified row.
+  This gate is a tooling guard, not a security boundary: a `localhost` tunnel
+  to a remote server counts as local, and any `brand_owner` session can insert
+  a `verified` row.
 - YAML via the `yaml` package (importer only). Local dev seeds with `brand
   import --from profiles/example` and cuts the example brands over.
 
@@ -890,7 +915,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S8b3b1 | S8b3a follow-ups and `export pull`: `rules` rejects an unknown subcommand before any branch; a typed `Refusal.code` replaces the English-text comparison in `asset get --out`; one shared SVG re-export hint; the cutover report names the fail-closed SVG screen; recorded content-scan length bounds (JWT payload `{8,12000}`, `"auth"` `{12,16384}`, URL password 1024) with a wider binary window; SVG CSS function names with digits, 3d transforms, shapes and modern colours; relative-timing asserts; `export pull` | ~590 | S8b3a | each item has a test; `export pull` never overwrites and refuses unsafe names and destinations |
 | S8b3b2 | S8b3b1 follow-ups (`export pull` rolls back exactly what it linked, quotes the bucket key it refuses, refuses an `--out` that is a file, fetches and writes one file at a time); the repository-level archived check (`BrandArchivedError`: carousel create/save/status and asset register, atomic in memory and Postgres); the `purge` executor as `brand_purger` (bundle written and read back, then FK-order delete under `SET LOCAL app.purge_brand`; host gate on `DATABASE_PURGE_URL` and `current_user = brand_purger`) | ~590 | S8b3b1 | purge deletes only an archived brand and leaves other brands and the bucket untouched; a content write on an archived brand is refused by the repository itself for carousel create/save/status and asset register |
 | S8b3b3 | `fonts fetch` (replaces `system/assets/fetch-fonts.ts`, which S12 deletes; its own policy: the stylesheet URL is the tokens' `googleFontsHref`, an allowed-host list, no redirects off it, size caps, fonts registered as `candidate` assets) | ~300 | S8b3b2 | fonts land as assets without touching a profile folder; a stylesheet or font URL off the allowed hosts is refused. Delivered with it: `BrandArchivedError` on chat append, exports (reserve and complete), content items, recipe runs and artifacts, the TTS cache and `assets.update`, atomic in memory and Postgres (brand `FOR SHARE` first), with a contract test, before S9/S10a; purge errors 40001, 40P01, 23503 and 23001 exit 6 with a retry message that names the bundle left behind, and every failure after the link names it; a null check in `writeCarousel` for a brand row that vanished (`NotFoundError`); the purge database identity check also compares `inet_server_addr` and `pg_postmaster_start_time`; the bundle file is unlinked and its folders removed when its read-back fails, with a rollback test; a `now` hook for the bundle timestamp and a refused (never overwritten) name collision |
-| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3b3 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder. Owner question: fonts fetched by `fonts fetch` are registered with `origin: manual`, like `asset add`; should they carry their own origin (e.g. `fetched`)?. Deferred S8b3b3 follow-ups: a seam and a test for the 60 s run deadline of `fonts fetch`; `judged.set` keeps the first family for identical bytes; `--json` output lists the existing asset ids; a message for a partial registration (a failure mid-commit); move the file-type check of `asset add` into `judgeBytes`; unify the order of the archived check and the version check in `assets.update` (memory vs Postgres) |
+| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3b3 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder. Owner decision (S8c1): fonts fetched by `fonts fetch` keep `origin: manual`. S8c1 built the drill, the gate and the S8b3b3 follow-ups; S8c2 keeps the legacy-bucket source and the `init-profile.mjs` redirect. S8c1 deferred: a content hash per table in the drill, next to the row counts. Deferred from S8c1 review: drill clients ignore `DATABASE_PREPARE`, and the drill needs a direct URL, not a pooler (W8); an orphan sweep of `drill_[0-9a-f]{12}` databases owned by `current_user` at drill start (W9); compute the gate age server-side, `now() - recorded_at` (W10); Spanish status mapping in the leak message, and show the failure reason too (S6). S8b3b3 follow-ups (done in S8c1): a seam and a test for the 60 s run deadline of `fonts fetch`; `judged.set` keeps the first family for identical bytes; `--json` output lists the existing asset ids; a message for a partial registration (a failure mid-commit); move the file-type check of `asset add` into `judgeBytes`; unify the order of the archived check and the version check in `assets.update` (memory vs Postgres) |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |

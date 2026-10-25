@@ -13,8 +13,8 @@ import { runCli } from "../src/cli/brand.ts";
 import { carouselExportKey, carouselExportPrefix } from "../src/contracts/keys.ts";
 import { EXIT, IDENTITY_KINDS, runVerb, writeTarget } from "../src/cli/verbs.ts";
 import { createMemoryRepositories, type MemoryRepositories } from "../src/memory/index.ts";
-import { ObjectNotFoundError, PurgeRefusedError } from "../src/contracts/index.ts";
-import { createPgRepositories, openPurger, PURGE_TABLES } from "../src/pg/index.ts";
+import { NotFoundError, ObjectNotFoundError, PurgeRefusedError } from "../src/contracts/index.ts";
+import { createPgRepositories, openPurger, PURGE_TABLES, sameAddr } from "../src/pg/index.ts";
 import { migrate } from "../src/pg/migrate.ts";
 
 const work = mkdtempSync(join(tmpdir(), "brand-verbs-"));
@@ -582,8 +582,10 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     assert.deepEqual([wrong.exitCode, /no como brand_purger/.test(wrong.lines[0]), existsSync(bundle)], [6, true, false]);
     await assert.rejects(() => openPurger(login("brand_purger"), (async () => [{ db: "other", port: 1 }]) as unknown as postgres.Sql), /bases de datos distintas/);
     const probe = login("brand_purger");
-    const [real] = await probe`SELECT current_database() AS db, inet_server_port() AS port, inet_server_addr()::text AS addr, pg_postmaster_start_time()::text AS started`;
+    const [real] = await probe`SELECT current_database() AS db, inet_server_port() AS port, host(inet_server_addr()) AS addr, extract(epoch FROM pg_postmaster_start_time())::text AS started`;
     await probe.end({ timeout: 1 });
+    // The loopback spellings are one server (dual-stack localhost); a null address (Unix socket) is not compared by openPurger.
+    assert.deepEqual([["::1", "127.0.0.1"], ["::ffff:127.0.0.1", "::1"], ["127.0.0.1", "10.9.9.9"], ["::1", "fe80::1"]].map(([x, y]) => sameAddr(x, y)), [true, true, false, false]);
     for (const other of [{ addr: "10.9.9.9" }, { started: "1999-01-01" }]) await assert.rejects(() => openPurger(login("brand_purger"), (async () => [{ ...real, ...other }]) as unknown as postgres.Sql), /bases de datos distintas/);
     // A failure after the bundle is written rolls the whole transaction back: every row is still there, and the bundle stays.
     const before = await counts(doomed.id);
@@ -602,12 +604,15 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     assert.deepEqual([raced.exitCode, raced.lines[0].includes(`se dejó el paquete en ${orphan}`), await counts(doomed.id)], [6, true, before]);
     const other = await runCli(argv, env, repos, blobs, { ...tick, now: () => new Date("2026-03-05T00:00:00.000Z"), openPurger: seam(async () => { throw new Error("connection lost"); }).openPurger });
     assert.deepEqual([other.exitCode, /connection lost; se dejó el paquete en .*20260305/.test(other.lines[0])], [EXIT.UNEXPECTED, true], "any other failure keeps the bundle path too");
+    const typed = await runCli(argv, env, repos, blobs, { ...tick, now: () => new Date("2026-03-06T00:00:00.000Z"), openPurger: seam(async () => { throw new NotFoundError("brand gone"); }).openPurger });
+    assert.equal(typed.exitCode, EXIT.NOT_FOUND, "a typed error keeps its class (and exit code) once the bundle is linked");
     const orphanBytes = readFileSync(orphan);
     const clash = await runCli(argv, env, repos, blobs, tick);
     assert.deepEqual([clash.exitCode, /ya existe un paquete/.test(clash.lines[0]), readFileSync(orphan).equals(orphanBytes), await counts(doomed.id)], [6, true, true, before], "a name collision is refused and nothing is overwritten");
     for (const [code, day] of [["23503", "02"], ["23001", "03"], ["40P01", "04"]]) assert.equal((await runCli(argv, env, repos, blobs, { ...tick, openPurger: seam(async () => { throw Object.assign(new Error("x"), { code }); }).openPurger, now: () => new Date(`2026-03-${day}T00:00:00.000Z`) })).exitCode, 6);
     // A chat message written while the purge runs is blocked (the carousel row is locked), so nothing is deleted unbundled.
     let blocked: unknown;
+    const earlier = readdirSync(bundle).length; // bundles left by the rolled-back purges above
     const done = await runCli(argv, env, repos, blobs, seam(async () => {
       blocked = await admin.begin(async (tx) => {
         await tx.unsafe(`SET LOCAL search_path TO ${schema}`);
@@ -618,9 +623,9 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     assert.equal((blocked as { code?: string }).code, "55P03", "the concurrent insert is blocked, not applied");
     assert.deepEqual([done.exitCode, /Quedan 1 objeto\(s\) en el bucket/.test(done.lines.join("\n"))], [0, true], done.lines.join("\n"));
     const files = readdirSync(bundle).sort();
-    assert.equal(files.length, 7, "a re-run needs no cleanup: the bundle name carries a timestamp (6 earlier bundles were left by rolled-back purges)");
+    assert.equal(files.length, earlier + 1, "a re-run needs no cleanup: the bundle name carries a timestamp, so the final run adds exactly one file");
     const written = JSON.parse(readFileSync(join(bundle, files.at(-1)!), "utf-8"));
-    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0007_import_runs.sql", before, doomed.id, 3, 1]);
+    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0008_restore_drills.sql", before, doomed.id, 3, 1]);
     assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 15 tables are empty for the purged brand");
     assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");
     assert.equal((await blobs.list("brands/")).length, 2, "the bucket never loses an object");
