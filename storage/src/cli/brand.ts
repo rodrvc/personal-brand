@@ -11,7 +11,7 @@ import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
-import { createPgRepositories, openPurger, type Purger } from "../pg/index.ts";
+import { createPgRepositories, drillRefusal, DrillToolMissingError, openPurger, runBackupDrill, type Purger } from "../pg/index.ts";
 
 export type { CliResult };
 
@@ -23,9 +23,10 @@ const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const VERBS: Record<string, { values: string[]; flags: string[]; positionals: [number, number] }> = {
   import: { values: ["from", "owner-opt-in"], flags: ["dry-run"], positionals: [0, 0] },
   cutover: { values: ["from", "confirm", "owner-opt-in"], flags: ["partial"], positionals: [1, 1] },
+  backup: { values: [], flags: [], positionals: [1, 1] },
   ...VERB_SPECS,
 };
-const REMOTE_REFUSAL = "Se rechaza escribir en una base de datos remota: aún no hay un respaldo restaurado y verificado (brand backup drill, etapa S8c).";
+const REMOTE_REFUSAL = "Se rechaza escribir en una base de datos remota sin un simulacro de restauración verificado y reciente.";
 const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)", ...VERB_USAGE];
 
 /** Brands the tool may touch freely: the fictional, tracked `profiles/example*` folders. */
@@ -88,6 +89,43 @@ export function isLocalDatabase(url: string | undefined): boolean {
     return ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname) && !u.searchParams.has("host");
   } catch {
     return false;
+  }
+}
+
+/**
+ * Backup gate (design section 10): a write to a remote database needs a recent verified restore drill, read from that
+ * database itself. Null when the write may go on. Local databases never reach it.
+ */
+async function backupGate(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv, now: Date): Promise<CliResult | null> {
+  let sql: Sql | null = null;
+  try {
+    if (!repos) sql = connect(env);
+    const why = await drillRefusal((repos ?? createPgRepositories(sql!)).restoreDrills, now);
+    return why ? { lines: [REMOTE_REFUSAL, why], exitCode: EXIT.REFUSED } : null;
+  } catch (error) {
+    return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
+  } finally {
+    await sql?.end({ timeout: 1 });
+  }
+}
+
+/** `brand backup drill`: dumps `DATABASE_URL`, restores it into a scratch database (`DATABASE_DRILL_URL`, default the same server), verifies it and records the result. */
+async function backupDrill(repos: ImportRepos | undefined, env: NodeJS.ProcessEnv, now: () => Date, run = runBackupDrill): Promise<CliResult> {
+  if (!env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
+  let sql: Sql | null = null;
+  try {
+    const outcome = await run({ sourceUrl: env.DATABASE_URL, scratchUrl: env.DATABASE_DRILL_URL, pgDump: env.PG_DUMP_BIN, pgRestore: env.PG_RESTORE_BIN, now });
+    if (!repos) sql = connect(env);
+    await (repos ?? createPgRepositories(sql!)).restoreDrills.record(outcome);
+    const leaked = outcome.detail.scratchLeaked;
+    if (leaked) return { lines: [`El simulacro terminó (${outcome.status}), pero no se pudo borrar la base temporal "${leaked}": bórrala a mano.`], exitCode: EXIT.UNEXPECTED };
+    if (outcome.status === "verified") return { lines: [`Simulacro verificado: ${Object.keys(outcome.detail.tables as object).length} tablas restauradas con las mismas filas.`], exitCode: EXIT.OK };
+    const why = { no_tables: "el esquema no tiene tablas", counts_differ: `las filas no coinciden tras restaurar (${(outcome.detail.differing as string[] | undefined)?.join(", ")})` }[outcome.detail.code as string] ?? "pg_dump o pg_restore fallaron (el detalle queda en el registro)";
+    return { lines: [`El simulacro falló: ${why}.`], exitCode: EXIT.UNEXPECTED };
+  } catch (error) {
+    return { lines: [error instanceof DrillToolMissingError ? `No se hizo el simulacro: ${error.message}.` : `Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
+  } finally {
+    await sql?.end({ timeout: 1 });
   }
 }
 
@@ -224,6 +262,8 @@ export interface CliHooks {
   fetch?: typeof fetch;
   /** Replaces the `DATABASE_PURGE_URL` connection of `purge` (the host gate still runs first). */
   openPurger?: () => Promise<Purger>;
+  /** Replaces the dump-and-restore of `backup drill` (the result is still recorded). */
+  runDrill?: typeof runBackupDrill;
 }
 
 /**
@@ -240,19 +280,24 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   if (!args || args.positionals.length < min || args.positionals.length > max || (verb === "import" && !args.values.has("from"))) return { lines: USAGE, exitCode: EXIT.USAGE };
   const dryRun = args.flags.has("dry-run");
   const author = `cli:${env.USER ?? "unknown"}`;
+  const now = hooks.now ?? (() => new Date());
+  if (verb === "backup") return args.positionals[0] === "drill" ? backupDrill(repos, env, now, hooks.runDrill) : { lines: USAGE, exitCode: EXIT.USAGE };
   if (Object.hasOwn(VERB_SPECS, verb!)) {
     // A mistyped subcommand is a usage error whatever the brand: it must not surface as an owner or backup refusal.
     if (hasUnknownSubcommand(verb!, args.positionals)) return { lines: USAGE, exitCode: EXIT.USAGE };
     // D13: on a brand that is not an example, identity writes always need the owner's opt-in; a content write needs it
-    // only until the brand is cut over (checked below, once connected). Every write on a remote database is refused
-    // (it needs a restored backup); reads stay open. The slug format is checked first.
+    // only until the brand is cut over (checked below, once connected). A write on a remote database is refused
+    // without a recent verified restore drill (backup gate); reads stay open. The slug format is checked first.
     const target = writeTarget(verb!, args.positionals);
     let ownerRefused: string | null = null;
     if (target !== null) {
       if (typeof target.slug !== "string" || !SLUG_FORMAT.test(target.slug)) return { lines: ["El nombre de la marca solo admite minúsculas, dígitos y guiones."], exitCode: EXIT.USAGE };
       ownerRefused = ownerRefusal([target.slug], env, args.values.get("owner-opt-in"));
       if (ownerRefused && target.identity) return { lines: [ownerRefused], exitCode: EXIT.REFUSED };
-      if (!isLocalDatabase(env.DATABASE_URL)) return { lines: [REMOTE_REFUSAL], exitCode: EXIT.REFUSED };
+      if (!isLocalDatabase(env.DATABASE_URL)) {
+        const gate = await backupGate(repos, env, now());
+        if (gate) return gate;
+      }
     }
     if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: EXIT.UNEXPECTED };
     let verbSql: Sql | null = null;
@@ -270,7 +315,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (!url || !isLocalDatabase(url)) throw new PurgeRefusedError("DATABASE_PURGE_URL no apunta a una base de datos local: la purga solo corre en local");
         return hooks.openPurger ? hooks.openPurger() : openPurger(connect(env, url), verbSql ?? undefined);
       };
-      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now: hooks.now ?? (() => new Date()), fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
+      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now, fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {
@@ -290,9 +335,10 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: EXIT.REFUSED };
   }
 
-  // Backup gate (§10). `restore_drills` lands in S8; until then any real write to a remote database is refused.
+  // Backup gate (§10): a real write to a remote database needs a recent verified restore drill.
   if (!dryRun && !isLocalDatabase(env.DATABASE_URL)) {
-    return { lines: [REMOTE_REFUSAL], exitCode: EXIT.REFUSED };
+    const gate = await backupGate(repos, env, now());
+    if (gate) return gate;
   }
   if (!existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: EXIT.NOT_FOUND };
 

@@ -23,6 +23,8 @@ import {
   type ExportRepository,
   type ImportRun,
   type ImportRunRepository,
+  type RestoreDrill,
+  type RestoreDrillRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -60,6 +62,7 @@ export interface PgRepositories {
   runs: RecipeRunRepository;
   runArtifacts: RunArtifactRepository;
   importRuns: ImportRunRepository;
+  restoreDrills: RestoreDrillRepository;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -789,5 +792,18 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns };
+  const toDrill = (r: Row): RestoreDrill => ({ id: r.id, databaseName: r.database_name, status: r.status, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, recordedAt: iso(r.recorded_at)!, detail: r.detail });
+  const restoreDrills: RestoreDrillRepository = {
+    async record(input) {
+      const [row] = await sql`INSERT INTO restore_drills (database_name, status, started_at, finished_at, detail)
+                              VALUES (${input.databaseName}, ${input.status}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.detail)}) RETURNING *`;
+      return toDrill(row);
+    },
+    async latest() {
+      const [row] = await sql`SELECT * FROM restore_drills WHERE database_name = current_database() ORDER BY recorded_at DESC, id LIMIT 1`;
+      return row ? toDrill(row) : null;
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }

@@ -23,6 +23,8 @@ import {
   type ExportRepository,
   type ImportRun,
   type ImportRunRepository,
+  type RestoreDrill,
+  type RestoreDrillRepository,
   type BrandDocumentRepository,
   type TtsCacheRepository,
   type TtsEntry,
@@ -58,6 +60,7 @@ export interface MemoryRepositories {
   runs: RecipeRunRepository;
   runArtifacts: RunArtifactRepository;
   importRuns: ImportRunRepository;
+  restoreDrills: RestoreDrillRepository;
 }
 
 interface DocRow {
@@ -310,9 +313,10 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
     async update(brandId, assetId, patch, meta) {
       assertAsset(patch, false);
+      // Same order as Postgres (brand lock first): an archived brand answers "archived" before "not found" or "version conflict".
+      assertBrandActive(brandId);
       const cur = isAssetId(assetId) ? findAsset(brandId, assetId) : undefined;
       if (!cur) throw new NotFoundError(`asset ${assetId}`);
-      assertBrandActive(brandId);
       if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
       const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
       const next = { ...cur, value: structuredClone({ ...cur.value, ...defined }), version: cur.version + 1, updatedAt: now().toISOString() };
@@ -642,5 +646,17 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns };
+  const drillRows: RestoreDrill[] = [];
+  const restoreDrills: RestoreDrillRepository = {
+    async record(input) {
+      const row = { ...structuredClone(input), startedAt: parseInstant(input.startedAt, "startedAt")!.toISOString(), finishedAt: parseInstant(input.finishedAt, "finishedAt")!.toISOString(), recordedAt: now().toISOString(), id: randomUUID() };
+      drillRows.push(row);
+      return structuredClone(row);
+    },
+    async latest() {
+      return structuredClone([...drillRows].reverse().sort((a, b) => cmp(b.recordedAt, a.recordedAt))[0] ?? null) // stable: a tie goes to the later insert;
+    },
+  };
+
+  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }

@@ -331,6 +331,7 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => r.runArtifacts.record(run.id, artifact), refused);
       await assert.rejects(() => r.tts.record(b.id, "n1", entry), refused);
       await assert.rejects(() => r.assets.update(b.id, font.value.assetId, { status: "approved" }, meta({ expectedVersion: 1 })), refused);
+      await assert.rejects(() => r.assets.update(b.id, font.value.assetId, { status: "approved" }, meta({ expectedVersion: 99 })), refused); // archived wins over a stale version, in both stores
       assert.equal((await r.assets.get(b.id, font.value.assetId)).version, 1, "the asset update changed nothing");
       assert.deepEqual(await r.chat.list(c.id), [], "nothing was appended");
       assert.deepEqual((await r.exports.list(c.id)).map((e) => [e.versionNo, e.status]), [[1, "running"]], "no export was reserved or completed");

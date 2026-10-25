@@ -38,7 +38,11 @@ export interface Purger {
   close(): Promise<void>;
 }
 
-const where = async (sql: Sql) => (await sql`SELECT current_database() AS db, inet_server_port() AS port, inet_server_addr()::text AS addr, pg_postmaster_start_time()::text AS started`)[0];
+/** Epoch seconds, not text: a timestamptz cast to text follows the session TimeZone, which two roles may set differently. `host()` drops the `/32` or `/128` mask. */
+const where = async (sql: Sql) => (await sql`SELECT current_database() AS db, inet_server_port() AS port, host(inet_server_addr()) AS addr, extract(epoch FROM pg_postmaster_start_time())::text AS started`)[0];
+
+/** Loopback is one address however it is reached (`::1`, `::ffff:127.0.0.1`, `127.0.0.1`). */
+export const sameAddr = (a: string, b: string) => [a, b].every((x) => /^(::1|(::ffff:)?127(\.\d{1,3}){3})$/.test(x)) || a === b;
 
 /**
  * Opens a purger on `sql`, refusing (and closing it) unless the session really is `brand_purger`, and, when `sameAs` is
@@ -50,7 +54,8 @@ export async function openPurger(sql: Sql, sameAs?: Sql): Promise<Purger> {
     if (who !== "brand_purger") throw new PurgeRefusedError(`la conexión de purga corre como "${who}", no como brand_purger`);
     if (sameAs) {
       const [a, b] = [await where(sql), await where(sameAs)];
-      if (a.db !== b.db || a.port !== b.port || (a.addr && b.addr && a.addr !== b.addr) || a.started !== b.started) throw new PurgeRefusedError("DATABASE_URL y DATABASE_PURGE_URL apuntan a bases de datos distintas");
+      // `addr` is null on a Unix-socket connection: there is nothing to compare then, and the other three checks still apply.
+      if (a.db !== b.db || a.port !== b.port || (a.addr && b.addr && !sameAddr(a.addr, b.addr)) || a.started !== b.started) throw new PurgeRefusedError("DATABASE_URL y DATABASE_PURGE_URL apuntan a bases de datos distintas");
     }
   } catch (error) {
     await sql.end({ timeout: 1 });

@@ -14,8 +14,9 @@ export const MAX_FONT_FACES = 32;
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 15_000;
 /** One deadline for the whole run (stylesheet and every font), on top of the per-request timeout. */
-const RUN_DEADLINE_MS = 60_000;
-const MAX_FAMILY_CHARS = 100;
+export const RUN_DEADLINE_MS = 60_000;
+/** The longest `--family` / font family name; `judgeBytes` in verbs.ts enforces the same limit by importing this constant. */
+export const MAX_FAMILY_CHARS = 100;
 // The CSS endpoint only serves woff2 (the format this repo standardizes on) to a recent browser.
 const MODERN_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -73,8 +74,11 @@ async function get(doFetch: typeof fetch, raw: string, maxBytes: number, deadlin
       url = checkUrl(location, url.href);
       continue;
     }
-    if (!res.ok) throw new FontPolicyError(`${url.hostname} respondió HTTP ${res.status}`);
-    if (Number(res.headers.get("content-length") ?? 0) > maxBytes) throw new FontPolicyError(`la respuesta supera ${maxBytes} bytes`);
+    // Refusals below release the socket first, like the redirect branch.
+    if (!res.ok || Number(res.headers.get("content-length") ?? 0) > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      throw new FontPolicyError(res.ok ? `la respuesta supera ${maxBytes} bytes` : `${url.hostname} respondió HTTP ${res.status}`);
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     try {
@@ -92,12 +96,13 @@ async function get(doFetch: typeof fetch, raw: string, maxBytes: number, deadlin
 }
 
 /** Downloads the stylesheet and every font it names, all under the policy above; the caller registers the files afterwards. */
-export async function downloadFonts(doFetch: typeof fetch, href: string): Promise<FontFile[]> {
-  const deadline = AbortSignal.timeout(RUN_DEADLINE_MS);
+export async function downloadFonts(doFetch: typeof fetch, href: string, deadlineMs = RUN_DEADLINE_MS): Promise<FontFile[]> {
+  const deadline = AbortSignal.timeout(deadlineMs); // `deadlineMs` is the test seam for the run deadline
   const faces = extractFontFaces((await get(doFetch, href, MAX_STYLESHEET_BYTES, deadline)).toString("utf8"));
   if (faces.length === 0) throw new FontPolicyError("la hoja de estilos no tiene reglas @font-face woff2");
   if (faces.length > MAX_FONT_FACES) throw new FontPolicyError(`la hoja de estilos declara más de ${MAX_FONT_FACES} fuentes`);
-  // Every URL is judged before the first download: a refused one costs no request at all.
+  // Every URL is judged before the first download: a refused one costs no request at all. The pathname check is a deliberate backstop
+  // of the regex in extractFontFaces (which already rejects a query or fragment): keep both if the rule changes.
   const urls = faces.map((face) => {
     const url = checkUrl(face.url);
     if (!url.pathname.endsWith(".woff2") || url.search || url.hash) throw new FontPolicyError(`la URL de ${url.hostname} no termina en .woff2 (sin query ni fragmento)`);

@@ -386,3 +386,23 @@ export interface ImportRunRepository {
   /** A brand's runs, newest first: `startedAt` DESC, then `finishedAt` DESC, then `id` ASC; empty for a brand with none. */
   list(brandId: string): Promise<ImportRun[]>;
 }
+
+export interface RestoreDrill {
+  id: string;
+  /** `current_database()` of the drilled database. */
+  databaseName: string;
+  status: "verified" | "failed";
+  startedAt: string;
+  finishedAt: string;
+  /** The store's clock at insert (server `now()`); the newest drill is decided by this, not by the client-supplied times. */
+  recordedAt: string;
+  /** Per-table row counts when verified; the failure text when failed. Never data. */
+  detail: Record<string, unknown>;
+}
+
+/** Insert-only log of backup restore drills; the import backup gate reads the newest one. */
+export interface RestoreDrillRepository {
+  record(input: Omit<RestoreDrill, "id" | "recordedAt">): Promise<RestoreDrill>;
+  /** The newest drill by `recordedAt` of the current database, or null when none was ever run. */
+  latest(): Promise<RestoreDrill | null>;
+}
