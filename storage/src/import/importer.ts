@@ -4,7 +4,6 @@ import { basename, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { AlreadyExistsError, blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
-import { OUTPUTS_MARKER } from "./legacy-bucket.ts";
 import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectExports } from "./exports.ts";
@@ -76,7 +75,7 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date()): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
+function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date(), quietMissingOutputs = false): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
   const items: Item[] = [];
   const skipped: string[] = [];
   const notices: string[] = [];
@@ -170,7 +169,7 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
     });
   }
-  const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices);
+  const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices, quietMissingOutputs);
   if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
   const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set<string>(), skipped, notices, handled, now };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
@@ -198,18 +197,17 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */
-export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date; extraSkipped?: string[]; quietNotices?: string[]; origin?: string }): Promise<ImportReport> {
+export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date; extraSkipped?: string[]; origin?: string; /** Set for a source that is a temporary copy: the label reported instead of the (temporary) outputs path, and no "outputs root missing" notice. */ outputsLabel?: string }): Promise<ImportReport> {
   const dir = resolve(opts.from);
   const slug = basename(dir);
   const now = opts.now ?? (() => new Date());
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now, !!opts.outputsLabel);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
   // In place: the report shares these arrays with the items, which add notices while they are written.
   skipped.unshift(...(opts.extraSkipped ?? []));
-  for (const quiet of opts.quietNotices ?? []) if (notices.includes(quiet)) notices.splice(notices.indexOf(quiet), 1);
 
   if (!opts.dryRun && !brand) {
     const meta: WriteMeta = { expectedVersion: null, author: opts.author, source: "import", reason: "import" };
@@ -219,7 +217,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
   const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.origin && outputsRoot ? OUTPUTS_MARKER : outputsRoot, ...(opts.origin ? { origin: opts.origin } : {}),
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.outputsLabel && outputsRoot ? opts.outputsLabel : outputsRoot, ...(opts.origin ? { origin: opts.origin } : {}),
     legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),

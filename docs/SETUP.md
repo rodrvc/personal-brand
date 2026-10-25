@@ -53,6 +53,12 @@ today's modules until its cutover (D12; S9a/S10).
 Skipping the term registration is the risk: a gate with no terms to search
 for reports success without checking anything.
 
+## Backup drill
+
+A write to a remote database needs a recent verified restore drill (`brand backup drill`).
+Point `DATABASE_URL` at a direct connection, not a pooler: `pg_dump`, the exported
+snapshot and `CREATE DATABASE` need a real session.
+
 ## Running the editor
 
 `editor/` is the local web editor for brand carousels (see
@@ -98,6 +104,7 @@ S3_REGION=us-east-1                   # default
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 S3_PREFIX=profiles/                   # default; every key is <prefix><slug>/...
+LEGACY_BUCKET_TMPDIR=               # where `brand import --from legacy-bucket:<marca>` puts its temporary copy (default: the OS temp folder)
 S3_FORCE_PATH_STYLE=true              # default; MinIO/most self-hosted S3 need this
 PROFILE_CACHE_DIR=/tmp/personal-brand-profile-cache   # default; local mirror root
 ```

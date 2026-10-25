@@ -623,6 +623,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const judgedStat = lstatSync(judged); // the real file, not a link to it
   const byName = pathRefusal(ctx, arg);
   if (byName) return refuse(byName.why);
+  if (!assetTypeAllowed(name)) return refuse(UNSUPPORTED_ASSET_TYPE); // before the read: an unsupported file is never read in full
   const { bytes, stat } = ctx.readBytes(arg, MAX_ASSET_BYTES);
   if (stat.dev !== judgedStat.dev || stat.ino !== judgedStat.ino || realNearest(ctx.resolve(arg)) !== judged) return refuse("el archivo cambió mientras se leía");
   if (stat.nlink > 1) return refuse("el archivo tiene enlaces duros: su ruta real no es verificable");
@@ -637,10 +638,16 @@ type Judged = { sha256: string; mime: string; kind: AssetKind; tags?: string[]; 
 /** `exists` is the asset id of the row already there: an asset id is the first 16 hex characters of the sha256 by construction. */
 type Registered = { exists: string } | { done: Awaited<ReturnType<ImportRepos["assets"]["register"]>> };
 
+const UNSUPPORTED_ASSET_TYPE = "tipo no admitido por asset add";
+const assetTypeAllowed = (name: string): boolean => {
+  const ext = name.split(".").pop()!.toLowerCase();
+  return Object.hasOwn(MAGIC, ext) || ext === "webp" || TEXT_ASSETS.includes(ext);
+};
+
 /** Pure half of `asset add`, shared with `fonts fetch`: magic bytes, secret scan and the field limits. Nothing is uploaded, so a caller can judge many files before committing any. */
 function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: string; family?: string }): Judged | { refused: string } {
   const ext = name.split(".").pop()!.toLowerCase();
-  if (!Object.hasOwn(MAGIC, ext) && ext !== "webp" && !TEXT_ASSETS.includes(ext)) return { refused: "tipo no admitido por asset add" };
+  if (!assetTypeAllowed(name)) return { refused: UNSUPPORTED_ASSET_TYPE };
   // A binary type must start with the bytes of that type (the extension alone proves nothing); text is scanned for secrets.
   const genuine = ext === "webp" ? mimeOf(bytes, name) === "image/webp" : !Object.hasOwn(MAGIC, ext) || MAGIC[ext].some((m) => bytes.subarray(0, m.length / 2).toString("hex") === m);
   if (!genuine) return { refused: `el contenido no es ${ext}` };
