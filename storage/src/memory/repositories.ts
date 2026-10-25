@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  BrandArchivedError,
   NotFoundError,
   AlreadyExistsError,
   InvalidInputError,
@@ -290,6 +291,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       assertAsset(input);
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      if (brands.get(brandId)!.value.status === "archived") throw new BrandArchivedError(brandId);
       const assetId = input.sha256.slice(0, 16);
       const dup = findAsset(brandId, assetId);
       if (dup && dup.value.sha256 !== input.sha256) throw new InvalidInputError(`asset id ${assetId} collides with a different sha256`);
@@ -354,6 +356,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
   function writeCarousel(id: string, meta: WriteMeta, change: (cur: CarouselRow) => Partial<CarouselRow>): Versioned<CarouselHead> {
     const cur = carouselRows.get(id);
     if (!cur) throw new NotFoundError(`carousel ${id}`);
+    if (brands.get(cur.brandId)?.value.status === "archived") throw new BrandArchivedError(`of carousel ${id}`);
     if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
     const next = { ...cur, ...change(cur), version: cur.version + 1, updatedAt: now().toISOString() };
     carouselRows.set(id, next);
@@ -376,6 +379,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date()): Me
       assertCarousel(input, true);
       if (meta.expectedVersion !== null) throw new VersionConflictError(null);
       if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      if (brands.get(brandId)!.value.status === "archived") throw new BrandArchivedError(brandId);
       const dup = [...carouselRows.values()].find((c) => c.brandId === brandId && c.head.slug === input.slug);
       if (dup) throw new AlreadyExistsError(`carousel "${input.slug}"`, dup.version);
       const row: CarouselRow = {

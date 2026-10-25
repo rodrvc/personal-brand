@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, rmdirSync, statSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { runChecks } from "@personal-brand/core/checks";
 
 import { putBlob } from "../blob/put-blob.ts";
-import { carouselExportPrefix } from "../contracts/keys.ts";
-import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
+import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
+import type { BrandBundle, Purger } from "../pg/purge.ts";
 import { toCheckRules } from "../revision-policy.ts";
 
 export interface CliResult {
@@ -28,6 +29,8 @@ interface Ctx {
   blobs?: BlobStore;
   env: NodeJS.ProcessEnv;
   author: string;
+  /** Opens the `brand_purger` connection (refuses unless it is local and really that role); only `purge` calls it. */
+  openPurger(): Promise<Purger>;
   /** Where the repository lives; `purge` bundles must land outside it. */
   repoRoot: string;
   /** Reads a file named on the command line (relative to where the user ran the command). */
@@ -271,8 +274,40 @@ async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
   if (!bundle) return refused("Falta --bundle: la purga escribe primero un paquete de exportación en una carpeta fuera del repo. No se borró nada.");
   if (insideRepo(ctx, bundle)) return refused("El paquete debe quedar fuera del repo. No se borró nada.");
   if (!ctx.env.DATABASE_PURGE_URL) return refused("La purga corre con el rol brand_purger: falta DATABASE_PURGE_URL. No se borró nada.");
-  // The bundle writer and the transaction under `SET LOCAL app.purge_brand` land in the next slice; until then nothing is deleted.
-  return refused("La purga todavía no está disponible en esta etapa. No se borró nada.");
+  if (pathRefusal(ctx, bundle, true)) return refused("El destino del paquete tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se borró nada.");
+  // Role and host are checked on open, before anything is read.
+  const purger = await ctx.openPurger().catch((e) => (e instanceof PurgeRefusedError ? e : Promise.reject(e)));
+  if (purger instanceof PurgeRefusedError) return refused(`${purger.message}. No se borró nada.`);
+  try {
+    const bucketKeys = ctx.blobs ? (await ctx.blobs.list(brandPrefix(brand.id))).map((e) => e.key).sort() : null;
+    const exportedAt = new Date();
+    // A new name per run (UTC timestamp): a re-run never meets an old bundle, and nothing is ever overwritten.
+    const file = join(bundle, `${slug}.${exportedAt.toISOString().replace(/[-:.]/g, "")}.bundle.json`);
+    // Called by the purger inside its transaction, after it read every row: the bundle must be written, durable and read back before the delete starts.
+    const writeBundle = (data: BrandBundle) => {
+      const body = Buffer.from(JSON.stringify({ format: "brand-bundle/1", slug, brandId: brand.id, exportedAt: exportedAt.toISOString(), ...data, bucketKeys }, null, 2));
+      const dir = ctx.resolve(bundle);
+      const created = mkdirSync(dir, { recursive: true, mode: 0o700 });
+      try {
+        writeNew(ctx, file, body, true);
+        // The entry of each folder this call created lives in its parent: fsync those too, from the first created one down to the bundle folder.
+        for (let d = dir; created && (d === created || d.startsWith(`${created}${sep}`)); d = dirname(d)) fsyncDir(dirname(d));
+        if (!ctx.readBytes(file, body.length + 1).bytes.equals(body)) throw new InvalidInputError(`the bundle written to ${file} does not match what was read`);
+      } catch (error) {
+        removeCreated(dir, created);
+        throw error;
+      }
+    };
+    const deleted = await purger.purge(brand.id, writeBundle);
+    const rows = Object.values(deleted).reduce((a, b) => a + b, 0);
+    const left = bucketKeys === null ? "No se listó el bucket (faltan las variables S3_*): las claves conocidas están en el paquete." : `Quedan ${bucketKeys.length} objeto(s) en el bucket bajo ${brandPrefix(brand.id)}: la purga nunca borra del bucket; bórralos con una llave con permiso de borrado.`;
+    return out(args, { slug, bundle: file, deleted, bucketKeys }, [`Paquete verificado en ${file} (${rows} filas).`, `Marca "${slug}" purgada: ${rows} filas borradas.`, left]);
+  } catch (error) {
+    if (error instanceof PurgeRefusedError) return refused(`${error.message}. No se borró nada.`);
+    throw error;
+  } finally {
+    await purger.close();
+  }
 }
 
 async function check(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
@@ -360,7 +395,7 @@ function ruleFromFile(raw: string, complete: boolean): Partial<RuleInput> {
 
 async function rules(ctx: Ctx, args: Parsed, [sub, slug, id]: string[]): Promise<CliResult> {
   // Every branch below assumes one of these: a word outside the list (`enable`, a typo) must never fall through into `disable`.
-  if (!["list", "add", "update", "disable"].includes(sub)) return usage();
+  if (!SUBCOMMANDS.rules.includes(sub)) return usage();
   const brand = await ctx.repos.brands.getBySlug(slug);
   const all = await ctx.repos.rules.list(brand.id, { includeDisabled: true });
   if (sub === "list") {
@@ -447,20 +482,25 @@ function pathRefusal(ctx: Ctx, path: string, lenientLeaf = false): Refusal | nul
  * on an existing target, so nothing is overwritten and a failed write leaves no partial file at the target. Only a sibling
  * this call created is removed; a file that was already there is never touched.
  */
-function writeNew(ctx: Ctx, target: string, body: Buffer): void {
+function writeNew(ctx: Ctx, target: string, body: Buffer, secure = false): void {
   const final = ctx.resolve(target);
   const tmp = `${final}.${ctx.suffix()}.tmp`;
   let created = false;
   try {
     // `wx` fails on a file that is already there; `created` is set only once this call owns the file, before any byte is written.
-    const fd = openSync(tmp, "wx");
+    // `secure` (the purge bundle) writes 0600 and makes the bytes and the directory entry durable before returning.
+    const fd = openSync(tmp, "wx", secure ? 0o600 : 0o666);
     created = true;
     try {
       for (let done = 0; done < body.length; ) done += writeSync(fd, body, done);
+      if (secure) fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
     linkSync(tmp, final);
+    if (secure) {
+      fsyncDir(dirname(final));
+    }
   } catch (error) {
     throw new InvalidInputError(`cannot write ${target} (${(error as NodeJS.ErrnoException).code ?? "error"}); an existing file is never overwritten`);
   } finally {
@@ -468,8 +508,19 @@ function writeNew(ctx: Ctx, target: string, body: Buffer): void {
   }
 }
 
+function fsyncDir(path: string): void {
+  const fd = openSync(path, constants.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** Removes the directories a call created (`created` is what `mkdirSync(..., { recursive })` returned), deepest first; a directory that is not empty stays. */
+function removeCreated(dir: string, created: string | undefined): void {
+  for (let d = dir; created && (d === created || d.startsWith(`${created}${sep}`)); d = dirname(d)) try { rmdirSync(d); } catch { break; }
+}
+
 /** `brand export pull <slug> <carousel> [--version N] --out <dir>`: copies one export version's files out of the bucket. A read verb, with the safety of `asset get --out`. */
-async function exportPull(ctx: Ctx, args: Parsed, [, slug, name]: string[]): Promise<CliResult> {
+async function exportPull(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+  if (sub !== "pull") return usage();
   const target = args.values.get("out");
   const wanted = args.values.get("version");
   if (!target || (wanted !== undefined && !/^[1-9]\d{0,8}$/.test(wanted))) return usage();
@@ -485,14 +536,31 @@ async function exportPull(ctx: Ctx, args: Parsed, [, slug, name]: string[]): Pro
   // Judge every name before reading or writing anything: one refused file stops the whole pull.
   const files = (await ctx.blobs.list(prefix)).map((e) => ({ key: e.key, file: e.key.slice(prefix.length) })).sort((x, y) => x.file.localeCompare(y.file));
   const bad = files.find((f) => !/^[A-Za-z0-9._-]+$/.test(f.file) || f.file === "." || f.file === ".." || nameRefusal(f.file, false));
-  if (bad) return refused(`El export tiene un archivo no admitido (${bad.file.slice(0, 60)}). No se escribió nada.`);
+  // The key comes from the bucket, so it is shown quoted and ASCII-only (no control characters or terminal escapes).
+  if (bad) return refused(`El export tiene un archivo no admitido (${JSON.stringify(bad.file.slice(0, 60).replace(/[^\x20-\x7e]/g, "?"))}). No se escribió nada.`);
   if (!files.length) throw new NotFoundError(`files of export v${chosen.versionNo} of ${name}`);
   const dir = ctx.resolve(target);
+  const existing = statSync(dir, { throwIfNoEntry: false });
+  if (existing && !existing.isDirectory()) throw new InvalidInputError(`${target} exists and is not a directory`);
   const taken = files.find((f) => lstatSync(join(dir, f.file), { throwIfNoEntry: false }));
   if (taken) throw new InvalidInputError(`cannot write ${join(target, taken.file)} (EEXIST); an existing file is never overwritten`);
-  const bodies = await Promise.all(files.map(async (f) => (await ctx.blobs!.get(f.key)).body));
-  mkdirSync(dir, { recursive: true });
-  files.forEach((f, i) => writeNew(ctx, join(target, f.file), bodies[i]));
+  // One file at a time: fetch, then write. A failure undoes exactly what this call created (each path was linked by writeNew).
+  const created = mkdirSync(dir, { recursive: true });
+  const linked: string[] = [];
+  try {
+    for (const f of files) {
+      writeNew(ctx, join(target, f.file), (await ctx.blobs.get(f.key)).body);
+      linked.push(join(dir, f.file));
+    }
+  } catch (error) {
+    for (const path of linked) try { unlinkSync(path); } catch { /* already gone */ }
+    removeCreated(dir, created);
+    const message = `${(error as Error).message}; rolled back ${linked.length} file(s) written by this call`;
+    // Keep the error class (a missing object is exit 4, a refused write exit 2); the bucket's own error becomes a NotFoundError.
+    if (error instanceof ObjectNotFoundError) throw new NotFoundError(`${message}`, { cause: error });
+    (error as Error).message = message;
+    throw error;
+  }
   const lines = [`Export v${chosen.versionNo} de ${name}: ${files.length} archivo(s) guardados en ${target}.`];
   return out(args, { trust: "brand-data", version: chosen.versionNo, files: files.map((f) => f.file) }, trusted(lines));
 }
@@ -602,6 +670,7 @@ export async function runVerb(ctx: Ctx, verb: string, args: Parsed): Promise<Cli
   } catch (error) {
     // AlreadyExistsError is a VersionConflictError, so a create over an existing row is a conflict too.
     if (error instanceof VersionConflictError) return { lines: [`Conflicto de versión (versión actual: ${error.currentVersion ?? "ninguna"}): vuelve a leer y reintenta con --if-version.`], exitCode: EXIT.CONFLICT };
+    if (error instanceof BrandArchivedError) return refused("La marca está archivada: no se escribe contenido en ella. No se cambió nada.");
     if (error instanceof NotFoundError) return { lines: [`No existe: ${error.message.replace(/^Not found: /, "")}.`], exitCode: EXIT.NOT_FOUND };
     // 42501 = insufficient_privilege: the database role may not do this (e.g. the app role writing guidance).
     if ((error as { code?: string }).code === "42501") return refused("El rol de la base de datos no tiene permiso para esta operación. No se cambió nada.");

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 
 import { runChecks } from "@personal-brand/core/checks";
 import { toCheckRules } from "../src/revision-policy.ts";
-import { AlreadyExistsError, InvalidInputError, NotFoundError, VersionConflictError, type AssetInput, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
+import { AlreadyExistsError, BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetInput, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
 import type { MemoryRepositories } from "../src/memory/index.ts";
 
 export interface Harness {
@@ -288,6 +288,24 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => r.tts.get(o.id, "n1"), NotFoundError);
       await assert.rejects(() => r.tts.record("00000000-0000-4000-8000-000000000000", "n1", entry), NotFoundError);
       for (const bad of [{ ...entry, sha256: "x" }, { ...entry, seconds: -1 }, { ...entry, voice: [] }]) await assert.rejects(() => r.tts.record(a.id, "n2", bad as never), InvalidInputError);
+    },
+
+    async "archived brand: carousel create/save/status and asset register are refused atomically"(r) {
+      const b = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const doc = { json: { slides: [1] }, schemaVersion: 3 };
+      const c = await r.carousels.create(b.id, { slug: "week-1", title: "W", document: doc }, meta());
+      await r.brands.archive(b.id, meta({ expectedVersion: 1, reason: "archive" }));
+      const refused = (e: unknown) => e instanceof BrandArchivedError;
+      await assert.rejects(() => r.carousels.create(b.id, { slug: "week-2", title: "W", document: doc }, meta()), refused);
+      await assert.rejects(() => r.carousels.save(c.id, { title: "X", document: doc }, meta({ expectedVersion: 1 })), refused);
+      await assert.rejects(() => r.carousels.setStatus(c.id, { status: "exported" }, meta({ expectedVersion: 1, reason: "structural" })), refused);
+      await assert.rejects(() => r.assets.register(b.id, asset("one"), meta()), refused);
+      assert.equal((await r.carousels.list(b.id)).length, 1);
+      assert.equal((await r.carousels.getById(c.id, identity)).version, 1, "the refused writes changed nothing");
+      assert.deepEqual(await r.assets.list(b.id), []);
+      assert.equal((await r.revisions.list("carousel", c.id)).length, 1, "and left no revision");
+      await r.brands.unarchive(b.id, meta({ expectedVersion: 2, reason: "archive" }));
+      assert.equal((await r.carousels.save(c.id, { title: "X", document: doc }, meta({ expectedVersion: 1 }))).version, 2);
     },
 
     async "carousels: status lives in the column, never in the stored document"(r, _clock, h) {

@@ -381,7 +381,7 @@ brand recipe get|put <slug> <recipe> [--if-version <n>]
 brand asset list <slug> [--kind --status --origin]
 brand asset add <slug> <file> [--kind --tags a,b --family <f>]   upload + register as a manual candidate (25 MB max)
 brand asset get <slug> <assetId> [--out <path>]   --out must be outside the repo, never overwrites
-brand fonts fetch <slug> ...                      replaces system/assets/fetch-fonts.ts writing into the folder
+brand fonts fetch <slug> ...                      (S8b3b3) replaces system/assets/fetch-fonts.ts writing into the folder
 brand carousel list <slug> [--status <s>] | get <slug> <carousel>
 brand carousel put <slug> <carousel> --file <doc.json> [--title <t>] [--if-version <n>]   no --if-version = create (needs --title)
 brand carousel status <slug> <carousel> --status <s> --if-version <n> [--scheduled-for|--published-at <iso>]
@@ -402,7 +402,26 @@ verifies it, then deletes the brand's rows in FK order in one transaction
 under `SET LOCAL app.purge_brand = '<brandId>'`, which the `revisions`
 trigger checks as a second guard. Bucket objects
 under `brands/<brandId>/` are removed afterwards by an operator with a
-delete-capable key; the app key cannot.
+delete-capable key; the app key cannot. As built (S8b3b2): `--bundle` is a
+folder outside the repo (created 0700 if missing; removed again if the write fails) that receives
+`<slug>.<UTC timestamp>.bundle.json`, so a re-run never meets an old bundle. The file is 0600, written like `asset get --out`
+(never over a file), fsynced together with its directory, and read back. It holds a header (format, the migrations this
+code ships, by name and checksum: `schema_migrations` is not readable by the purger role), every row by table as
+`to_jsonb`, the blob keys the database knows with their hashes, and the bucket listing when `S3_*` is set.
+Order of refusals: confirmation, archived, `--bundle` present and outside the repo, `DATABASE_PURGE_URL` set,
+bundle folder name allowed; then the `DATABASE_PURGE_URL` host must be local, the session `current_user` must be
+`brand_purger`, and `current_database()` and `inet_server_port()` must equal those of `DATABASE_URL` (all checked on open,
+before any read).
+Everything else is ONE repeatable-read transaction: lock the brand `FOR UPDATE` (it must exist and be archived), lock its
+carousels and recipe runs `FOR UPDATE` (the parents of chat, exports and run artifacts), read every table, write and verify
+the bundle (the callback returns only once it is durable), delete in FK order, and require each table's deleted count to equal its
+bundled count. Any mismatch or failure rolls everything back and deletes nothing. A concurrent writer is blocked (it needs a share
+lock on the brand or on the locked parent) or fails on the RESTRICT key or with a serialization error, so nothing is deleted unbundled. Writers take the brand `FOR SHARE`
+before the carousel, the same order as the purge. It never deletes from the bucket; the report prints how many objects remain
+under the brand prefix. A brand that is gone exits 4.
+**Known gap:** the repository-level archived check covers carousel create/save/status and asset register. Chat append,
+`exports.reserveNextVersion`, content items, recipe runs and the TTS cache still rely on the CLI check; the purge stays correct
+without it because of the locks above. Extending `BrandArchivedError` to them is S8b3b3's job and must land before S9/S10a.
 
 **Guidance trust envelope.** `brand guidance get --json` returns
 `{ "trust": "brand-data", "name", "version", "body" }`. `usar-perfil` states
@@ -463,8 +482,10 @@ by literal with `Buffer.indexOf` and only a window around a hit is decoded, so n
 is built; a scan that throws is a refusal (`unknown`), never an aborted import. Serving approved SVGs to a browser should still sit behind a CSP. `asset add` looks at the file, judges its path,
 reads through one descriptor, then refuses if the real path, dev/ino or a hard link count shows it
 changed. `asset get --out` judges its destination like a name (any extension is fine). A `$HOME` inside a
-dot-directory is judged by its full real path. The archived-brand check runs in the CLI, not atomically
-with the write; it moves to the repository layer in S8b3b2. There is no `rules enable` yet: a disabled
+dot-directory is judged by its full real path. The archived-brand check runs twice: early in the CLI (a clear
+refusal), and in the repository, atomically with the write (`BrandArchivedError` from carousel `create`/`save`/`setStatus` and
+asset `register`, in memory and in Postgres, where the brand row is read `FOR SHARE` in the same transaction so an `archive`
+cannot commit in between; the CLI maps it to exit 6). There is no `rules enable` yet: a disabled
 rule stays disabled until a later slice adds it.
 `show` also lists recipes.
 
@@ -857,8 +878,9 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S8b2 | D13 content exemption (`cutoverAt` lookup in `runCli`), subcommands validated before the guard, CLI verbs part 2: `asset list`/`add`/`get`, `carousel list`/`get`/`put`/`status`; `RecipeRepository.list` (so `show` lists recipes); `revisions.listSince` (avoids N+1 in `show --since`); `--file` read through one descriptor | ~600 | S8b1 | each verb has an exit-code test. Carousel and asset writes are content, tested end to end with `runCli`: on a real brand a content write succeeds without opt-in once cut over, is refused (6) before cutover, and is refused (6) on a remote `DATABASE_URL`; identity writes on a cut-over brand without opt-in exit 6 |
 | S8b3a | S8b2 follow-ups: write-verb `--json` trust, `rules add`/`update`/`disable` (deferred from S8b2; disabling a disabled rule is a no-op), binary scan (fixed-prefix tokens only, over latin1, a hit is `unknown`, in `asset add` and the importer), docker `"auth"` base64 pattern, SVG allowlist-style screen, `asset add` look-judge-read-recheck (dev/ino, real path, hard links), HOME-inside-a-dot-directory, `nameRefusal` on the `--out` segments, `asset get --out` temp-file cleanup and a real `wx` collision test, `asset add` retry after a failed register, Postgres `listSince` at millisecond resolution | ~600 | S8b2 | each hardening item has a test; memory and Postgres agree on the `listSince` cursor |
 | S8b3b1 | S8b3a follow-ups and `export pull`: `rules` rejects an unknown subcommand before any branch; a typed `Refusal.code` replaces the English-text comparison in `asset get --out`; one shared SVG re-export hint; the cutover report names the fail-closed SVG screen; recorded content-scan length bounds (JWT payload `{8,12000}`, `"auth"` `{12,16384}`, URL password 1024) with a wider binary window; SVG CSS function names with digits, 3d transforms, shapes and modern colours; relative-timing asserts; `export pull` | ~590 | S8b3a | each item has a test; `export pull` never overwrites and refuses unsafe names and destinations |
-| S8b3b2 | `fonts fetch`; the `purge` executor as `brand_purger` (export bundle written and verified by a bundle writer, FK-order delete under `SET LOCAL app.purge_brand`); the purge remote gate also checks the `DATABASE_PURGE_URL` host and `current_user = brand_purger`; the repository-level archived check (the CLI's archived check is not atomic with the write, see §8) | ~590 | S8b3b1 | purge deletes only an archived brand and leaves other brands untouched |
-| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3b2 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
+| S8b3b2 | S8b3b1 follow-ups (`export pull` rolls back exactly what it linked, quotes the bucket key it refuses, refuses an `--out` that is a file, fetches and writes one file at a time); the repository-level archived check (`BrandArchivedError`: carousel create/save/status and asset register, atomic in memory and Postgres); the `purge` executor as `brand_purger` (bundle written and read back, then FK-order delete under `SET LOCAL app.purge_brand`; host gate on `DATABASE_PURGE_URL` and `current_user = brand_purger`) | ~590 | S8b3b1 | purge deletes only an archived brand and leaves other brands and the bucket untouched; a content write on an archived brand is refused by the repository itself for carousel create/save/status and asset register |
+| S8b3b3 | `fonts fetch` (replaces `system/assets/fetch-fonts.ts`; needs its own policy: where the stylesheet URL comes from, an allowed-host list, no redirects off it, size caps, fonts registered as `candidate` assets) | ~300 | S8b3b2 | fonts land as assets without touching a profile folder; a stylesheet or font URL off the allowed hosts is refused. Also in S8b3b3 (text only so far): `BrandArchivedError` on chat append, exports, content items, recipe runs and the TTS cache (before S9/S10a); purge error mapping (40001, 23503 and 23001 become `PurgeRefusedError` with a retry message and a note about the orphan bundle, with a test); a null check in `writeCarousel` for a brand row that vanished; the purge database identity check also compares `inet_server_addr` and `pg_postmaster_start_time`; the bundle file is unlinked when its read-back fails, with a rollback test; a `now` hook for the bundle timestamp |
+| S8c | `restore_drills` migration + `backup drill` (**`pg_dump` + restore drill tested**) + the import backup gate (refuses without a recent verified drill); legacy-bucket import source (`--from legacy-bucket:<slug>`); `init-profile.mjs` redirects to `brand create` | ~590 | S8b3b3 | gate refuses a remote write without a recent verified drill; a legacy bucket imports like a folder |
 | S9a | Carousel engine: render context + `loadWithResolver`; `render-week`/`render-brand`/`render.ts`, `text-raster.ts`, `contrast.ts`, `brand-schema.ts` loading, `brand-style.ts::loadBrandStyle` (from `brand_documents`), `layout-template.ts` (templates from `brand_documents`), `recipe.ts` read via `resolveBrandSource` | ~590 | S6d, S7a2 | example brand renders from storage with no `profiles/` dir |
 | S9b | Reel: `tts_cache`, clips as blobs in `run_artifacts`, per-run staging + clip dirs from cache (hardlink/copy), outputs to export keys, `storyboard.ts` on `recipe_runs` | ~590 | S9a | two concurrent reel renders do not collide; re-render one card keeps the old clip; assemble-only works from cache |
 | S10a | Editor read path on repositories, `ETag` | ~580 | S9a | editor suite green on memory storage |
