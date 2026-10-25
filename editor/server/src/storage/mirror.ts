@@ -3,6 +3,8 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, re
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 
+import { legacyProfileBase } from "@personal-brand/storage/contracts";
+
 import type { ObjectStore } from "./object-store.js";
 import { ObjectNotFoundError, PreconditionFailedError } from "./object-store.js";
 import type { S3StorageConfig } from "./config.js";
@@ -72,8 +74,8 @@ export function resolveMirrorRoots(config: S3StorageConfig, cacheDir: string, sl
 export function objectKeyFor(config: S3StorageConfig, slug: string, area: "profile" | "outputs", relPath: string): string {
   const posixRel = relPath.split(sep).join("/");
   return area === "profile"
-    ? `${config.prefix}${slug}/${posixRel}`
-    : `${config.prefix}${slug}/${OUTPUTS_MARKER}${posixRel}`;
+    ? `${legacyProfileBase(config.prefix, slug)}${posixRel}`
+    : `${legacyProfileBase(config.prefix, slug)}${OUTPUTS_MARKER}${posixRel}`;
 }
 
 function loadManifest(manifestPath: string): Manifest {
@@ -248,7 +250,7 @@ async function runSyncDown(
   slug: string,
 ): Promise<SyncDownResult> {
   const roots = resolveMirrorRoots(config, cacheDir, slug);
-  const remotePrefix = `${config.prefix}${slug}/`;
+  const remotePrefix = legacyProfileBase(config.prefix, slug);
   const objects = await store.list(remotePrefix);
   // A snapshot for the cheap "did this change remotely" check only — the
   // actual write below re-reads and patches the manifest fresh, so a stale
@@ -505,7 +507,7 @@ export async function listProfileSlugsFromBucket(store: ObjectStore, config: S3S
 /** True when `<prefix><slug>/brand.json` exists in the bucket. */
 export async function bucketHasBrand(store: ObjectStore, config: S3StorageConfig, slug: string): Promise<boolean> {
   try {
-    await store.head(`${config.prefix}${slug}/brand.json`);
+    await store.head(`${legacyProfileBase(config.prefix, slug)}brand.json`);
     return true;
   } catch (error) {
     if (error instanceof ObjectNotFoundError) return false;

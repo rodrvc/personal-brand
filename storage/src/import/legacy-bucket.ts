@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
-import type { BlobStore } from "../contracts/index.ts";
+import { legacyProfileBase, type BlobStore } from "../contracts/index.ts";
 
 /** `--from legacy-bucket:<slug>`: a brand stored in the per-profile bucket layout of the editor's `s3` mode (issue #99). */
 export const LEGACY_SOURCE = /^legacy-bucket:/;
@@ -43,7 +43,7 @@ export async function materializeLegacyBucket(store: BlobStore, prefix: string, 
   const outputs = join(into, "outputs");
   mkdirSync(dir, { recursive: true });
   mkdirSync(outputs, { recursive: true });
-  const base = `${prefix}${slug}/`;
+  const base = legacyProfileBase(prefix, slug);
   const skipped: string[] = [];
   // A zero-size key ending in "/" is a folder placeholder, not a file.
   const listed = (await store.list(base)).filter((o) => !(o.key.endsWith("/") && o.size === 0)).sort((a, b) => (a.key < b.key ? -1 : 1));
