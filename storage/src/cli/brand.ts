@@ -8,24 +8,24 @@ import { S3ObjectStore } from "../blob/index.ts";
 import { NotFoundError, type BlobStore } from "../contracts/index.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
+import { mutatedSlug, readInputFile, runVerb, VERB_SPECS, VERB_USAGE, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
 import { createPgRepositories } from "../pg/index.ts";
 
-export interface CliResult {
-  lines: string[];
-  exitCode: number;
-}
+export type { CliResult };
 
 /** The only file the system ever writes inside a brand folder (D12). */
 export const CUTOVER_MARKER = ".storage-cutover";
 
 const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 /** Each verb accepts only its own flags: `--dry-run` must never reach a verb that cannot honor it. */
-const VERBS: Record<string, { values: string[]; flags: string[] }> = {
-  import: { values: ["from", "owner-opt-in"], flags: ["dry-run"] },
-  cutover: { values: ["from", "confirm", "owner-opt-in"], flags: ["partial"] },
+const VERBS: Record<string, { values: string[]; flags: string[]; positionals: [number, number] }> = {
+  import: { values: ["from", "owner-opt-in"], flags: ["dry-run"], positionals: [0, 0] },
+  cutover: { values: ["from", "confirm", "owner-opt-in"], flags: ["partial"], positionals: [1, 1] },
+  ...VERB_SPECS,
 };
-const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)"];
+const REMOTE_REFUSAL = "Se rechaza escribir en una base de datos remota: aún no hay un respaldo restaurado y verificado (brand backup drill, etapa S8c).";
+const USAGE = ["Uso:", "  brand import --from <carpeta> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)", ...VERB_USAGE];
 
 /** Brands the tool may touch freely: the fictional, tracked `profiles/example*` folders. */
 const EXAMPLE_BRAND = /^example(-[a-z0-9-]+)?$/;
@@ -55,7 +55,7 @@ export function blobStoreFromEnv(env: NodeJS.ProcessEnv): BlobStore | undefined 
 
 /** Strict per-verb parser (`--flag value` or `--flag=value`). Returns null for an unknown verb or flag, or a missing value. */
 export function parseArgs(verb: string | undefined, argv: string[]) {
-  const spec = verb ? VERBS[verb] : undefined;
+  const spec = verb && Object.hasOwn(VERBS, verb) ? VERBS[verb] : undefined;
   if (!spec) return null;
   const positionals: string[] = [];
   const values = new Map<string, string>();
@@ -223,25 +223,45 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
   const [verb, ...rest] = argv;
   const args = parseArgs(verb, rest);
   const slug = args?.positionals[0];
-  if (!args || args.positionals.length !== (verb === "cutover" ? 1 : 0) || (verb === "import" && !args.values.has("from"))) return { lines: USAGE, exitCode: 2 };
+  const [min, max] = (verb && Object.hasOwn(VERBS, verb) && VERBS[verb].positionals) || [0, 0];
+  if (!args || args.positionals.length < min || args.positionals.length > max || (verb === "import" && !args.values.has("from"))) return { lines: USAGE, exitCode: 2 };
   const dryRun = args.flags.has("dry-run");
   const author = `cli:${env.USER ?? "unknown"}`;
+  if (Object.hasOwn(VERB_SPECS, verb!)) {
+    // Writes to a brand that is not an example need the owner's opt-in and, on a remote database, a restored backup; reads stay open.
+    const target = mutatedSlug(verb!, args.positionals);
+    if (target !== null) {
+      const refusal = ownerRefusal([target], env, args.values.get("owner-opt-in"));
+      if (refusal) return { lines: [refusal], exitCode: 6 };
+      if (!isLocalDatabase(env.DATABASE_URL)) return { lines: [REMOTE_REFUSAL], exitCode: 6 };
+    }
+    if (!repos && !env.DATABASE_URL) return { lines: ["Falta DATABASE_URL: indica la base de datos de storage."], exitCode: 1 };
+    let verbSql: Sql | null = null;
+    try {
+      if (!repos) verbSql = connect(env);
+      return await runVerb({ repos: repos ?? createPgRepositories(verbSql!), env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), resolve: (path) => fromCwd(path, env) }, verb!, args);
+    } catch (error) {
+      return { lines: [`Error: ${(error as Error).message}`], exitCode: 1 };
+    } finally {
+      await verbSql?.end({ timeout: 1 });
+    }
+  }
   let from: string;
   if (verb === "import") {
     from = fromCwd(args.values.get("from")!, env);
     const refused = ownerRefusal(folderNames(from), env, args.values.get("owner-opt-in"));
-    if (refused) return { lines: [refused], exitCode: 1 };
+    if (refused) return { lines: [refused], exitCode: 6 };
   } else {
-    if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: 1 };
+    if (args.values.get("confirm") !== slug) return { lines: [`Para cortar escribe: brand cutover ${slug} --confirm ${slug}`], exitCode: 6 };
     from = args.values.has("from") ? fromCwd(args.values.get("from")!, env) : join(profilesRoot(env), slug!);
     const refused = ownerRefusal([slug!, ...folderNames(from)], env, args.values.get("owner-opt-in"));
-    if (refused) return { lines: [refused], exitCode: 1 };
+    if (refused) return { lines: [refused], exitCode: 6 };
     if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: 1 };
   }
 
   // Backup gate (§10). `restore_drills` lands in S8; until then any real write to a remote database is refused.
   if (!dryRun && !isLocalDatabase(env.DATABASE_URL)) {
-    return { lines: ["Se rechaza escribir en una base de datos remota: aún no hay un respaldo restaurado y verificado (brand backup drill, etapa S8)."], exitCode: 1 };
+    return { lines: [REMOTE_REFUSAL], exitCode: 6 };
   }
   if (!existsSync(from)) return { lines: [`No existe la carpeta ${from}.`], exitCode: 1 };
 
@@ -254,7 +274,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     const report = await importBrand(r, { from, dryRun, author, blobs, env });
     return { lines: describe(report), exitCode: report.counts.conflict ? 1 : 0 };
   } catch (error) {
-    if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: 1 };
+    if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: 6 };
     return { lines: [`Error: ${(error as Error).message}`], exitCode: 1 };
   } finally {
     await sql?.end({ timeout: 1 });
