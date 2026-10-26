@@ -234,14 +234,14 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["chat and plan/apply are still 405 for a stored brand (S10b5), whatever the body", async () => {
-    for (const path of ["chat/messages", "plan/apply"]) {
+  ["chat is still 405 for a stored brand (S10b6), whatever the body", async () => {
+    for (const path of ["chat/messages", "chat/proposals/p1/apply"]) {
       const res = await json(`/${SLUG}/carousels/week-one/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       assert.equal(res.status, 405, path);
     }
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["regenerate for a stored brand serves only the final-prompt preview (no model call, no write); generating is 501", async () => {
+  ["regenerate for a stored brand serves the final-prompt preview without a model call or a write; generating is 501", async () => {
     const post = (body: object, query = "") => json(`/${SLUG}/carousels/week-one/regenerate${query}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const before = (await json(`/${SLUG}/carousels/week-one`)).etag;
     const preview = await post({ target: { slideId: "s1", objectId: "background" }, preview: true });

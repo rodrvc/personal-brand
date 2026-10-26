@@ -106,6 +106,36 @@ function planSlideKinds(promptText: string, template: LayoutTemplate, slideCount
   return kinds;
 }
 
+/** The library entry fields the planner reads, an image a provider returned and what it was made for. */
+export type PlannerAsset = Pick<AssetEntry, "id" | "kind" | "status" | "tags">;
+
+export type PlannerImage = Parameters<typeof storeImage>[1];
+export type PlannerImageSpec = Parameters<typeof storeImage>[2];
+
+/** What the planner needs from a brand: its asset index, style, language and a place for generated images (always `candidate` assets). A folder and a stored brand each satisfy it, so the planner is one code path. */
+export interface PlannerSource {
+  assets(): Promise<PlannerAsset[]>;
+  style(): Promise<BrandStyle>;
+  language(): Promise<string | undefined>;
+  storeImage(image: PlannerImage, spec: PlannerImageSpec): Promise<{ id: string }>;
+  /** What generating this asset cost, 0 when unknown. */
+  costCents(assetId: string): Promise<number>;
+}
+
+/** The folder brand as a `PlannerSource`: its asset index, `brand-style` files and `assets/generated/` sidecars. */
+export function folderPlannerSource(store: ProfileStore): PlannerSource {
+  const dir = store.roots.profileDir;
+  return {
+    assets: async () => loadIndexCached(dir).entries,
+    style: async () => loadBrandStyle(dir),
+    language: async () => readProfilePrimaryLanguage(dir),
+    storeImage: async (image, spec) => storeImage(store, image, spec),
+    costCents: async (assetId) => {
+      try { return store.readJson<{ costCents?: number }>(`assets/generated/${assetId}.json`).costCents ?? 0; } catch { return 0; }
+    },
+  };
+}
+
 export interface PlannedVisualSlot {
   slideIndex: number;
   slot: string;
@@ -160,14 +190,14 @@ function wordsOf(text: string): Set<string> {
  * as before tags were considered.
  */
 function pickBestCandidate(
-  candidates: AssetEntry[],
+  candidates: PlannerAsset[],
   promptText: string,
   slotName: string,
-): AssetEntry | undefined {
+): PlannerAsset | undefined {
   if (candidates.length === 0) return undefined;
   const hintWords = new Set([...wordsOf(promptText), ...wordsOf(slotName)]);
 
-  let best: { entry: AssetEntry; score: number } | undefined;
+  let best: { entry: PlannerAsset; score: number } | undefined;
   for (const entry of candidates) {
     const score = entry.tags.reduce((count, tag) => (hintWords.has(tag.toLowerCase()) ? count + 1 : count), 0);
     if (!best || score > best.score) {
@@ -187,24 +217,24 @@ function pickBestCandidate(
  * generate after"). Text slots are collected too so the caller knows their
  * character budget when it later calls `draftCopy`.
  */
-export function buildCompositionPlan(
-  store: ProfileStore,
+export async function buildCompositionPlan(
+  source: PlannerSource,
   promptText: string,
   template: LayoutTemplate,
   slideCountOverride?: number,
   /** Asset ids the user explicitly chose from the library picker (NewCarouselDialog's optional, collapsed-by-default picker) — tried before the general tag-matching search, kind permitting, for each visual slot in order. */
   preferredAssetIds?: string[],
-): CompositionPlan {
+): Promise<CompositionPlan> {
   const slideKinds = planSlideKinds(promptText, template, slideCountOverride);
-  const index = loadIndexCached(store.roots.profileDir);
-  const approvedByKind = new Map<AssetEntry["kind"], AssetEntry[]>();
-  for (const entry of index.entries) {
+  const entries = await source.assets();
+  const approvedByKind = new Map<AssetEntry["kind"], PlannerAsset[]>();
+  for (const entry of entries) {
     if (entry.status !== "approved") continue;
     const list = approvedByKind.get(entry.kind) ?? [];
     list.push(entry);
     approvedByKind.set(entry.kind, list);
   }
-  const byId = new Map(index.entries.map((entry) => [entry.id, entry]));
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
   const used = new Set<string>();
   const preferredQueue = [...(preferredAssetIds ?? [])];
@@ -318,7 +348,7 @@ export function assignTextColorKeys(brand: BrandTokens, slide: Slide): Slide {
  * spec, design.md D7); every object records its `source`.
  */
 export async function applyCompositionPlan(
-  store: ProfileStore,
+  source: PlannerSource,
   brand: BrandTokens,
   template: LayoutTemplate,
   templateId: string,
@@ -344,7 +374,7 @@ export async function applyCompositionPlan(
     ? await generator.draftCopy({
         carouselPrompt: plan.promptText,
         slides: [...uniqueBySlide.values()],
-        brand: draftCopyBrandContext(loadBrandStyle(store.roots.profileDir), readProfilePrimaryLanguage(store.roots.profileDir)),
+        brand: draftCopyBrandContext(await source.style(), await source.language()),
       })
     : { slides: [], model: "none", costCents: 0 };
 
@@ -551,7 +581,7 @@ export function generateImageBrandContext(style: BrandStyle): GenerateImageBrand
  * on disk with a sidecar, even before anyone approves it.
  */
 export async function generateForSlot(
-  store: ProfileStore,
+  source: PlannerSource,
   generator: PieceGenerator,
   spec: {
     prompt: string;
@@ -565,13 +595,13 @@ export async function generateForSlot(
     /** Runs on the generated image before it is stored, e.g. to erase measured text. */
     postProcess?: (image: Buffer) => Buffer;
   },
-): Promise<AssetEntry> {
+): Promise<{ id: string }> {
   const generateKind =
     spec.kind === "font" || spec.kind === "logo" || spec.kind === "unclassified" ? "background" : spec.kind;
   // Brand style is loaded fresh per call (cheap: a handful of small file
   // reads, no caching needed) rather than threaded through every route call
   // site — this is the one place every image generation funnels through.
-  const brand = spec.mode === "reproduce" ? undefined : generateImageBrandContext(loadBrandStyle(store.roots.profileDir));
+  const brand = spec.mode === "reproduce" ? undefined : generateImageBrandContext(await source.style());
   const image = await generator.generateImage({
     prompt: spec.prompt,
     kind: generateKind,
@@ -582,7 +612,7 @@ export async function generateForSlot(
     padColor: spec.padColor,
   });
   if (spec.postProcess) image.buffer = spec.postProcess(image.buffer);
-  return storeImage(store, image, spec);
+  return source.storeImage(image, spec);
 }
 
 /** Registers an image made for a slot as a candidate asset, with a sidecar recording how it was made. */
