@@ -36,7 +36,7 @@ export function folderUsageSource(profileDir: string): { documents(): unknown[] 
 }
 
 /** The storage source: the current document of every carousel of the brand, whatever its status. The shape is not validated. */
-export function storageUsageSource(carousels: CarouselRepository, brandId: string): UsageSource {
+export function storageUsageSource(carousels: Pick<CarouselRepository, "list" | "get">, brandId: string): UsageSource {
   return {
     async documents() {
       const heads = await carousels.list(brandId);
