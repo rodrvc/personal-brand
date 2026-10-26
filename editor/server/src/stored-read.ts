@@ -1,6 +1,6 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, ObjectNotFoundError, PreconditionFailedError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -22,7 +22,7 @@ import { messages } from "./messages.js";
 export interface EditorStorage {
   brands: Pick<BrandRepository, "getBySlug" | "list">;
   documents: Pick<BrandDocumentRepository, "get" | "list">;
-  assets: Pick<AssetRepository, "list" | "get" | "update">;
+  assets: Pick<AssetRepository, "list" | "get" | "update" | "register">;
   carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus" | "create">;
   exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
   /** Snapshots of a carousel (`GET .../versions`). */
@@ -63,7 +63,7 @@ export const isStoredError = (error: unknown): boolean => error instanceof Stora
  * deterministic errors keep their meaning.
  */
 export function guardStorage(storage: EditorStorage): EditorStorage {
-  const guard = <T extends object>(target: T): T =>
+  const guard = <T extends object>(target: T, answers: (error: unknown, method: string) => boolean = isDomainError): T =>
     new Proxy(target, {
       get(obj, prop, receiver) {
         const value = Reflect.get(obj, prop, receiver);
@@ -72,7 +72,7 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
           try {
             return await value.apply(obj, args);
           } catch (error) {
-            throw isDomainError(error) ? error : new StorageFailure(error);
+            throw answers(error, String(prop)) ? error : new StorageFailure(error);
           }
         };
       },
@@ -84,7 +84,8 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
     carousels: guard(storage.carousels),
     exports: guard(storage.exports),
     revisions: guard(storage.revisions),
-    files: guard(storage.files),
+    // `putBlob` branches on two answers that are not outages: `put` refusing an existing key, and `head` not seeing a key yet.
+    files: guard(storage.files, (error, method) => isDomainError(error) || (method === "put" && error instanceof PreconditionFailedError) || (method === "head" && error instanceof ObjectNotFoundError)),
     blobs: (brandId) => guard(storage.blobs(brandId)),
   };
 }
@@ -207,8 +208,8 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
 const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|stats|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The writes a stored brand takes so far (S10b): creating, saving and exporting a carousel, and the regenerate preview. Every other write (chat, plan/apply) stays a 405. */
-const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/export$/], ["POST", /^\/carousels\/[^/]+\/regenerate$/]];
+/** The writes a stored brand takes so far (S10b): creating (with its plan preview), saving, exporting, regenerating and plan/apply. Every other write (chat) stays a 405. */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/(export|regenerate|plan\/apply)$/]];
 
 /** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [

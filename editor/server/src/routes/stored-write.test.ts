@@ -156,8 +156,9 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await create({ title: "Both", blank: true, templateId: null })).status, 400);
     assert.equal((await create({ blank: true })).status, 400);
     assert.equal((await create({ title: "Planned", prompt: "make slides" })).status, 501);
-    assert.equal((await create({ title: "P", preview: true })).status, 501);
-    assert.equal((await create({ title: "Planned" }, `/${SLUG}/carousels?mode=plan`)).status, 501);
+    // A plan preview is served (S10b5) and needs its prompt; the planner itself is tested in stored-compose.test.ts.
+    assert.equal((await create({ title: "P", preview: true })).status, 400);
+    assert.equal((await create({ title: "Planned" }, `/${SLUG}/carousels?mode=plan`)).status, 400);
     assert.equal((await create({ title: "Missing template", templateId: "no-such-template", id: "tmpl-one" })).status, 400);
     assert.equal((await repos.carousels.list(brand.id)).some((c) => c.value.slug === "tmpl-one"), false);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
@@ -176,6 +177,27 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await repos.assets.get(brand.id, loose.id)).value.status, "candidate");
     const audit = (await repos.revisions.list("brand_asset", (await repos.assets.get(brand.id, pinned.id)).id)).at(-1)!;
     assert.deepEqual([audit.reason, audit.author], ["status", "editor"]);
+  }],
+  ["a failing approval of a pinned asset after the committed save still answers 200 with the new ETag, and the candidate is retried by the next save", async () => {
+    const asset = await library.register(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"), { kind: "photo", origin: "ai", status: "candidate" });
+    const pinned = { id: "s-pin", kind: "cover", background: { mode: "asset", assetId: asset.id, pinned: true, source: "ai" }, objects: [] };
+    const failing = { ...storage.assets, update: async () => { throw new Error("assets outage"); } };
+    const logged: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void logged.push(args);
+    try {
+      await withApp({ assets: failing }, async (url) => {
+        const res = await fetch(`${url}/carousels/week-one`, { method: "PUT", headers: { ...JSON_HEADERS, "If-Match": `"${await current()}"` }, body: JSON.stringify({ ...document, slides: [pinned] }) });
+        assert.equal(res.status, 200, "the save is committed, so it answers 200");
+        assert.equal(res.headers.get("etag"), `"${await current()}"`);
+      });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(logged.length > 0, true, "the failed approval is logged");
+    assert.equal((await repos.assets.get(brand.id, asset.id)).value.status, "candidate");
+    assert.equal((await put({ ...document, slides: [pinned] }, `"${await current()}"`)).status, 200);
+    assert.equal((await repos.assets.get(brand.id, asset.id)).value.status, "approved", "the next save retries the approval");
   }],
   ["approving pinned assets reads each id (never lists the library), and one failure does not stop the others: they fail together at the end", async () => {
     const { approveCandidates } = await import("../stored-assets.js");

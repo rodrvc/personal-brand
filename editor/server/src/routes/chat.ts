@@ -7,7 +7,7 @@ import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-gen
 import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
 import { detectImage } from "../../../../system/assets/index.js";
 import { loadIndexCached } from "../asset-index-cache.js";
-import { generateForSlot, storeImage } from "../compose/planner.js";
+import { folderPlannerSource, generateForSlot, storeImage } from "../compose/planner.js";
 import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, chatInstructions, type PosterRoute } from "../chat/chat-context.js";
@@ -41,7 +41,7 @@ import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readDocumentRevision, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
-import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
+import { attachGeneratedAsset } from "./compose.js";
 import { messages } from "../messages.js";
 import { handleStoreError } from "./store-errors.js";
 
@@ -431,10 +431,10 @@ async function runProposalBody(
     const brand = buildChatContext(store, carouselId).brand;
     for (const action of proposal.actions) {
       if (action.type === "compose_from_reference" && (action.posterRoute ?? LEGACY_POSTER_ROUTE) === "image") {
-        const entry = await generateForSlot(store, generator, { ...posterImageFor(store, action, canvas, brand.locale), canvas, carouselId });
+        const entry = await generateForSlot(folderPlannerSource(store), generator, { ...posterImageFor(store, action, canvas, brand.locale), canvas, carouselId });
         generated.set(action.id, entry.id);
         placed.set(action.id, []);
-        results.push({ actionId: action.id, slideIds: [], assetIds: [entry.id], costCents: readGeneratedAssetCostCents(store, entry.id) });
+        results.push({ actionId: action.id, slideIds: [], assetIds: [entry.id], costCents: await folderPlannerSource(store).costCents(entry.id) });
         continue;
       }
       if (action.type === "compose_from_reference" && posterBackground() === "reference") {
@@ -447,10 +447,10 @@ async function runProposalBody(
       }
       const spec = generationFor(store, action, canvas, placed);
       if (!spec) continue;
-      const entry = await generateForSlot(store, generator, { ...spec, canvas, carouselId });
+      const entry = await generateForSlot(folderPlannerSource(store), generator, { ...spec, canvas, carouselId });
       generated.set(action.id, entry.id);
       const slideIds = "slideId" in action && action.slideId ? [action.slideId] : [];
-      results.push({ actionId: action.id, slideIds, assetIds: [entry.id], costCents: readGeneratedAssetCostCents(store, entry.id) });
+      results.push({ actionId: action.id, slideIds, assetIds: [entry.id], costCents: await folderPlannerSource(store).costCents(entry.id) });
     }
 
     const ctx = withReferences(buildChatContext(store, carouselId), references);

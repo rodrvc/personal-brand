@@ -39,5 +39,5 @@ export async function approveCandidates(s: StoredBrand, ids: Set<string>, author
       errors.push(error);
     }
   }
-  if (errors.length > 0) throw new AggregateError(errors, `Approving ${errors.length} of ${ids.size} asset(s) failed: ${errors.map((e) => (e as Error)?.message ?? String(e)).join("; ")}`);
+  if (errors.length > 0) throw new AggregateError(errors, `Approving ${errors.length} of ${ids.size} asset(s) failed: ${errors.map((e) => e instanceof Error ? e.message : String(e)).join("; ")}`);
 }

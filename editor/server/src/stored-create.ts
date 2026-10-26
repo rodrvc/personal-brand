@@ -16,13 +16,13 @@ interface CreateBody {
 
 /**
  * `POST /carousels` for a stored brand: creates the carousel row (create-on-save, `expectedVersion: null`) with an empty
- * document, the one shape the editor's "Nuevo carrusel" sends (`blank`, or a template id). The prompt-driven plan/apply
- * flow needs the AI pipeline and is not served from storage yet: `?mode=plan`, `preview: true` and a `prompt` are all 501
- * (unlike the folder, a prompt is never silently ignored, because the caller expects a composed carousel). The answer carries the row's `ETag`, so the
+ * document, the one shape the editor's "Nuevo carrusel" sends (`blank`, or a template id). A plan preview is served by the compose
+ * route before this runs; a `prompt` without one is 501 (unlike the folder, it is never silently ignored, because the
+ * caller expects a composed carousel). The answer carries the row's `ETag`, so the
  * client's first save has its `If-Match`.
  */
-export async function createStoredCarousel(s: StoredBrand, body: CreateBody, preview: boolean): Promise<SaveOutcome> {
-  if (preview || body.prompt !== undefined) return { status: 501, body: { error: messages.storedNotYet } };
+export async function createStoredCarousel(s: StoredBrand, body: CreateBody): Promise<SaveOutcome> {
+  if (body.prompt !== undefined) return { status: 501, body: { error: messages.storedNotYet } };
   const blank = body.blank === true;
   if (blank && body.templateId !== undefined) return { status: 400, body: { error: `"blank" and "templateId" cannot be sent together` } };
   if (typeof body.title !== "string" || !body.title.trim()) return { status: 400, body: { error: "title is required" } };
