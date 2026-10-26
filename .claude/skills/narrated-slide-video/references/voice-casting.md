@@ -175,12 +175,25 @@ otherwise pass and land inside it). It is part of the script that follows.
 # The REAL paragraph the samples are judged on, already normalized.
 TXT='<first paragraph of the script>'
 
-VOICE_WORKDIR="${VOICE_WORKDIR:?set an absolute path outside the repo, e.g. $HOME/voice-work}"
+# VOICE_WORKDIR is required for a brand in this repo. For a standalone commission, set it to
+# the commission's own absolute directory (there is no default: guessing a path is how a cache
+# lands inside a repo).
+VOICE_WORKDIR="${VOICE_WORKDIR:-}"
+[ -n "$VOICE_WORKDIR" ] || { echo "refused: set VOICE_WORKDIR to an absolute directory outside any repo (the commission dir for a standalone job)"; exit 1; }
 CACHE="$VOICE_WORKDIR/<slug>/voice-samples"   # or the commission's dir
 case "$CACHE" in /*) ;; *) echo "refused: not absolute"; exit 1;; esac
 mkdir -p "$CACHE"
-REPO="$(git rev-parse --show-toplevel)"; REAL="$(cd "$CACHE" && pwd -P)"
-case "$REAL/" in "$REPO"/*) echo "refused: $REAL is inside the repo"; exit 1;; esac
+REAL="$(cd "$CACHE" && pwd -P)"
+# Refuse a cache inside ANY git checkout, whatever the shell's cwd is: the cache path's own repo,
+# this session's checkout, every worktree, and the main checkout (parent of --git-common-dir).
+# A directory in no repo (a standalone commission dir) passes.
+{ git -C "$REAL" rev-parse --show-toplevel 2>/dev/null
+  git rev-parse --show-toplevel 2>/dev/null
+  git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p'
+  COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && dirname "$COMMON"; } \
+| while IFS= read -r CHECKOUT; do
+    case "$REAL/" in "$CHECKOUT"/*) echo "refused: $REAL is inside the repo ($CHECKOUT)"; exit 1;; esac
+  done || exit 1
 f="$CACHE/<voice-name>-$(printf '%s' "$TXT" | shasum | cut -c1-8).mp3"
 
 if [ -s "$f" ]; then

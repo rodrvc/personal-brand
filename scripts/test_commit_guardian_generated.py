@@ -184,6 +184,16 @@ class FetchStorageTermsTest(GateCase):
             self.assertIsNone(terms, stdout)
             self.assertEqual(len(err.strip().splitlines()), 1, stdout)
 
+    def test_the_note_never_raises_and_names_the_live_terms(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            gate._note('x')
+        self.assertIn('live storage terms were not checked', err.getvalue())
+        closed = io.StringIO()
+        closed.close()
+        with contextlib.redirect_stderr(closed):
+            gate._note('x')  # a closed stderr must not turn a diagnostic into a crash
+
     def test_an_unexpected_error_never_escapes(self):
         class Broken(FakeProc):
             def communicate(self, timeout=None):
@@ -198,9 +208,11 @@ class LiveTermsTest(GateCase):
 
     def setUp(self):
         super().setUp()
-        saved = (gate.fetch_storage_terms, gate.staged_blob, gate.git, gate._storage_answer, sys.argv)
-        self.addCleanup(lambda: (setattr(gate, 'fetch_storage_terms', saved[0]), setattr(gate, 'staged_blob', saved[1]), setattr(gate, 'git', saved[2]), setattr(gate, '_storage_answer', saved[3]), setattr(sys, 'argv', saved[4])))
+        for owner, name in ((gate, 'fetch_storage_terms'), (gate, 'staged_blob'), (gate, 'git'), (gate, '_storage_answer'), (sys, 'argv')):
+            self.addCleanup(setattr, owner, name, getattr(owner, name))
         self.asked = 0
+        # Deterministic by default: unit tests never spawn pnpm/node; a test that needs terms calls storage_has().
+        gate.fetch_storage_terms = lambda: None
         gate.staged_blob = lambda path: 'const name = "Newer Mark";\n'
 
     def storage_has(self, terms):
@@ -245,6 +257,24 @@ class LiveTermsTest(GateCase):
         self.assertEqual(out.count('is absent'), 1, 'the storage warning only; the legacy fallback stays quiet')
         self.assertIn('CURRENT TREE', out)
         self.assertIn('storage (live)', out)
+
+    def test_check_push_sees_live_terms_missing_from_the_generated_file(self):
+        gate.BRAND_DENYLIST_GENERATED.write_text('fictionalco\n', encoding='utf-8')  # stale: lacks "Newer Mark"
+        self.storage_has(['fictionalco', 'Newer Mark'])
+        gate.git = lambda *a: '+++ b/system/x.ts\n+const name = "Newer Mark";\n'
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gate.check_push(['abc..def']), 1)
+        self.assertIn('Newer Mark', err.getvalue())
+        self.assertIn('storage (live)', err.getvalue())
+
+    def test_check_push_with_no_terms_at_all_passes_and_says_nothing(self):
+        self.storage_has(None)  # storage unknown, no generated file: nothing to search for
+        gate.git = lambda *a: '+++ b/system/x.ts\n+const name = "Newer Mark";\n'
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(gate.check_push(['abc..def']), 0)
+        self.assertEqual((out.getvalue(), err.getvalue()), ('', ''))
 
     def test_scan_wiring_unknown_storage_prints_the_fallback_once(self):
         gate.BRAND_DENYLIST.write_text('fictionalco\n', encoding='utf-8')  # something to search for

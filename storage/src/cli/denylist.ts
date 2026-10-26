@@ -42,15 +42,22 @@ const isSkippedHandle = (text: string, m: RegExpMatchArray): boolean => {
   return !handleLike(m[1]) || isNpmScope(text, m) || SCHEMA_FIELDS.has(word) || AT_RULES.has(word);
 };
 
+/** The authority of a url-ish value: what follows an optional scheme or `//`, up to the first `/`, `?` or `#`. `explicit` tells that a scheme or `//` was present. */
+const splitHost = (value: string): { explicit: boolean; authority: string } => ({
+  explicit: /^([a-z]+:)?\/\//i.test(value),
+  authority: value.replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0],
+});
+
 /**
  * A `url` value worth parsing as a host: no spaces, a dot in the host part, not a relative path (`./x`, `~/x`). With a scheme
  * or a leading `//` (protocol-relative) the first segment is a host whatever its TLD (`https://brand.md`); a bare value that
- * looks like a file name (`logo.png`, `notes.md`) is not one.
+ * looks like a file name (`logo.png`, `notes.md`) is not one. Decided: a bare `.md` value stays a file name even though `.md`
+ * is also Moldova's TLD (a recipe `url` of `brand.md` is far more likely a notes file than a host); write `https://brand.md`
+ * or `//brand.md` to name that host.
  */
 const hostLike = (value: string): boolean => {
   const v = value.trim();
-  const explicit = /^([a-z]+:)?\/\//i.test(v);
-  const host = v.replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0];
+  const { explicit, authority: host } = splitHost(v);
   const fileName = !explicit && /\.(png|jpe?g|gif|svg|webp|json|ya?ml|md|txt|css|js|ts|html?|mp[34])$/i.test(host);
   return !/\s/.test(v) && (explicit || !/^[./~]/.test(v)) && host.includes(".") && !fileName;
 };
@@ -62,7 +69,7 @@ const hostLike = (value: string): boolean => {
  * `com`/`net`/`org` (`brand.zz.com`), and before a shared hosting suffix. Userinfo, port and a trailing FQDN dot are dropped.
  */
 export function domainTerms(value: string): string[] {
-  const host = (value.trim().replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0].split("@").pop() ?? "").replace(/:\d{1,5}$/, "").replace(/\.$/, "").toLowerCase();
+  const host = (splitHost(value.trim()).authority.split("@").pop() ?? "").replace(/:\d{1,5}$/, "").replace(/\.$/, "").toLowerCase();
   if (!host.includes(".")) return host ? [host] : [];
   if (PRIVATE_SUFFIX.includes(host)) return [host]; // the suffix itself names no brand
   if (THIRD_PARTY.some((t) => host === t || host.endsWith(`.${t}`))) return [];

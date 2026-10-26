@@ -514,7 +514,7 @@ async function carousel(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   return wrote(args, saved, [`Carrusel ${name} guardado (versión ${saved.version}).`]);
 }
 
-/** A JSON object read from a file named on the command line. */
+/** A JSON object read from a file named on the command line; `ctx.read` resolves the path against the caller's cwd, so a scratch path should be absolute. */
 function jsonObjectFile(ctx: Ctx, path: string): Record<string, unknown> {
   const json = parseJson(ctx.read(path));
   if (!json || typeof json !== "object" || Array.isArray(json)) throw new InvalidInputError("the file must hold a JSON object");
@@ -525,12 +525,13 @@ function jsonObjectFile(ctx: Ctx, path: string): Record<string, unknown> {
  * `brand run list|get|create|save`: a recipe run (a reel's input and storyboard) for a period. Creating a run is a content
  * write; the id it prints is what a stored brand's render takes as `--run`. `get` only answers for a run of this brand.
  */
-async function runs(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+async function runs(ctx: Ctx, args: Parsed, [sub, slug, target]: string[]): Promise<CliResult> {
   const expected = ifVersion(args);
   const [input, storyboard] = [args.values.get("input"), args.values.get("storyboard")];
   const [start, end] = [args.values.get("period-start"), args.values.get("period-end")];
-  const recipeName = sub === "create" ? name : args.values.get("recipe");
-  if (sub === "list" ? name !== undefined : !name) return usage();
+  // The third positional is the recipe name for `create` and the run id for `get`/`save`; `list` takes none.
+  const recipeName = sub === "create" ? target : args.values.get("recipe");
+  if (sub === "list" ? target !== undefined : !target) return usage();
   if (sub === "create" && (args.values.has("if-version") || !input || !start || !end)) return usage();
   if (sub === "save" && (!(input || storyboard) || !expected)) return usage();
   const brand = await ctx.repos.brands.getBySlug(slug);
@@ -539,17 +540,17 @@ async function runs(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promis
     return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map((r) => `${r.id} v${r.version} ${r.recipe} ${r.periodStart}..${r.periodEnd}`) : ["Sin corridas."]));
   }
   if (sub === "create") {
-    const created = await ctx.repos.runs.create(brand.id, { recipe: name, periodStart: start!, periodEnd: end!, input: { json: jsonObjectFile(ctx, input!), schemaVersion: 1 }, ...(storyboard ? { storyboard: jsonObjectFile(ctx, storyboard) } : {}) }, meta(ctx, null, "structural"));
-    return wrote(args, created, [`Corrida ${created.id} creada (receta ${name}).`]);
+    const created = await ctx.repos.runs.create(brand.id, { recipe: target!, periodStart: start!, periodEnd: end!, input: { json: jsonObjectFile(ctx, input!), schemaVersion: 1 }, ...(storyboard ? { storyboard: jsonObjectFile(ctx, storyboard) } : {}) }, meta(ctx, null, "structural"));
+    return wrote(args, created, [`Corrida ${created.id} creada (receta ${target}).`]);
   }
   // Membership comes from the brand's own list: `get` by id returns no brand.
-  if (!(await ctx.repos.runs.list(brand.id)).some((r) => r.id === name)) throw new NotFoundError(`run ${name}`);
+  if (!(await ctx.repos.runs.list(brand.id)).some((r) => r.id === target)) throw new NotFoundError(`run ${target}`);
   if (sub === "get") {
-    const r = await ctx.repos.runs.get(name, rawBody);
-    return out(args, { trust: "brand-data", id: name, ...r.value, version: r.version }, trusted([JSON.stringify(r.value, null, 2)]));
+    const r = await ctx.repos.runs.get(target!, rawBody);
+    return out(args, { trust: "brand-data", id: target, ...r.value, version: r.version }, trusted([JSON.stringify(r.value, null, 2)]));
   }
-  const saved = await ctx.repos.runs.save(name, { ...(input ? { input: { json: jsonObjectFile(ctx, input), schemaVersion: 1 } } : {}), ...(storyboard ? { storyboard: jsonObjectFile(ctx, storyboard) } : {}) }, meta(ctx, expected as number));
-  return wrote(args, saved, [`Corrida ${name} guardada (versión ${saved.version}).`]);
+  const saved = await ctx.repos.runs.save(target!, { ...(input ? { input: { json: jsonObjectFile(ctx, input), schemaVersion: 1 } } : {}), ...(storyboard ? { storyboard: jsonObjectFile(ctx, storyboard) } : {}) }, meta(ctx, expected as number));
+  return wrote(args, saved, [`Corrida ${target} guardada (versión ${saved.version}).`]);
 }
 
 /**

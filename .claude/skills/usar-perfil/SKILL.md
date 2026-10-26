@@ -72,7 +72,7 @@ Run `brand show <slug> --json` and read `cutoverAt`:
   `ls "${BRAND_PROFILES_DIR:-./profiles}"` lists folder brands, `example*` being
   fictional. Inside `<slug>` read `skills/*/SKILL.md` (business skills),
   `recipes/*.yaml`, `brand.json`, `brand-spec.md`, `config.yaml` (+
-  `config.local.yaml`). Never write to it from a skill. Do not run `brand import`
+  `config.local.yaml`). Never write its identity files from a skill (a flow may write only its own run's input and output, such as a reel's `reels/` folder). Do not run `brand import`
   or `brand cutover`: those are the owner's.
 
 A stored copy of a folder brand that is not cut over may be stale: the folder wins.
