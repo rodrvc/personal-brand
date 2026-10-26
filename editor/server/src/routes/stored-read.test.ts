@@ -25,6 +25,7 @@ const { renderRouter } = await import("./render.js");
 const { storedBrandGuard } = await import("../stored-read.js");
 const { chatRouter } = await import("./chat.js");
 const { composeRouter } = await import("./compose.js");
+const { messages } = await import("../messages.js");
 const { exportRouter } = await import("./export.js");
 const { closeSharedBrowser } = await import("../browser.js");
 const { NonePieceGenerator } = await import("../ai/none.js");
@@ -241,7 +242,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     }
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["regenerate for a stored brand serves the final-prompt preview without a model call or a write; generating is 501", async () => {
+  ["regenerate for a stored brand serves the final-prompt preview without a model call or a write; generating needs a generator (503 without one, nothing written)", async () => {
     const post = (body: object, query = "") => json(`/${SLUG}/carousels/week-one/regenerate${query}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const before = (await json(`/${SLUG}/carousels/week-one`)).etag;
     const preview = await post({ target: { slideId: "s1", objectId: "background" }, preview: true });
@@ -252,7 +253,9 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await post({ target: { slideId: "nope" }, preview: true })).status, 404);
     assert.equal((await post({ preview: true })).status, 400);
     for (const target of [{ slideId: 5, objectId: "background" }, { slideId: "s1", objectId: 5 }, { slideId: "nope" }]) assert.equal((await post({ target, preview: true })).status, target.slideId === "nope" ? 404 : 400, JSON.stringify(target));
-    assert.equal((await post({ target: { slideId: "s1", objectId: "background" } })).status, 501);
+    const unavailable = await post({ target: { slideId: "s1", objectId: "background" } });
+    assert.equal(unavailable.status, 503);
+    assert.equal(unavailable.body.error, messages.aiUnavailable.image, "the user is told the AI is not configured");
     assert.equal((await json(`/${SLUG}/carousels/week-one`)).etag, before, "nothing was written");
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],

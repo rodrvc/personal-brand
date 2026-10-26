@@ -135,9 +135,9 @@ export async function validateStored(s: StoredBrand, document: unknown): Promise
 }
 
 /** A carousel as the editor reads it: the validated document and the version it was read at (the `ETag`). */
-export async function storedCarousel(s: StoredBrand, id: string): Promise<{ result: ValidateDocumentResult; version: number }> {
-  const { document, version } = await storedCarouselRaw(s, id);
-  return { result: await validateStored(s, document), version };
+export async function storedCarousel(s: StoredBrand, id: string): Promise<{ result: ValidateDocumentResult; version: number; rowId: string }> {
+  const { document, version, rowId } = await storedCarouselRaw(s, id);
+  return { result: await validateStored(s, document), version, rowId };
 }
 
 /** The listing: raw and shape-checked only (no asset or colour validation), newest first, like `listCarousels`. */
