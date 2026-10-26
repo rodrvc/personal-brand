@@ -180,7 +180,7 @@ Reglas del motor:
 
 ### 7. Escribir el input del reel
 
-`<perfil>/reels/week-input.json`, sobreescribiendo el anterior.
+Escribe el JSON del input (`ReelInput`) en un directorio temporal fuera del repo; una marca en storage lo guarda como corrida (`brand run create`) y una marca en carpeta lo escribe en su carpeta de reels (`usar-perfil` dice dónde).
 
 Mismo linaje que el input del carrusel: la geografía (`city`, `region`) y
 `sourceImageHosts` viajan acá porque describen **el contenido**, no la marca.
@@ -213,12 +213,14 @@ de la tarjeta de ítem.
 
 ### 7b. Escribir y validar el storyboard (narración por tarjeta)
 
+**Marca en carpeta.** Una marca en storage no usa estas rutas: guarda el storyboard con `brand run save --storyboard` y revisa la tabla con `--run <runId> --audio-only` (paso 3 de `generar-reel-semana`).
+
 Opcional, y **la única forma de narrar sin desfase**. Si el reel lleva voz,
 esta etapa reemplaza al guion único de `--voice`: se escribe
 `<perfil>/reels/<fecha>/storyboard.yaml` (la fecha es el lunes del período,
 la que imprime la etapa 3) con una tarjeta por escena y la narración de cada
 una. Contrato completo en `system/ig-reel/README.md` → "Storyboard: audio
-primero"; ejemplo ficticio en `profiles/example/reels/<fecha>/storyboard.yaml`.
+primero"; ejemplo ficticio en ese README.
 
 Reglas del motor, falla en load nombrando la tarjeta:
 
@@ -236,10 +238,10 @@ Validar sin red ni key, y leer la tabla id / visual / palabras:
 
 ```
 npx tsx system/ig-reel/storyboard.ts --check <perfil>/reels/<fecha>/storyboard.yaml \
-                                     --items <perfil>/reels/week-input.json
+                                     --items <input-del-reel>.json
 ```
 
-Después, **escuchar antes de renderizar**:
+Después, **escuchar antes de renderizar** (en una corrida de storage no hay MP3 en disco: la tabla impresa es la revisión):
 
 ```
 npx tsx system/ig-reel/<render.script>.ts --profile <slug> --date <fecha> --audio-only

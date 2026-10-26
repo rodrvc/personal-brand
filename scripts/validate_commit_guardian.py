@@ -482,9 +482,12 @@ def fetch_storage_terms() -> list[str] | None:
 
 
 def _note(reason: str) -> None:
-    """The one stderr line of a degraded comparison; it never blocks."""
-    print(f'commit-gate: {reason}; the generated denylist was not compared with storage. '
-          'Check DATABASE_URL, pnpm and the migrations.', file=sys.stderr)
+    """The one stderr line of a degraded comparison; it never blocks and never raises (a closed stderr included)."""
+    try:
+        print(f'commit-gate: {reason}; live storage terms were not checked and the generated denylist '
+              'was not compared with storage. Check DATABASE_URL, pnpm and the migrations.', file=sys.stderr)
+    except Exception:  # the contract of fetch_storage_terms: a diagnostic line is never worth a crash
+        pass
 
 
 def _ask_storage() -> list[str] | None:
@@ -500,11 +503,7 @@ def _ask_storage() -> list[str] | None:
         stdout, _ = proc.communicate(timeout=STORAGE_TERMS_TIMEOUT)
     except subprocess.TimeoutExpired:
         _stop(proc)
-        print(
-            f'commit-gate: storage did not answer within {STORAGE_TERMS_TIMEOUT}s; '
-            'the generated denylist was not compared with storage.',
-            file=sys.stderr,
-        )
+        _note(f'storage did not answer within {STORAGE_TERMS_TIMEOUT}s')
         return None
     except Exception as exc:
         _stop(proc)

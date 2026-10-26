@@ -342,6 +342,13 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const runVer = JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]).version;
   assert.equal((await w("run", "save", "example-norun", runId, "--storyboard", board, "--if-version", String(runVer))).exitCode, 4, "saving another brand's run is not found");
   assert.equal(JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]).version, runVer, "and changes nothing");
+  // save --input replaces the stored input; the storyboard saved earlier stays.
+  const input2 = file("run-input2.json", '{"items":[{"title":"Two"}]}');
+  assert.equal((await w("run", "save", "acme-real", runId, "--input", input2, "--if-version", String(runVer))).exitCode, 0);
+  const run2 = JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]);
+  assert.deepEqual([run2.version, run2.input, run2.storyboard], [runVer + 1, { items: [{ title: "Two" }] }, { cards: [{ id: "cover", narration: "Hello" }] }]);
+  // list --recipe: the positive filter keeps only that recipe's runs.
+  assert.equal(JSON.parse((await w("run", "list", "acme-real", "--recipe", "reel-week", "--json")).lines[0]).items.length, 2);
   // A real refusal before cutover: a brand that is not cut over needs the opt-in for a run write.
   await repos.brands.create({ slug: "acme-fresh", displayName: "Fresh" }, { expectedVersion: null, author: "test", source: "cli", reason: "structural" });
   const fresh = await w("run", "create", "acme-fresh", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput);
