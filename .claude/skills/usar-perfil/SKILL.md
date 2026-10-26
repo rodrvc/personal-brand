@@ -62,6 +62,8 @@ Run `brand show <slug> --json` and read `cutoverAt`:
 
 - **Set** — the brand is cut over. Storage is its only source: use the CLI for
   everything and **never read or write its folder**.
+- **Exit 1 (for example `DATABASE_URL` is missing)** — storage cannot be asked.
+  Stop and ask the owner; never fall back to the folder, the brand may be cut over.
 - **Null, or exit 4 (storage has never heard of it)** — a folder brand, not cut
   over yet. Real brands are cut over only after every consumer is switched (end of
   S11b), so until then the folder is authoritative. Read it directly: the

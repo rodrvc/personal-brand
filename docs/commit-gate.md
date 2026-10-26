@@ -103,6 +103,11 @@ the tree, there is no diff to review); `pre-commit` lets it through only when
 > `pnpm --filter @personal-brand/storage brand denylist --write`
 > from storage. A brand with no folder on disk is watched through it; regenerate it when a brand is
 > added or its identity changes. The folder derivation below remains until S12.
+>
+> On every commit the gate asks storage (only when `DATABASE_URL` is set) for the current terms and prints a
+> `WARNING` on stderr if the generated file is absent or lacks some of them. It never blocks on this: storage
+> that cannot be asked is unknown, so with no `DATABASE_URL`, a failing query or bad output the gate says nothing, and on a
+> 5 s timeout it prints a one-line note. Offline commits and fresh clones keep working.
 
 Three deterministic checks in `validate_commit_guardian.py` cannot be approved
 by `commit-guardian`, because a check that can be waived by judgement is only
