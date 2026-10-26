@@ -25,6 +25,7 @@ export const messages = {
     malformed: (detail?: string) => `La propuesta vino mal formada${detail ? ` (${detail})` : ""}.`,
     nothingProposed: "No se propone nada.",
     notPending: "Esa propuesta ya no está pendiente.",
+    applyInFlight: "Esa propuesta ya se está aplicando. Espera a que termine.",
     missingData: (data: string[]) =>
       `Para armar el afiche me falta ${data.length > 1 ? `${data.slice(0, -1).join(", ")} y ${data.at(-1)}` : data[0]}. ¿Me lo indicas? Si el evento no tiene alguno, dímelo y lo saco del afiche.`,
     insteadOf: (layoutText: string) => `lo que va en lugar de «${layoutText}»`,
