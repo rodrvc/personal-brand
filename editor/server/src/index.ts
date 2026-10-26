@@ -82,7 +82,7 @@ app.use(storageSyncMiddleware());
 
 app.use(profilesRouter(opened?.storage));
 app.use(assetsRouter(opened?.storage));
-app.use(renderRouter());
+app.use(renderRouter(opened?.storage));
 app.use(composeRouter(getGenerator));
 app.use(exportRouter());
 app.use(chatRouter(getGenerator));
@@ -110,10 +110,31 @@ const server = app.listen(port, bind, async () => {
   console.log(chromiumProblem ? `Chromium check: ${chromiumProblem}` : "Chromium check: ok");
 });
 
+let shuttingDown = false;
+const DRAIN_TIMEOUT_MS = 10_000;
+
+/** Stop accepting and drain (bounded), then close the browser, then end the pool: no in-flight request meets a closed client. */
 async function shutdown(): Promise<void> {
-  await closeSharedBrowser();
-  await opened?.close();
-  server.close(() => process.exit(0));
+  if (shuttingDown) return;
+  shuttingDown = true;
+  let code = 0;
+  try {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, DRAIN_TIMEOUT_MS);
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      server.closeIdleConnections?.();
+    });
+    await closeSharedBrowser();
+    await opened?.close();
+  } catch (error) {
+    console.error("Shutdown failed:", error);
+    code = 1;
+  } finally {
+    process.exit(code);
+  }
 }
 
 process.on("SIGINT", shutdown);

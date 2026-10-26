@@ -1,3 +1,4 @@
+import { NotFoundError } from "@personal-brand/storage/contracts";
 import Busboy from "busboy";
 import { createHash } from "node:crypto";
 import { Router } from "express";
@@ -38,6 +39,12 @@ function mimeFromPath(path: string): string {
     otf: "font/otf",
   };
   return table[ext] ?? "application/octet-stream";
+}
+
+/** The 404s below hide why; a storage failure (anything but "not there" or a refused path) is still worth a line in the server log. */
+function logUnexpected(error: unknown): void {
+  if (error instanceof NotFoundError || error instanceof ProfileStoreError || (error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+  console.error("asset read failed:", error);
 }
 
 /** `storage` is the stored read path (S10a); uploads, edits and generation sidecars stay on the folder until S10b. */
@@ -231,7 +238,8 @@ export function assetsRouter(storage?: EditorStorage): Router {
       // safe to cache forever from the client's perspective.
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.send(buffer);
-    } catch {
+    } catch (error) {
+      logUnexpected(error);
       // Never leak *why* — ENOENT vs. confinement rejection both 404, per
       // the spec's "Path outside assets" scenario: "responds 404 without
       // reading the file".
@@ -272,7 +280,8 @@ export function assetsRouter(storage?: EditorStorage): Router {
       res.setHeader("Content-Type", "image/webp");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.send(buffer);
-    } catch {
+    } catch (error) {
+      logUnexpected(error);
       res.status(404).end();
     }
   });

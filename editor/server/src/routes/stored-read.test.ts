@@ -26,6 +26,7 @@ const { storedBrandGuard } = await import("../stored-read.js");
 const { chatRouter } = await import("./chat.js");
 const { composeRouter } = await import("./compose.js");
 const { exportRouter } = await import("./export.js");
+const { closeSharedBrowser } = await import("../browser.js");
 const { NonePieceGenerator } = await import("../ai/none.js");
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "profiles", "example");
@@ -38,16 +39,22 @@ const repos = createMemoryRepositories();
 const objects = new FakeObjectStore();
 const brand = await repos.brands.create({ slug: SLUG, displayName: "Stored Example" }, meta);
 await repos.brands.markCutover(brand.id, { ...meta, expectedVersion: brand.version });
-// A brand storage knows but has not cut over is still a folder.
+// A cut-over brand whose folder is still on disk is served from storage only.
 const twin = await repos.brands.create({ slug: "folder-twin", displayName: "Folder Twin" }, meta);
 await repos.brands.markCutover(twin.id, { ...meta, expectedVersion: twin.version });
 mkdirSync(join(root, "profiles", "folder-twin"), { recursive: true });
+// A brand storage knows but has not cut over is still a folder.
 await repos.brands.create({ slug: "not-cut-over", displayName: "Not Cut Over" }, meta);
+// An archived brand that was cut over is still served from storage, and listed.
+const old = await repos.brands.create({ slug: "archived-cut", displayName: "Archived Cut" }, meta);
+const oldCut = await repos.brands.markCutover(old.id, { ...meta, expectedVersion: old.version });
+await repos.brands.archive(old.id, { ...meta, expectedVersion: oldCut.version });
 const tokens = JSON.parse(readFileSync(join(EXAMPLE, "brand.json"), "utf-8"));
 await repos.documents.put(brand.id, "tokens", "", { json: tokens, schemaVersion: 1 }, meta);
 await repos.documents.put(brand.id, "template", "extra-layout", { json: { id: "extra-layout", canvas: { w: 1080, h: 1350 }, zones: { background: { policy: "fill" }, footer: { height: 0, logo: "none", pagination: "none" }, margins: { top: 0, right: 0, bottom: 0, left: 0 } }, slides: { cover: { slots: [] }, step: { slots: [] }, closing: { slots: [] } } }, schemaVersion: 1 }, meta);
 const library = createStorageAssetLibrary({ assets: repos.assets, blobs: objects, brandId: brand.id });
 const image = await library.register(TINY_PNG);
+const font = await library.register(Buffer.from("wOF2 not a real font"), { destRelPath: "face.woff2", family: "Test Family" });
 const hidden = await library.register(Buffer.concat([TINY_PNG, Buffer.from("x")]));
 await repos.assets.update(brand.id, hidden.id, { status: "hidden" }, { ...meta, expectedVersion: 1 });
 
@@ -66,16 +73,28 @@ const storage = {
   carousels: repos.carousels,
   blobs: (brandId: string) => new BlobCache(objects, brandId, blobDir),
 };
+// A storage whose reads fail, and one whose carousel listing names a head that is gone by the time it is read.
+const failing = { ...storage, brands: { getBySlug: async () => { throw new Error("connection refused"); }, list: async () => { throw new Error("connection refused"); } } };
+const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
 app.use(profilesRouter(storage));
 app.use(assetsRouter(storage));
 // The folder routers sit behind the guard exactly as in index.ts: for a stored brand none of them may be reached.
-app.use(renderRouter());
+app.use(renderRouter(storage));
 app.use(chatRouter(() => new NonePieceGenerator()));
 app.use(composeRouter(() => new NonePieceGenerator()));
 app.use(exportRouter());
+const failingApp = express();
+failingApp.use("/api/profiles/:slug", storedBrandGuard(failing));
+failingApp.use(profilesRouter(failing));
+const racingApp = express();
+racingApp.use(profilesRouter(racing));
+const failingServer = failingApp.listen(0);
+const racingServer = racingApp.listen(0);
+await Promise.all([failingServer, racingServer].map((srv) => new Promise<void>((resolve) => srv.once("listening", resolve))));
+const urlOf = (srv: typeof failingServer) => `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/profiles`;
 const server = app.listen(0);
 await new Promise<void>((resolve) => server.once("listening", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/profiles`;
@@ -102,6 +121,53 @@ const tests: Array<[string, () => Promise<void>]> = [
     // The folder of a cut-over brand is still on disk: it is listed once, as stored data, with no folder card.
     const twin = (await json("/")).body.profiles.filter((p: { slug: string }) => p.slug === "folder-twin");
     assert.deepEqual(twin, [{ slug: "folder-twin", hasBrand: true }]);
+  }],
+  ["an archived cut-over brand is not in the picker (nor is its folder twin), but the guard still serves it as stored", async () => {
+    mkdirSync(join(root, "profiles", "archived-cut"), { recursive: true });
+    assert.ok(!(await json("/")).body.profiles.some((p: { slug: string }) => p.slug === "archived-cut"));
+    assert.equal((await json("/archived-cut/carousels/x/stats")).status, 501);
+  }],
+  ["a storage outage while the page loads fails the PNG with a 503 and is not cached", async () => {
+    const real = storage.blobs;
+    let broken = true;
+    const flaky = { ...storage, blobs: (brandId: string) => ({ read: async (sha: string) => { if (broken) throw new Error("blob store down"); return real(brandId).read(sha); } }) };
+    const flakyApp = express();
+    flakyApp.use(renderRouter(flaky));
+    const flakyServer = flakyApp.listen(0);
+    await new Promise<void>((resolve) => flakyServer.once("listening", resolve));
+    const log = console.error;
+    console.error = () => {};
+    try {
+      const url = `${urlOf(flakyServer)}/${SLUG}/carousels/week-one/slides/0/png`;
+      const failed = await fetch(url);
+      assert.equal(failed.status, 503);
+      assert.doesNotMatch(JSON.stringify(await failed.json()), /blob store down/);
+      broken = false;
+      const ok = await fetch(url);
+      assert.equal(ok.status, 200);
+      assert.equal(ok.headers.get("content-type"), "image/png");
+    } finally {
+      console.error = log;
+      flakyServer.close();
+    }
+  }],
+  ["a carousel removed between the list and the get is skipped, not a 404 for the whole listing", async () => {
+    const res = await fetch(`${urlOf(racingServer)}/${SLUG}/carousels`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(((await res.json()) as { carousels: Array<{ id: string }> }).carousels.map((c) => c.id), ["week-one"]);
+  }],
+  ["a storage failure is a logged 503 with a clear message, for a folder brand and for the listing, never a folder fallback", async () => {
+    const log = console.error;
+    console.error = () => {};
+    try {
+      for (const path of ["/some-folder-brand/brand", "/"]) {
+        const res = await fetch(`${urlOf(failingServer)}${path}`);
+        assert.equal(res.status, 503, path);
+        assert.match(((await res.json()) as { error: string }).error, /almacenamiento/);
+      }
+    } finally {
+      console.error = log;
+    }
   }],
   ["the carousel listing and the document come from the repository, and the document carries its version as an ETag", async () => {
     const list = (await json(`/${SLUG}/carousels`)).body.carousels;
@@ -130,7 +196,13 @@ const tests: Array<[string, () => Promise<void>]> = [
     const file = await fetch(`${base}/${SLUG}/assets/files/${image.id}.png`);
     assert.equal(file.headers.get("content-type"), "image/png");
     assert.deepEqual(Buffer.from(await file.arrayBuffer()), TINY_PNG);
-    assert.equal((await fetch(`${base}/${SLUG}/assets/thumbs/${image.id}.png`)).headers.get("content-type"), "image/webp");
+    const thumb = await fetch(`${base}/${SLUG}/assets/thumbs/${image.id}.png`);
+    assert.equal(thumb.headers.get("content-type"), "image/webp");
+    const thumbBytes = Buffer.from(await thumb.arrayBuffer());
+    assert.ok(thumbBytes.length > 12);
+    assert.equal(`${thumbBytes.subarray(0, 4)}${thumbBytes.subarray(8, 12)}`, "RIFFWEBP");
+    assert.equal((await fetch(`${base}/${SLUG}/assets/thumbs/${hidden.id}.png`)).status, 404);
+    assert.equal((await fetch(`${base}/${SLUG}/assets/thumbs/${"0".repeat(16)}.png`)).status, 404);
     assert.equal((await fetch(`${base}/${SLUG}/assets/files/${hidden.id}.png`)).status, 404);
     assert.equal((await fetch(`${base}/${SLUG}/assets/files/${"0".repeat(16)}.png`)).status, 404);
   }],
@@ -138,7 +210,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const chat = await json(`/${SLUG}/carousels/week-one/chat`);
     assert.deepEqual(chat.body, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } });
     assert.deepEqual((await json(`/${SLUG}/carousels/week-one/outputs`)).body, { versions: [] });
-    for (const path of ["stats", "slides/0/html", "slides/0/png", "slides/0/contrast", "export/job-1"]) {
+    for (const path of ["stats", "export/job-1"]) {
       const res = await json(`/${SLUG}/carousels/week-one/${path}`);
       assert.equal(res.status, 501, path);
     }
@@ -152,6 +224,23 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
+  ["an invalid template params JSON is a 400, and the free template does not need it", async () => {
+    assert.equal((await json(`/${SLUG}/template/extra-layout?params=%7Bnope`)).status, 400);
+    assert.equal((await json(`/${SLUG}/template/__free__?params=%7Bnope`)).status, 200);
+  }],
+  ["a slide renders from storage: the preview HTML points at this server, the PNG is drawn from the blob cache", async () => {
+    const html = await (await fetch(`${base}/${SLUG}/carousels/week-one/slides/0/html`)).text();
+    assert.ok(html.includes(`/api/profiles/${SLUG}/assets/files/${image.id}`));
+    assert.ok(!html.includes("render.local"));
+    assert.ok(html.includes(`font-family: "Test Family";\n    src: url("/api/profiles/${SLUG}/assets/files/${font.id}") format("woff2");`));
+    const contrast = await json(`/${SLUG}/carousels/week-one/slides/0/contrast`);
+    assert.equal(contrast.status, 200);
+    assert.ok(Array.isArray(contrast.body.measurements));
+    const png = await fetch(`${base}/${SLUG}/carousels/week-one/slides/0/png`);
+    assert.equal(png.status, 200);
+    assert.equal(Buffer.from(await png.arrayBuffer()).subarray(1, 4).toString(), "PNG");
+    assert.equal((await fetch(`${base}/${SLUG}/carousels/week-one/slides/9/png`)).status, 404);
+  }],
   ["writes to a stored brand are refused, and nothing is created in the profiles folder", async () => {
     const put = await json(`/${SLUG}/carousels/week-one`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document) });
     assert.equal(put.status, 405);
@@ -159,6 +248,14 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
     // A folder brand (no profile here) is untouched by the guard and answers as before.
     assert.equal((await json("/not-cut-over/brand")).status, 422);
+  }],
+  ["a render error on a slide (an asset hidden after it was placed) is a 500, not a storage outage", async () => {
+    await repos.carousels.create(brand.id, { slug: "uses-hidden", title: "Uses hidden", document: { json: { ...document, id: "uses-hidden", slides: [{ id: "s1", kind: "cover", background: { mode: "asset", assetId: hidden.id, pinned: false, source: "library" }, objects: [] }] }, schemaVersion: 1 } }, meta);
+    for (const path of ["png", "contrast"]) {
+      const res = await fetch(`${base}/${SLUG}/carousels/uses-hidden/slides/0/${path}`);
+      assert.equal(res.status, 500, path);
+      assert.doesNotMatch(JSON.stringify(await res.json()), /almacenamiento/);
+    }
   }],
 ];
 
@@ -174,7 +271,10 @@ for (const [name, run] of tests) {
   }
 }
 
+await closeSharedBrowser();
 server.close();
+failingServer.close();
+racingServer.close();
 rmSync(root, { recursive: true, force: true });
 console.log(`\n${tests.length - failed}/${tests.length} passed`);
 if (failed > 0) process.exitCode = 1;
