@@ -13,6 +13,8 @@ export const RECENT_DRILL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Upper bound for the dump and the restore together. */
 const DRILL_TIMEOUT_MS = 15 * 60 * 1000;
 const STDERR_CAP = 4000;
+/** The largest delay `AbortSignal.timeout` accepts (a signed 32-bit integer); a larger one overflows. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 /** The most a recorded error line may keep. */
 const ERROR_CAP = 500;
 /**
@@ -63,11 +65,17 @@ export interface DrillOptions {
   timeoutMs?: number;
 }
 
-/** Throws `DrillToolMissingError` unless `bin` is an executable file: a path as given, or a name found on `PATH` (the same lookup the child's spawn uses). */
+const missingTool = (bin: string): DrillToolMissingError => new DrillToolMissingError(`no se encontró ${bin}: instala las herramientas de cliente de PostgreSQL o define PG_DUMP_BIN y PG_RESTORE_BIN`);
+
+/**
+ * Throws `DrillToolMissingError` unless `bin` is an executable: a path as given (it contains `/`), or a name found on `PATH`. This is a
+ * POSIX approximation of what the child's spawn does (no PATHEXT, no backslash paths; a directory with the execute bit passes): the
+ * spawn `ENOENT` handler stays the authority on Windows and for anything this check lets through.
+ */
 function requireTool(bin: string): void {
   const executable = (file: string) => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } };
   const found = bin.includes("/") ? executable(bin) : (process.env.PATH ?? "").split(delimiter).some((dir) => dir !== "" && executable(join(dir, bin)));
-  if (!found) throw new DrillToolMissingError(`no se encontró ${bin}: instala las herramientas de cliente de PostgreSQL o define PG_DUMP_BIN y PG_RESTORE_BIN`);
+  if (!found) throw missingTool(bin);
 }
 
 /**
@@ -132,7 +140,7 @@ function pipeDump(opts: Required<Pick<DrillOptions, "pgDump" | "pgRestore" | "sc
       child.on("error", (error) => {
         stop(dump);
         stop(restore);
-        reject((error as NodeJS.ErrnoException).code === "ENOENT" ? new DrillToolMissingError(`no se encontró ${bin}: instala las herramientas de cliente de PostgreSQL o define PG_DUMP_BIN y PG_RESTORE_BIN`) : error.name === "AbortError" ? timedOut() : error);
+        reject((error as NodeJS.ErrnoException).code === "ENOENT" ? missingTool(bin) : error.name === "AbortError" ? timedOut() : error);
       });
     }
   });
@@ -174,6 +182,9 @@ async function sweepOrphans(admin: postgres.Sql): Promise<string[]> {
  */
 export async function runBackupDrill(options: DrillOptions): Promise<DrillResult> {
   const schema = options.schema ?? PRODUCT_SCHEMA;
+  if (options.timeoutMs !== undefined && !(Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 && options.timeoutMs <= MAX_TIMEOUT_MS)) {
+    throw new DrillNotRunError(`timeoutMs debe ser un entero positivo de milisegundos (máximo ${MAX_TIMEOUT_MS}), no ${String(options.timeoutMs)}`);
+  }
   const tools = { pgDump: options.pgDump ?? "pg_dump", pgRestore: options.pgRestore ?? "pg_restore", schema, timeoutMs: options.timeoutMs ?? DRILL_TIMEOUT_MS };
   requireTool(tools.pgDump);
   requireTool(tools.pgRestore);

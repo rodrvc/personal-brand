@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,8 +9,13 @@ import { createMemoryRepositories } from "@personal-brand/storage/memory";
 
 import { clipRangesFor } from "./assemble.js";
 import {
+  assertReelRunId,
   clipInputsHash,
+  copyExportToDir,
   createRunScratch,
+  ExportCopyError,
+  exportCopyName,
+  isStoredAssetId,
   exportStoredReel,
   findStoredLogoFont,
   loadStoredReelRecipe,
@@ -270,6 +275,74 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal(third.versionNo, 3);
     assert.equal((await store.head(third.key)).metadata.sha256, third.sha256);
     assert.equal((await store.get(both.find((e) => e.versionNo === 1)!.key)).body.byteLength, 8);
+  }],
+  ["a run id is a UUID before it names a temp dir, and an asset id is 16 hex characters", async () => {
+    const id = "123e4567-e89b-42d3-a456-426614174000";
+    assert.equal(assertReelRunId(id), id);
+    for (const bad of ["", "../../etc", "123e4567", `${id}/x`, `${id}\n`, "x".repeat(5000)]) {
+      assert.throws(() => assertReelRunId(bad), /not a run id/);
+    }
+    assert.throws(() => assertReelRunId("a".repeat(5000)), (error: Error) => error.message.length < 200, "a long value is cut in the message");
+    assert.deepEqual([isStoredAssetId("0123456789abcdef"), isStoredAssetId("0123456789ABCDEF"), isStoredAssetId("short"), isStoredAssetId(undefined)], [true, false, false, false]);
+  }],
+  ["--out copy: the name carries the run id, an existing file is never overwritten, and another failure says the export is stored", async () => {
+    const { storage, run } = await setup();
+    const dir = tempDir();
+    const file = join(dir, "r.mp4");
+    writeFileSync(file, "reel-bytes");
+    const exported = await exportStoredReel(storage, run.id, file);
+    assert.equal(exported.versionLabel, "v001");
+    const name = exportCopyName("2026-09-07", run.id, exported.versionLabel);
+    assert.equal(name, `reel-2026-09-07-${run.id.slice(0, 8)}-v001.mp4`);
+    assert.notEqual(name, exportCopyName("2026-09-07", "99999999-1111-4111-8111-111111111111", "v001"), "two runs of one period do not collide");
+    const out = join(dir, "out");
+    assert.equal(copyExportToDir(file, out, name, exported.key).result, "copied");
+    assert.equal(copyExportToDir(file, out, name, exported.key).result, "exists-same");
+    writeFileSync(join(out, name), "someone else's");
+    assert.equal(copyExportToDir(file, out, name, exported.key).result, "exists-different");
+    assert.equal(readFileSync(join(out, name), "utf8"), "someone else's", "left as it is");
+    assert.deepEqual(readdirSync(out), [name], "no .partial is left behind");
+    // A filesystem without hard links: the copy goes straight to the final name, still never overwriting, and no .partial stays.
+    const noLinks = (code: string): typeof linkSync => (() => { throw Object.assign(new Error(code), { code }); }) as typeof linkSync;
+    for (const code of ["EPERM", "ENOTSUP", "ENOSYS", "EXDEV"]) {
+      const dirNoLinks = join(dir, `nolinks-${code}`);
+      assert.equal(copyExportToDir(file, dirNoLinks, name, exported.key, noLinks(code)).result, "copied");
+      assert.deepEqual([readFileSync(join(dirNoLinks, name), "utf8"), readdirSync(dirNoLinks)], ["reel-bytes", [name]]);
+      writeFileSync(join(dirNoLinks, name), "someone else's");
+    }
+    assert.equal(copyExportToDir(file, join(dir, "nolinks-EPERM"), name, exported.key, noLinks("EPERM")).result, "exists-different");
+    assert.equal(readFileSync(join(dir, "nolinks-EPERM", name), "utf8"), "someone else's");
+    // Any other link failure is an ExportCopyError, and the partial this call created is removed.
+    assert.throws(() => copyExportToDir(file, join(dir, "nolinks-EIO"), name, exported.key, noLinks("EIO")), ExportCopyError);
+    assert.deepEqual(readdirSync(join(dir, "nolinks-EIO")), []);
+    // A stale .partial (not ours) is named in the message and left alone.
+    const stale = join(dir, "stale");
+    mkdirSync(stale);
+    writeFileSync(join(stale, `${name}.partial`), "old");
+    assert.throws(() => copyExportToDir(file, stale, name, exported.key), (error: unknown) => error instanceof ExportCopyError && error.message.includes(`${name}.partial`) && /remove it by hand/.test(error.message));
+    assert.deepEqual([readdirSync(stale), readFileSync(join(stale, `${name}.partial`), "utf8")], [[`${name}.partial`], "old"]);
+    // A destination that cannot be written (the dir is a file) is an ExportCopyError that names the stored export and exits 3.
+    const notADir = join(dir, "plain-file");
+    writeFileSync(notADir, "x");
+    assert.throws(() => copyExportToDir(file, notADir, name, exported.key), (error: unknown) => error instanceof ExportCopyError && error.exitCode === 3 && error.message.includes(exported.key) && /already exported and verified/.test(error.message));
+    mkdirSync(join(dir, "ro"));
+    chmodSync(join(dir, "ro"), 0o500);
+    try {
+      if (process.getuid?.() !== 0) assert.throws(() => copyExportToDir(file, join(dir, "ro"), name, exported.key), ExportCopyError);
+    } finally {
+      chmodSync(join(dir, "ro"), 0o700);
+    }
+  }],
+  ["narration: a card kept on a same-dir retry records no second take", async () => {
+    const { storage, run } = await setup();
+    const storyboard = validateStoryboard(STORYBOARD, "stored", 2);
+    const dir = join(tempDir(), "audio");
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, dir, stubSynth());
+    let recorded = 0;
+    const counting = { ...storage, tts: { ...storage.tts, record: (...args: Parameters<typeof storage.tts.record>) => (recorded++, storage.tts.record(...args)) } } as ReelStorage;
+    const retry = stubSynth();
+    await synthesiseStoredCards(counting, run.id, storyboard, VOICE, dir, retry);
+    assert.deepEqual([retry.calls.length, recorded], [0, 0], "nothing synthesised, no take recorded again");
   }],
 ];
 

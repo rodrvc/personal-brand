@@ -192,6 +192,14 @@ real.on("exit", async (code) => {
       chmodSync(sleeper, 0o755);
       const timedOut = await runBackupDrill({ sourceUrl: url, schema, pgDump: yes, pgRestore: sleeper, timeoutMs: 700 });
       assert.deepEqual([timedOut.status, timedOut.detail.code, /timeout/.test(String(timedOut.detail.error))], ["failed", "tool_failed", true], JSON.stringify(timedOut.detail));
+      // The abort path cleans up after itself: no scratch database is left and none is reported as leaked.
+      assert.deepEqual([timedOut.detail.scratchLeaked, await scratchCount()], [undefined, before]);
+      // The tail of a noisy stderr is what is kept: the failing line comes last, after more output than the buffer holds.
+      const noisy = join(bin, "restore_noisy.sh");
+      writeFileSync(noisy, "#!/bin/sh\ni=0\nwhile [ $i -lt 300 ]; do echo 'pg_restore: warning: filler line to push the start of stderr out of the buffer' >&2; i=$((i+1)); done\necho 'pg_restore: error: the last thing it said' >&2\nexit 3\n");
+      chmodSync(noisy, 0o755);
+      const tail = await runBackupDrill({ sourceUrl: url, schema, pgDump: yes, pgRestore: noisy });
+      assert.deepEqual([tail.detail.code, /the last thing it said/.test(String(tail.detail.error))], ["tool_failed", true], JSON.stringify(tail.detail));
       // A missing tool is found before anything is locked, swept or created.
       const dbsBefore = await scratchCount();
       await assert.rejects(() => runBackupDrill({ sourceUrl: url, schema, pgDump: dumpBin, pgRestore: join(bin, "no_such_restore") }), DrillToolMissingError);
@@ -254,6 +262,10 @@ real.on("exit", async (code) => {
     await admin.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     await admin.end({ timeout: 1 });
   }
+}
+// A timeout is a number of milliseconds: anything else is refused before any tool lookup, lock, sweep or connection (no database needed).
+for (const timeoutMs of [-1, 0, 1.5, Number.NaN, 2 ** 31]) {
+  await assert.rejects(() => runBackupDrill({ sourceUrl: "postgres://nobody@127.0.0.1:1/none", pgDump: join("/nonexistent", "pg_dump"), timeoutMs }), /timeoutMs debe ser un entero positivo/);
 }
 if (url) {
   await assert.rejects(() => runBackupDrill({ sourceUrl: url, pgDump: join("/nonexistent", "pg_dump") }), DrillToolMissingError);

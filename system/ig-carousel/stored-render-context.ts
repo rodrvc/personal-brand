@@ -23,8 +23,8 @@ export function storedAssetResolver(assets: Pick<AssetRepository, "get">, cache:
 
 /**
  * The `FreeLayoutRenderContext` of a stored brand: asset ids become `http://render.local/assets/<assetId>` (the
- * same URL for preview and export, served by `loadWithResolver`), and every approved or candidate font asset
- * becomes an `@font-face`. Assets are served as images and fonts only: a template must never embed one as a
+ * same URL for preview and export, served by `loadWithResolver`), and every font asset that is not hidden (today
+ * `approved` or `candidate`, the only other statuses) becomes an `@font-face`. Assets are served as images and fonts only: a template must never embed one as a
  * document (`<iframe>`, `<object>`, `<embed>`), because an SVG asset opened that way runs its script on the render origin. No logo yet: picking a variant reads folder index entries (see design S9a2 notes).
  */
 export async function buildStoredRenderContext(assets: Pick<AssetRepository, "list">, brandId: string): Promise<FreeLayoutRenderContext & { assetExists: (assetId: string) => boolean }> {

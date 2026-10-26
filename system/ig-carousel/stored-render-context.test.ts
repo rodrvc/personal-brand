@@ -54,9 +54,30 @@ const tests: Array<[string, () => Promise<void>]> = [
       await assert.rejects(loaded([ctx.assetUrl(png.id), `${RENDER_ORIGIN}/assets/${"0".repeat(16)}`], resolve), /no such asset/);
       await assert.rejects(loaded([`${RENDER_ORIGIN}/etc/passwd`], resolve), /not an asset URL/);
       // Routed by hostname: another port is not the origin and is refused, not fetched.
-      await assert.rejects(loaded([`http://render.local:8080/assets/${png.id}`], resolve), /not an asset URL/);
+      await assert.rejects(loaded([`http://render.local:8080/assets/${png.id}`], resolve), /http:\/\/render\.local:8080\/assets\/.* \(not an asset URL\)/);
+      // A cached file that cannot be served is recorded as refused (and aborted), not left to hang the page.
+      await assert.rejects(loaded([ctx.assetUrl(png.id)], async () => ({ path: join(dir, "gone.png"), contentType: "image/png" })), /could not be served/);
       await assert.rejects(loaded([ctx.assetUrl(png.id)], async () => { throw new Error("bucket down"); }), /resolver failed: bucket down/);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }],
+  ["a request that settles after the page is idle is caught by the returned check", async () => {
+    const { repos, brandId, cache, dir } = await setup();
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      const check = await loadWithResolver(page, "<p>nothing yet</p>", storedAssetResolver(repos.assets, cache, brandId));
+      check(); // nothing refused so far
+      // Added after load, as a lazily loaded font or image would be: it is awaited here, not slept for.
+      await page.evaluate((url) => new Promise<void>((done) => {
+        const img = new Image();
+        img.onload = img.onerror = () => done();
+        img.src = url;
+      }), `${RENDER_ORIGIN}/assets/${"1".repeat(16)}`);
+      assert.throws(check, /no such asset/);
+    } finally {
+      await browser.close();
       rmSync(dir, { recursive: true, force: true });
     }
   }],
