@@ -7,7 +7,7 @@ import { runChecks } from "@personal-brand/core/checks";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
-import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
@@ -542,6 +542,7 @@ async function content(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pro
   if (sub === "list" ? name : !name) return usage();
   if (sub === "put" && (!file || expected === undefined || stage === "published")) return usage();
   if (sub === "stage" && (!stage || !expected)) return usage();
+  if (sub === "stage" && stage !== "published" && v("published-at") !== undefined) return usage(); // a publication date only goes with `published`
   const brand = await ctx.repos.brands.getBySlug(slug);
   const parentId = async (parent: string) => (await ctx.repos.content.get(brand.id, parent)).id; // unknown slug: not found (exit 4)
   const slugOf = async (id: string | null) => (id ? (await ctx.repos.content.getById(id)).value.slug : null);
@@ -558,7 +559,7 @@ async function content(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pro
     return out(args, { trust: "brand-data", id: c.id, ...c.value, derivedFrom, version: c.version }, trusted([`${c.value.slug} v${c.version} ${c.value.stage} (id ${c.id})${derivedFrom ? ` de ${derivedFrom}` : ""}: ${c.value.title}`, c.value.bodyMd]));
   }
   if (sub === "stage") {
-    const done = await ctx.repos.content.setStage(cur!.id, { stage: stage as never, ...(v("published-at") ? { publishedAt: v("published-at") } : {}) }, meta(ctx, expected as number, "status"));
+    const done = await ctx.repos.content.setStage(cur!.id, { stage: stage as ContentStage, ...(v("published-at") ? { publishedAt: v("published-at") } : {}) }, meta(ctx, expected as number, "status"));
     return wrote(args, done, [`Pieza ${name} en etapa ${done.value.stage} (versión ${done.version}).`]);
   }
   const bodyMd = ctx.read(file!);

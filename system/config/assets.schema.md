@@ -1,7 +1,7 @@
 # Asset library schema
 
 Every profile that produces visual pieces (carousels today, reels later) has
-a library of image and font files under `profiles/<slug>/assets/`. This
+a library of image and font files, stored under the brand's `assets/` prefix (a brand served from storage keeps them in its bucket and lists them with `brand asset list <slug>`; a folder brand that is not cut over yet keeps them in `<brand folder>/assets/`). This
 document is the contract for its index, its per-file sidecars, and the
 classification vocabulary. The code that implements it lives in
 `system/assets/`, not in any single module — `system/ig-carousel/` and
@@ -11,7 +11,7 @@ exists (see `openspec/changes/editor-carruseles/design.md`, decision D8).
 ## Where files live
 
 ```
-profiles/<slug>/assets/
+<brand folder>/assets/
   index.json          the cache described below
   fonts/*.woff2        downloaded webfont files
   fonts/*.meta.json     one sidecar per font file (family, etc.)
@@ -62,7 +62,7 @@ Field reference:
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | First 16 hex characters of `sha256(file bytes)`. The library's identity. |
-| `path` | string | Relative to the profile directory (`profiles/<slug>/`), forward slashes. |
+| `path` | string | Relative to the brand folder (`<brand folder>/`), forward slashes. |
 | `kind` | enum | See "Kinds" below. |
 | `mime` | string | Detected from the file's own bytes (PNG/JPEG/WebP magic bytes), never from the extension alone. |
 | `w`, `h` | integer | Pixel dimensions. Omitted for non-image kinds (fonts). |
@@ -169,7 +169,7 @@ however many engines need it.
 
 How many carousels reference a given asset id is *not* a field in
 `index.json`. It is computed on demand by `system/assets/usage.ts`, which
-reads every `profiles/<slug>/carousels/*/carousel.json` and counts
+reads every `<brand folder>/carousels/*/carousel.json` and counts
 occurrences of each asset's `id` in any `assetId`-named field. Storing a
 count inside the index would go stale the moment a carousel is edited
 outside of whatever last wrote that count; deriving it keeps the index

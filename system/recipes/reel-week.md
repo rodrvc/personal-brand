@@ -182,7 +182,7 @@ Reglas del motor:
 
 Escribe el JSON del input (`ReelInput`) donde lo lee el motor, según de dónde se sirva la marca:
 
-- **Marca en carpeta:** el archivo exacto es `<carpeta de la marca>/reels/week-input.json`, el que lee `render-reel-week.ts --date`. Cada período lo sobrescribe; una copia en otro directorio no la ve el render, y el archivo viejo que quede ahí se renderiza como si fuera el actual.
+- **Marca en carpeta:** el archivo exacto es `<perfil>/reels/week-input.json`, el que lee `render-reel-week.ts --date`. Cada período lo sobrescribe; una copia en otro directorio no la ve el render, y el archivo viejo que quede ahí se renderiza como si fuera el actual.
 - **Marca en storage:** no hay archivo; el input es una corrida (`brand run create`, paso 3 de `generar-reel-semana`) y el render recibe `--run <runId>`.
 
 Mismo linaje que el input del carrusel: la geografía (`city`, `region`) y
@@ -241,7 +241,7 @@ Validar sin red ni key, y leer la tabla id / visual / palabras:
 
 ```
 npx tsx system/ig-reel/storyboard.ts --check <perfil>/reels/<fecha>/storyboard.yaml \
-                                     --items <carpeta de la marca>/reels/week-input.json
+                                     --items <perfil>/reels/week-input.json
 ```
 
 Después, **escuchar antes de renderizar** (en una corrida de storage no hay MP3 en disco: la tabla impresa es la revisión):

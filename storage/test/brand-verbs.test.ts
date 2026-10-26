@@ -161,6 +161,10 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "published", "--if-version", "2"), 2, "published needs --published-at");
   assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "published", "--if-version", "2", "--published-at", "2026-10-01T10:00:00Z"), 0);
   assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "archived"), 2, "stage needs --if-version");
+  assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "archived", "--if-version", "3", "--published-at", "2026-10-01T10:00:00Z"), 2, "--published-at only goes with the published stage");
+  const idea = file("idea.md", "Idea.\n");
+  assert.equal(await code("content", "put", "example-shop", "p4", "--file", idea, "--title", "Raw idea", "--stage", "idea"), 0);
+  assert.equal(await code("content", "stage", "example-shop", "p4", "--stage", "published", "--if-version", "1", "--published-at", "2026-10-01T10:00:00Z"), 2, "published only from draft");
   assert.equal(await code("content", "frob", "example-shop", "p1"), 2);
 
   // rules list + check: an error finding exits 5, a clean carousel exits 0
