@@ -82,7 +82,10 @@ export function profilesRouter(rawStorage?: EditorStorage): Router {
         });
       // A stored brand has no card yet (it is built from the folder): it is listed like a profile mid-setup.
       const stored = cut.listed.map((slug) => ({ slug, hasBrand: true }));
-      res.json({ profiles: [...folders, ...stored].sort((a, b) => a.slug.localeCompare(b.slug)) });
+      const bySlug = (a: { slug: string }, b: { slug: string }) => a.slug.localeCompare(b.slug);
+      // Archived brands come last, flagged: the picker shows them apart and opens them read-only.
+      const archived = cut.archived.map((slug) => ({ slug, hasBrand: true, archived: true })).sort(bySlug);
+      res.json({ profiles: [...[...folders, ...stored].sort(bySlug), ...archived] });
     } catch (error) {
       handleStoreError(error, res);
     }

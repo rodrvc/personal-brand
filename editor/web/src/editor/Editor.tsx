@@ -4,6 +4,7 @@ import type { BrandTokens, CarouselDocument, ChatRecord, Currency, LayoutTemplat
 import type { useDocumentEditor } from "../hooks/useDocumentEditor";
 import { regenerate, getCarousel } from "../api/client";
 import { addSlideWithColor, addTextObject, newEditorId, removeObject, removeSlide } from "./mutations";
+import { useArchivedBrand } from "../hooks/useArchivedBrand";
 import { TopBar } from "./TopBar";
 import { PromptHeader } from "./PromptHeader";
 import { Stage } from "./Stage";
@@ -56,6 +57,15 @@ export function Editor({
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [regenUnpinnedError, setRegenUnpinnedError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const archived = useArchivedBrand(slug);
+  // Editable until the lookup confirms the brand is archived (waiting would drop first edits on every brand); the server refuses every stored write of an archived brand meanwhile.
+  const readOnly = archived === true;
+  const edit = useCallback<typeof update>(
+    (...args) => {
+      if (!readOnly) update(...args);
+    },
+    [readOnly, update],
+  );
 
   useEffect(() => {
     try {
@@ -84,10 +94,10 @@ export function Editor({
     if (!activeSlide) return;
     const slideId = activeSlide.id;
     const objectId = newEditorId(`obj-${slideId}-text`);
-    update((prev) => addTextObject(prev, slideId, objectId, template, brand));
+    edit((prev) => addTextObject(prev, slideId, objectId, template, brand));
     setSelection({ slideId, objectId });
     setPanelTab("sel");
-  }, [activeSlide, template, brand, update]);
+  }, [activeSlide, template, brand, edit]);
 
   const handleRegenerateUnpinned = useCallback(async () => {
     if (!activeSlide) return;
@@ -115,11 +125,12 @@ export function Editor({
   /** `-1` is the insert position for the first slide of an empty deck: `addSlideWithColor` splices after that index, so the slide lands at 0 and the active index follows it there. */
   const handleAddSlide = useCallback(
     (colorKey: string) => {
+      if (readOnly) return;
       const insertAfter = doc.slides.length === 0 ? -1 : activeIndex;
-      update((d) => addSlideWithColor(d, insertAfter, colorKey));
+      edit((d) => addSlideWithColor(d, insertAfter, colorKey));
       setActiveIndex(insertAfter + 1);
     },
-    [activeIndex, doc.slides.length, update],
+    [activeIndex, doc.slides.length, edit, readOnly],
   );
 
   /**
@@ -127,12 +138,12 @@ export function Editor({
    * the 600ms debounce is not in it.
    */
   const handleDeleteSlide = useCallback(() => {
-    if (!activeSlide) return;
+    if (readOnly || !activeSlide) return;
     const slideId = activeSlide.id;
-    update((d) => removeSlide(d, slideId), { snapshot: true });
+    edit((d) => removeSlide(d, slideId), { snapshot: true });
     setSelection(null);
     setActiveIndex((index) => Math.max(0, Math.min(index, doc.slides.length - 2)));
-  }, [activeSlide, doc.slides.length, update]);
+  }, [activeSlide, doc.slides.length, edit, readOnly]);
 
   const [spend, setSpend] = useState<{ total: string; breakdown: string } | null>(null);
   const handleChatLog = useCallback((records: ChatRecord[], currency: Currency) => {
@@ -154,9 +165,9 @@ export function Editor({
       setNotice(t("editor.deleteBlocked"));
       return;
     }
-    update((d) => removeObject(d, selection.slideId, selection.objectId));
+    edit((d) => removeObject(d, selection.slideId, selection.objectId));
     setSelection(null);
-  }, [doc.slides, selection, update]);
+  }, [doc.slides, selection, edit]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -180,8 +191,9 @@ export function Editor({
   );
 
   return (
-    <div className="editor-app">
+    <div className={readOnly ? "editor-app editor-app--readonly" : "editor-app"}>
       <TopBar
+        readOnly={readOnly}
         slug={slug}
         brand={brand}
         doc={doc}
@@ -198,8 +210,14 @@ export function Editor({
         onToggleTheme={onToggleTheme}
         onExport={() => setShowExportDialog(true)}
       />
+      {readOnly && (
+        <div className="editor-readonly-banner" role="status">
+          {t("editorRoute.archivedReadOnly")}
+        </div>
+      )}
       <div className="editor-body">
         <ChatPanel
+          readOnly={readOnly}
           slug={slug}
           doc={doc}
           activeSlideId={activeSlide?.id}
@@ -209,6 +227,7 @@ export function Editor({
         />
         <div className="editor-center">
           <PromptHeader
+            readOnly={readOnly}
             doc={doc}
             stats={stats}
             onRegenerateUnpinned={() => setShowRegenDialog(true)}
@@ -224,13 +243,14 @@ export function Editor({
             onActiveIndexChange={setActiveIndex}
             selection={selection}
             onSelectionChange={setSelection}
-            onDocUpdate={update}
+            onDocUpdate={edit}
             fallbackColorKey={Object.keys(brand.colors)[0] ?? ""}
             onAddSlide={handleAddSlide}
             onDeleteSlide={handleDeleteSlide}
           />
         </div>
         <PropertiesPanel
+          readOnly={readOnly}
           slug={slug}
           brand={brand}
           template={template}
@@ -239,7 +259,7 @@ export function Editor({
           activeIndex={activeIndex}
           selection={selection}
           onSelectionChange={setSelection}
-          onDocUpdate={update}
+          onDocUpdate={edit}
           onDocReplace={applyRemote}
           panelTab={panelTab}
           onPanelTabChange={setPanelTab}

@@ -16,6 +16,7 @@ const { default: express } = await import("express");
 const { createStorageAssetLibrary } = await import("../../../../system/assets/storage-library.js");
 const { chatRouter } = await import("./chat.js");
 const { assetResolverFor } = await import("../chat/chat-references.js");
+const { loadIndexCached } = await import("../asset-index-cache.js");
 const { messages } = await import("../messages.js");
 const { storedChatWorkspace } = await import("../chat/chat-workspace.js");
 const { guardStorage, resolveStored, storedBrandGuard } = await import("../stored-read.js");
@@ -58,6 +59,7 @@ async function serve(extra: Partial<EditorStorage>): Promise<string> {
 let raceOnce = false;
 let raceSlug = "";
 let failNextGet = false;
+let failedGets = 0;
 // A user's save landing right before the proposal's own write.
 const racing = { carousels: { ...storage.carousels, save: async (...args: Parameters<EditorStorage["carousels"]["save"]>) => {
   const current = raceOnce ? await repos.carousels.get(brand.id, raceSlug, (b) => b) : undefined;
@@ -68,7 +70,7 @@ const racing = { carousels: { ...storage.carousels, save: async (...args: Parame
 // An outage on the first read after a save: the apply's re-check of its own committed write.
 const flaky = { carousels: { ...storage.carousels,
   save: async (...args: Parameters<EditorStorage["carousels"]["save"]>) => { const saved = await storage.carousels.save(...args); failNextGet = true; return saved; },
-  get: (async (...args: Parameters<EditorStorage["carousels"]["get"]>) => { if (failNextGet) { failNextGet = false; throw new Error("connection refused"); } return storage.carousels.get(...args); }) as EditorStorage["carousels"]["get"],
+  get: (async (...args: Parameters<EditorStorage["carousels"]["get"]>) => { if (failNextGet) { failNextGet = false; failedGets += 1; throw new Error("connection refused"); } return storage.carousels.get(...args); }) as EditorStorage["carousels"]["get"],
 } };
 const main = await serve({});
 const racingBase = await serve(racing);
@@ -192,7 +194,12 @@ const tests: Array<[string, () => Promise<void>]> = [
     const bad = await repos.carousels.create(brand.id, { slug: "corrupt", title: "Corrupt", document: doc("corrupt") }, meta);
     await repos.chat.append(bad.id, { role: "assistant" } as never);
     assert.equal((await fetch(`${main}/${SLUG}/carousels/corrupt/chat`)).status, 503);
+    const calls = seen.completions;
     assert.equal((await post(`/${SLUG}/carousels/corrupt/chat/messages`, { text: "hi" })).status, 503);
+    assert.equal((await post(`/${SLUG}/carousels/corrupt/chat/proposals/prop-x/discard`, {})).status, 503);
+    assert.equal((await post(`/${SLUG}/carousels/corrupt/chat/proposals/prop-x/apply`, {})).status, 503);
+    assert.equal(seen.completions, calls, "no model call before the 503");
+    assert.equal((await repos.chat.list(bad.id)).length, 1, "nothing was appended");
     const down = await serve({ chat: { ...storage.chat, append: async () => { throw new Error("connection refused"); } } });
     const good = await repos.carousels.create(brand.id, { slug: "outage", title: "Outage", document: doc("outage") }, meta);
     await repos.chat.append(good.id, { id: "m1", at: STAMP, role: "assistant", text: "p", proposal: { id: "prop-x", actions: [{ id: "a1", ...setText, provenance: [] }] } });
@@ -243,9 +250,11 @@ const tests: Array<[string, () => Promise<void>]> = [
     await seed("flaky-one");
     const id = await propose("flaky-one", [setText], flakyBase);
     failNextGet = false;
+    failedGets = 0;
     assert.equal((await post(`/${SLUG}/carousels/flaky-one/chat/proposals/${id}/apply`, {}, flakyBase)).status, 202);
     const event = await finished("flaky-one", id, flakyBase);
     assert.equal(event.kind, "done", event.error);
+    assert.equal(failedGets, 1, "the injected outage was consumed by the reopen after the save");
     assert.equal(((await row("flaky-one")).value.document as any).slides[0].objects[0].text, "New");
   }],
   ["a stored row whose document is invalid is a 400 on a message and on an apply", async () => {
@@ -263,8 +272,18 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.ok(read!.bytes.equals(Buffer.concat([PNG, Buffer.from("a")])));
     assert.equal(await assetResolverFor(storage, SLUG)("0123456789abcdef"), undefined);
     // Without storage, or for a brand storage does not hold, the folder is read (an example profile copy: never the real profiles).
-    cpSync(EXAMPLE, join(root, "profiles", "folder-brand"), { recursive: true });
-    for (const s of [undefined, storage]) assert.equal(await assetResolverFor(s, "folder-brand")("0123456789abcdef"), undefined);
+    const folderDir = join(root, "profiles", "folder-brand");
+    cpSync(EXAMPLE, folderDir, { recursive: true });
+    const folderAsset = loadIndexCached(folderDir).entries.find((e) => e.mime.startsWith("image/"));
+    assert.ok(folderAsset, "the example copy holds an image asset");
+    for (const s of [undefined, storage]) {
+      const read = await assetResolverFor(s, "folder-brand")(folderAsset.id);
+      assert.equal(read?.mime, folderAsset.mime);
+      assert.ok(read!.bytes.length > 0);
+      assert.equal(await assetResolverFor(s, "folder-brand")("0123456789abcdef"), undefined);
+    }
+    // An unknown slug resolves to nothing and the resolver creates no folder for it.
+    assert.equal(await assetResolverFor(storage, "missing-brand")(folderAsset.id), undefined);
     assert.equal(existsSync(join(root, "profiles", "missing-brand")), false);
   }],
   ["the raster fonts of a stored brand are its font assets, served through the resolver", async () => {

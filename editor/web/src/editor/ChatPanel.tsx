@@ -25,6 +25,8 @@ interface ChatPanelProps {
   dirty: boolean;
   onApplied: (next: CarouselDocument) => void;
   onLogChange: (records: ChatRecord[], currency: Currency) => void;
+  /** An archived brand: the log stays readable, but sending, applying and discarding are disabled (the server refuses them). */
+  readOnly?: boolean;
 }
 
 function initialCollapsed(doc: CarouselDocument): boolean {
@@ -33,7 +35,7 @@ function initialCollapsed(doc: CarouselDocument): boolean {
   return stored === null ? doc.slides.length > 0 : stored === "1";
 }
 
-export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogChange }: ChatPanelProps) {
+export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogChange, readOnly = false }: ChatPanelProps) {
   const [collapsed, setCollapsed] = useState(() => initialCollapsed(doc));
   const [records, setRecords] = useState<ChatRecord[]>([]);
   const [pending, setPending] = useState<ChatProposal | null>(null);
@@ -225,10 +227,10 @@ export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogCha
             ))}
           </div>
           <div className="chat-proposal-buttons">
-            <button type="button" className="chat-apply" disabled={busy || dirty} onClick={() => resolve("apply")}>
+            <button type="button" className="chat-apply" disabled={readOnly || busy || dirty} onClick={() => resolve("apply")}>
               {dirty ? t("chat.waitSave") : busy ? t("chat.applying") : t("chat.apply")}
             </button>
-            <button type="button" disabled={busy} onClick={() => resolve("discard")}>
+            <button type="button" disabled={readOnly || busy} onClick={() => resolve("discard")}>
               {t("chat.discard")}
             </button>
           </div>
@@ -266,6 +268,7 @@ export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogCha
       >
         <textarea
           value={draft}
+          disabled={readOnly}
           placeholder={t("chat.placeholder")}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -275,7 +278,7 @@ export function ChatPanel({ slug, doc, activeSlideId, dirty, onApplied, onLogCha
             }
           }}
         />
-        <button type="submit" disabled={busy || draft.trim() === ""}>
+        <button type="submit" disabled={readOnly || busy || draft.trim() === ""}>
           {busy ? t("chat.thinking") : t("chat.send")}
         </button>
       </form>
