@@ -280,6 +280,8 @@ export interface CliHooks {
   openPurger?: () => Promise<Purger>;
   /** Replaces the dump-and-restore of `backup drill` (the result is still recorded). */
   runDrill?: typeof runBackupDrill;
+  /** Replaces the repository root (tests only: `denylist --write` writes under it). */
+  repoRoot?: string;
 }
 
 /**
@@ -331,7 +333,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (!url || !isLocalDatabase(url)) throw new PurgeRefusedError("DATABASE_PURGE_URL no apunta a una base de datos local: la purga solo corre en local");
         return hooks.openPurger ? hooks.openPurger() : openPurger(connect(env, url), verbSql ?? undefined);
       };
-      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now, fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
+      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: hooks.repoRoot ?? REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now, fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {

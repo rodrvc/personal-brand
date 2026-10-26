@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, rmdirSync, statSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -12,6 +12,7 @@ import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "..
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
+import { brandTerms } from "./denylist.ts";
 import { downloadFonts, FontPolicyError, MAX_FAMILY_CHARS, type FontFile } from "./fonts.ts";
 import { toCheckRules } from "../revision-policy.ts";
 
@@ -97,6 +98,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
+  denylist: { values: [], flags: ["json", "write"], positionals: [0, 0] },
 };
 
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
@@ -108,7 +110,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -132,6 +134,7 @@ export function writeTarget(verb: string, positionals: string[]): { slug: string
 export const VERB_USAGE = [
   "  brand list [--archived] | create <marca> --name <nombre> | archive|unarchive <marca>",
   "  brand purge <marca> --confirm <marca> --bundle <carpeta fuera del repo>   (exige marca archivada y el rol brand_purger)",
+  "  brand denylist [--write]   (términos de marca para el commit gate; --write los guarda en scripts/brand-denylist.generated.txt)",
   "  brand show <marca> [--since <fecha ISO>] | rules list <marca> | check <marca> --carousel <slug>",
   "  brand doc get|put <marca> <tokens|config|identity|spec|template> [<nombre>] [--file <ruta>] [--if-version <n>]",
   "  brand guidance list|get|put <marca> [<nombre>] [--file <ruta> --description <texto>] [--if-version <n>]",
@@ -271,6 +274,32 @@ async function show(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
     ...recipes.map((r) => `  receta ${r.recipe} v${r.version}`),
     ...rules.map((r) => `  regla ${r.value.kind} (${r.value.severity})${r.value.enabled ? "" : " desactivada"}`),
   ]));
+}
+
+/** The only file `denylist --write` ever writes: the gitignored list the commit gate reads. */
+export const GENERATED_DENYLIST = join("scripts", "brand-denylist.generated.txt");
+
+/**
+ * `denylist`: the terms the commit gate watches, derived from storage (no folder on disk). Printed as brand data, or with
+ * `--write` (no value) saved one per line to the pinned GENERATED_DENYLIST under the repo root (0600, temp file + rename,
+ * temp removed on failure). The target cannot be chosen, so a tracked file such as the public denylist is unreachable;
+ * a symlink or directory at the target is refused.
+ */
+async function denylist(ctx: Ctx, args: Parsed): Promise<CliResult> {
+  const terms = await brandTerms(ctx.repos);
+  if (!args.flags.has("write")) return out(args, { trust: "brand-data", terms }, trusted(terms.length ? terms : ["Sin términos: no hay marcas reales."]));
+  const target = join(ctx.repoRoot, GENERATED_DENYLIST);
+  const existing = lstatSync(target, { throwIfNoEntry: false });
+  if (existing && !existing.isFile()) return refused("El destino debe ser un archivo normal (ni enlace simbólico ni carpeta). No se escribió nada.");
+  const header = "# Generated by `brand denylist --write`: brand terms watched by the commit gate. Local only, never commit.\n";
+  const tmp = `${target}.${ctx.suffix()}.tmp`;
+  try {
+    writeFileSync(tmp, header + terms.map((t) => `${t}\n`).join(""), { mode: 0o600, flag: "wx" });
+    renameSync(tmp, target);
+  } finally {
+    try { unlinkSync(tmp); } catch { /* already renamed, or never created */ }
+  }
+  return out(args, { written: terms.length }, [`Se escribieron ${terms.length} términos en ${GENERATED_DENYLIST}.`]);
 }
 
 async function purge(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
@@ -742,6 +771,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "purge": return purge(ctx, args, p[0]);
     case "show": return show(ctx, args, p[0]);
     case "check": return check(ctx, args, p[0]);
+    case "denylist": return denylist(ctx, args);
     case "doc": return doc(ctx, args, p);
     case "guidance": return guidance(ctx, args, p);
     case "recipe": return recipe(ctx, args, p);

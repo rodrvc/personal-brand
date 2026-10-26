@@ -99,6 +99,11 @@ the tree, there is no diff to review); `pre-commit` lets it through only when
 
 ## The brand denylist derives itself from the profiles on disk
 
+> Since S11a the gate also reads `scripts/brand-denylist.generated.txt` (gitignored), written by
+> `pnpm --filter @personal-brand/storage brand denylist --write`
+> from storage. A brand with no folder on disk is watched through it; regenerate it when a brand is
+> added or its identity changes. The folder derivation below remains until S12.
+
 Three deterministic checks in `validate_commit_guardian.py` cannot be approved
 by `commit-guardian`, because a check that can be waived by judgement is only
 as reliable as the judgement waiving it. One of them — brand literals under

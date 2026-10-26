@@ -15,7 +15,7 @@
   },
   "scripts": {
     "migrate": "tsx src/cli/migrate.ts",
-    "test": "tsx test/keys.test.ts && tsx test/fake-object-store.test.ts && tsx test/put-blob.test.ts && tsx test/blob-cache.test.ts && tsx test/s3-object-store.integration.test.ts && tsx test/migrate-unit.test.ts && tsx test/migrate.integration.test.ts && tsx test/repositories.test.ts && tsx test/brand-cli.test.ts && tsx test/brand-verbs.test.ts && tsx test/fonts.test.ts && tsx test/backup-drill.test.ts && tsx test/legacy-bucket.test.ts && tsx test/asset-index-cache.test.ts && tsx test/design-doc.test.ts",
+    "test": "tsx test/keys.test.ts && tsx test/fake-object-store.test.ts && tsx test/put-blob.test.ts && tsx test/blob-cache.test.ts && tsx test/s3-object-store.integration.test.ts && tsx test/migrate-unit.test.ts && tsx test/migrate.integration.test.ts && tsx test/repositories.test.ts && tsx test/brand-cli.test.ts && tsx test/brand-verbs.test.ts && tsx test/denylist.test.ts && tsx test/fonts.test.ts && tsx test/backup-drill.test.ts && tsx test/legacy-bucket.test.ts && tsx test/asset-index-cache.test.ts && tsx test/design-doc.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "brand": "tsx src/cli/brand.ts"
   },
