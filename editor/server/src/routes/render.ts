@@ -6,7 +6,6 @@ import { NotFoundError } from "@personal-brand/storage/contracts";
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { LayoutTemplateError, type LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
-import { loadWithResolver } from "../../../../system/ig-carousel/render-batch.js";
 import { renderFreeLayoutSlide } from "../../../../system/ig-carousel/templates/free-layout.js";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../../../../system/ig-carousel/document.js";
 import { measureContrast } from "../../../../system/ig-carousel/contrast.js";
@@ -14,6 +13,7 @@ import { measureContrast } from "../../../../system/ig-carousel/contrast.js";
 import { assertValidCarouselId, documentExists, DocumentStoreError, readDocumentRaw, validateAgainstProfile } from "../document-store.js";
 import { messages } from "../messages.js";
 import { guardStorage, resolveStored, storedCarousel, storedSlideHtml, StorageFailure, type EditorStorage } from "../stored-read.js";
+import { loadStoredSlide } from "../stored-load.js";
 import { resolveDocumentTemplate } from "../template-resolve.js";
 import { buildRenderContext } from "../render-context.js";
 import { getSharedBrowser } from "../browser.js";
@@ -99,32 +99,7 @@ async function resolveSlide(storage: EditorStorage | undefined, slug: string, id
 
   if (stored) {
     const { html, brand, template, resolve } = await storedSlideHtml(stored, doc, n, preview);
-    const load = async (page: Page): Promise<() => void> => {
-      // Only a failure of the resolver's own storage reads is an outage; a refusal for any other reason is a render error.
-      let outage: StorageFailure | undefined;
-      const watched: typeof resolve = async (assetId) => {
-        try {
-          return await resolve(assetId);
-        } catch (error) {
-          if (error instanceof StorageFailure) outage = error;
-          throw error;
-        }
-      };
-      const classify = (error: unknown): unknown => (outage ? outage : error);
-      let check: () => void;
-      try {
-        check = await loadWithResolver(page, html, watched);
-      } catch (error) {
-        throw classify(error);
-      }
-      return () => {
-        try {
-          check();
-        } catch (error) {
-          throw classify(error);
-        }
-      };
-    };
+    const load = (page: Page) => loadStoredSlide(page, html, resolve);
     return { slide: { html, brand, doc, template, n, load } };
   }
   const store = new ProfileStore(slug);

@@ -20,6 +20,7 @@ import type { PieceGenerator } from "./ai/piece-generator.js";
 import { initStorageRuntime, storageSyncMiddleware } from "./storage/runtime.js";
 import { openEditorStorage } from "./stored-open.js";
 import { storedBrandGuard } from "./stored-read.js";
+import { runShutdown } from "./shutdown.js";
 
 /**
  * Selects the storage backend (issue #99: `fs` default, `s3` opt-in via
@@ -112,29 +113,33 @@ const server = app.listen(port, bind, async () => {
 
 let shuttingDown = false;
 const DRAIN_TIMEOUT_MS = 10_000;
+const CLOSE_TIMEOUT_MS = 5_000;
 
-/** Stop accepting and drain (bounded), then close the browser, then end the pool: no in-flight request meets a closed client. */
+/** Stop accepting and drain (bounded), then close the browser, then end the pool, each bounded: no in-flight request meets a closed client and no close can hang the exit. */
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  let code = 0;
-  try {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, DRAIN_TIMEOUT_MS);
-      server.close(() => {
-        clearTimeout(timer);
-        resolve();
-      });
-      server.closeIdleConnections?.();
-    });
-    await closeSharedBrowser();
-    await opened?.close();
-  } catch (error) {
-    console.error("Shutdown failed:", error);
-    code = 1;
-  } finally {
-    process.exit(code);
-  }
+  const code = await runShutdown(
+    [
+      {
+        name: "http server",
+        maxMs: DRAIN_TIMEOUT_MS + 1_000,
+        close: () =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, DRAIN_TIMEOUT_MS);
+            server.close(() => {
+              clearTimeout(timer);
+              resolve();
+            });
+            server.closeIdleConnections?.();
+          }),
+      },
+      { name: "browser", close: closeSharedBrowser },
+      { name: "storage pool", close: () => opened?.close() },
+    ],
+    { stepMs: CLOSE_TIMEOUT_MS },
+  );
+  process.exit(code);
 }
 
 process.on("SIGINT", shutdown);

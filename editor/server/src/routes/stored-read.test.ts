@@ -75,7 +75,7 @@ const storage = {
 };
 // A storage whose reads fail, and one whose carousel listing names a head that is gone by the time it is read.
 const failing = { ...storage, brands: { getBySlug: async () => { throw new Error("connection refused"); }, list: async () => { throw new Error("connection refused"); } } };
-const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
+const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), save: repos.carousels.save.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
@@ -221,7 +221,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["the gate sees the decoded slug, so an encoded one cannot dodge it", async () => {
     const encoded = SLUG.replace("-", "%2D");
     assert.equal((await json(`/${encoded}/carousels/week-one/stats`)).status, 501);
-    assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 405);
+    assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["an invalid template params JSON is a 400, and the free template does not need it", async () => {
@@ -241,10 +241,10 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal(Buffer.from(await png.arrayBuffer()).subarray(1, 4).toString(), "PNG");
     assert.equal((await fetch(`${base}/${SLUG}/carousels/week-one/slides/9/png`)).status, 404);
   }],
-  ["writes to a stored brand are refused, and nothing is created in the profiles folder", async () => {
-    const put = await json(`/${SLUG}/carousels/week-one`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document) });
-    assert.equal(put.status, 405);
-    assert.match(put.body.error, /almacenamiento/);
+  ["writes other than the carousel save are refused for a stored brand (the save itself is in stored-write.test.ts), and nothing is created in the profiles folder", async () => {
+    const del = await json(`/${SLUG}/carousels/week-one`, { method: "DELETE" });
+    assert.equal(del.status, 405);
+    assert.match(del.body.error, /almacenamiento/);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
     // A folder brand (no profile here) is untouched by the guard and answers as before.
     assert.equal((await json("/not-cut-over/brand")).status, 422);

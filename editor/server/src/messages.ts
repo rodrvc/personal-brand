@@ -7,6 +7,11 @@ export const messages = {
   profileWithoutBrand: (slug: string) => `El perfil "${slug}" no tiene brand.json.`,
   storedReadOnly: (slug: string) => `La marca "${slug}" se lee desde el almacenamiento y por ahora no se puede modificar desde el editor.`,
   storageUnavailable: "No se pudo consultar el almacenamiento de marcas. Intenta de nuevo en unos segundos.",
+  ifMatchRequired: "Falta la versión que estás editando (If-Match). Vuelve a abrir el carrusel e inténtalo de nuevo.",
+  ifMatchMalformed: "La versión que estás editando (If-Match) no es válida. Vuelve a abrir el carrusel.",
+  saveConflict: "Alguien más cambió este carrusel mientras lo editabas. No se guardó nada: revisa la versión actual antes de volver a guardar.",
+  storedArchivedAny: "Esta marca está archivada y no admite cambios.",
+  storedArchived: (slug: string) => `La marca "${slug}" está archivada y no admite cambios.`,
   storedNotYet: "Esta función para marcas guardadas llega en el próximo cambio.",
   uploadTooLarge: "El archivo es demasiado grande para subirlo (máximo ~28 MB). Adjunta una versión más liviana.",
   imageToolUnavailable:
