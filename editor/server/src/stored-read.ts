@@ -1,6 +1,6 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { NotFoundError, type AssetRepository, type BrandDocumentRepository, type BrandRepository, type CarouselRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BrandDocumentRepository, type BrandRepository, type CarouselRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -14,12 +14,16 @@ import { computeUsageFrom, storageUsageSource } from "../../../system/assets/usa
 import type { CarouselListingEntry } from "./document-store.js";
 import { messages } from "./messages.js";
 
-/** The repositories and blob cache the editor's read endpoints use for a brand served from storage. Tests pass the memory ones. */
+/**
+ * The repositories and blob cache the editor uses for a brand served from storage. Tests pass the memory ones.
+ * Async-only: `guardStorage` turns every function member into an async one, so a sync method added here would silently
+ * become a promise. `blobs(brandId)` is the one sync factory; its result is guarded.
+ */
 export interface EditorStorage {
   brands: Pick<BrandRepository, "getBySlug" | "list">;
   documents: Pick<BrandDocumentRepository, "get" | "list">;
   assets: Pick<AssetRepository, "list" | "get">;
-  carousels: Pick<CarouselRepository, "list" | "get">;
+  carousels: Pick<CarouselRepository, "list" | "get" | "save">;
   /** The local blob cache of one brand (content-addressed, read-only). */
   blobs(brandId: string): Pick<BlobCache, "read">;
 }
@@ -40,9 +44,14 @@ export class StorageFailure extends Error {
   }
 }
 
+/** Errors that are an answer about the request, not an outage: a missing row, a lost version race, a refused input, an archived brand. */
+const isDomainError = (error: unknown): boolean =>
+  error instanceof NotFoundError || error instanceof VersionConflictError || error instanceof InvalidInputError || error instanceof BrandArchivedError;
+
 /**
- * Classifies at the source: every repository and blob read of `storage` rejects with a `StorageFailure` unless the error
- * is a `NotFoundError` (a missing row is an answer, not an outage). Rendering code built on top is untouched, so its own
+ * Classifies at the source: every repository and blob call of `storage` rejects with a `StorageFailure` unless the error
+ * is a domain error (a missing row is an answer, not an outage; neither is a lost version race). A validator that throws
+ * on a corrupt stored document is a `StorageFailure` too, so a bad row answers 503 everywhere, never a raw 500. Rendering code built on top is untouched, so its own
  * deterministic errors keep their meaning.
  */
 export function guardStorage(storage: EditorStorage): EditorStorage {
@@ -55,7 +64,7 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
           try {
             return await value.apply(obj, args);
           } catch (error) {
-            throw error instanceof NotFoundError ? error : new StorageFailure(error);
+            throw isDomainError(error) ? error : new StorageFailure(error);
           }
         };
       },
@@ -98,13 +107,13 @@ export async function storedTemplate(s: StoredBrand, id: string, params?: Record
 }
 
 /** The editor knows three statuses; a scheduled carousel is shown as exported (it has been exported). */
-const editorStatus = (status: string): CarouselDocument["status"] => (status === "scheduled" ? "exported" : (status as CarouselDocument["status"]));
+export const editorStatus = (status: string): CarouselDocument["status"] => (status === "scheduled" ? "exported" : (status as CarouselDocument["status"]));
 
 /** The raw stored document with the columns that own `title` and `status` overlaid, plus its row version. */
-export async function storedCarouselRaw(s: StoredBrand, id: string): Promise<{ document: Record<string, unknown>; version: number; updatedAt: string }> {
+export async function storedCarouselRaw(s: StoredBrand, id: string): Promise<{ rowId: string; document: Record<string, unknown>; version: number; updatedAt: string }> {
   const row = await s.storage.carousels.get(s.brandId, id, (body) => body as Record<string, unknown>);
   const { document, title, status } = row.value;
-  return { document: { ...document, id, title, status: editorStatus(status) }, version: row.version, updatedAt: row.updatedAt };
+  return { rowId: row.id, document: { ...document, id, title, status: editorStatus(status) }, version: row.version, updatedAt: row.updatedAt };
 }
 
 /** Validates a stored document against the brand's stored tokens and asset library, as `validateAgainstProfile` does for a folder. */
@@ -187,6 +196,9 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
 const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
+/** The one write a stored brand takes so far: saving a carousel document (S10b). Every other write stays a 405. */
+const STORED_SAVE = /^\/carousels\/[^/]+$/;
+
 /** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet, no exports yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [
   [/^\/carousels\/[^/]+\/chat$/, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } }],
@@ -196,9 +208,9 @@ const EMPTY_READS: Array<[RegExp, unknown]> = [
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
  * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat and outputs answer empty;
- * every other route (stats, export, generation sidecars) is a 501; writes are a
- * 405, because they would land in a folder nobody reads. No route below this point ever builds a `ProfileStore` for a
- * stored brand, which would create an empty `profiles/<slug>` folder. Writes arrive with S10b.
+ * every other route (stats, export, generation sidecars) is a 501; writes other than
+ * the carousel save are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
+ * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
 export function storedBrandGuard(storage: EditorStorage | undefined) {
   return (
@@ -210,6 +222,7 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
     if (!storage || !slug) return next();
     resolveStored(storage, slug).then((stored) => {
       if (!stored) return next();
+      if (req.method === "PUT" && STORED_SAVE.test(req.path)) return next();
       if (req.method !== "GET" && req.method !== "HEAD") return void res.status(405).json({ error: messages.storedReadOnly(slug) });
       if (STORED_READS.some((re) => re.test(req.path))) return next();
       const empty = EMPTY_READS.find(([re]) => re.test(req.path));

@@ -6,13 +6,14 @@ import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { FREE_TEMPLATE_ID, freeLayoutTemplate, listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { updateEntry } from "../../../../system/assets/index.js";
-import { NotFoundError } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError } from "@personal-brand/storage/contracts";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
 import { invalidateAssetIndex } from "../asset-index-cache.js";
 import {
   assertValidCarouselId,
   documentExists,
+  isStructuralChange,
   DocumentStoreError,
   listCarousels,
   listVersions,
@@ -25,6 +26,7 @@ import {
 import { messages } from "../messages.js";
 import {
   etagOf,
+  guardStorage,
   resolveStored,
   storedBrandTokens,
   storedCarousel,
@@ -33,8 +35,10 @@ import {
   storedStyle,
   storedTemplate,
   storedTemplates,
+  StorageFailure,
   type EditorStorage,
 } from "../stored-read.js";
+import { saveStoredCarousel } from "../stored-write.js";
 import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
 import { buildCardSummary } from "../profile-card.js";
 
@@ -54,6 +58,15 @@ function handleStoreError(error: unknown, res: import("express").Response): void
     res.status(404).json({ error: error.message });
     return;
   }
+  if (error instanceof VersionConflictError) return void res.status(409).json({ error: messages.saveConflict, currentVersion: error.currentVersion });
+  if (error instanceof InvalidInputError) return void res.status(400).json({ error: error.message });
+  if (error instanceof BrandArchivedError) return void res.status(403).json({ error: messages.storedArchivedAny });
+  if (error instanceof StorageFailure) {
+    // Includes a validator that threw on a corrupt stored document: one answer for every storage-side failure.
+    console.error("Storage read failed:", error.cause);
+    res.status(503).json({ error: messages.storageUnavailable });
+    return;
+  }
   const message = (error as Error)?.message ?? String(error);
   if (/ENOENT|no such file/i.test(message)) {
     res.status(404).json({ error: message });
@@ -63,11 +76,13 @@ function handleStoreError(error: unknown, res: import("express").Response): void
 }
 
 /**
- * `storage` is the stored read path (S10a): a brand cut over to storage is read through its repositories, every other
- * brand through its folder, exactly as before. Writes stay on the folder until S10b.
+ * `storage` is the stored path: a brand cut over to storage is read through its repositories (S10a) and saved through
+ * them (S10b, `If-Match`), every other brand uses its folder, exactly as before.
  */
-export function profilesRouter(storage?: EditorStorage): Router {
+export function profilesRouter(rawStorage?: EditorStorage): Router {
   const router = Router();
+  // Every repository call is classified at the source: an outage or a corrupt row is a StorageFailure (503), never a raw 500.
+  const storage = rawStorage && guardStorage(rawStorage);
 
   /**
    * `card` is computed on top of `listProfilesAsync()`'s cheap slug/hasBrand
@@ -311,6 +326,14 @@ export function profilesRouter(storage?: EditorStorage): Router {
    */
   router.put("/api/profiles/:slug/carousels/:id", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        const snapshot = req.query.snapshot === "true" || (req.body as { snapshot?: boolean })?.snapshot === true;
+        const outcome = await saveStoredCarousel(stored, req.params.id, req.body, req.header("If-Match"), snapshot);
+        if (outcome.etag) res.setHeader("ETag", outcome.etag);
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (req.params.id !== (req.body as { id?: string })?.id) {
         res.status(400).json({ error: `Body "id" must match the URL's carousel id "${req.params.id}"` });
@@ -343,18 +366,7 @@ export function profilesRouter(storage?: EditorStorage): Router {
           return;
         }
         previousDocForPinDiff = previousRaw;
-        const previousShape = (previousRaw.slides ?? []).map((s) => s.kind).join(",");
-        const nextShape = result.document.slides.map((s) => s.kind).join(",");
-        // Plain inequality over both sides' optional `template?.id` — this
-        // already covers every case: unchanged (equal, both real ids or
-        // both undefined), swapped to another template, or swapped to/from
-        // "no template" (one side undefined). No `!== undefined` guard is
-        // needed since `undefined !== undefined` is `false`.
-        const templateChanged = previousRaw.template?.id !== result.document.template?.id;
-        structuralChange =
-          (previousRaw.slides?.length ?? 0) !== result.document.slides.length ||
-          previousShape !== nextShape ||
-          templateChanged;
+        structuralChange = isStructuralChange(previousRaw, result.document);
       }
 
       // pin false -> true triggers the library's "pinning approves it"
@@ -394,7 +406,7 @@ export function profilesRouter(storage?: EditorStorage): Router {
 
   router.get("/api/profiles/:slug/carousels/:id/versions", async (req, res) => {
     try {
-      // Snapshots are written by the save path (S10b); a stored carousel lists none until then.
+      // A stored save records snapshots as revisions (S10b); listing them is not wired yet, so none are listed.
       if (await resolveStored(storage, req.params.slug)) {
         res.json({ versions: [] });
         return;
