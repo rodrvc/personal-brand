@@ -5,8 +5,8 @@
 > brand-spec: how to record provenance, how to state a rule, and how to
 > declare a gap instead of inventing an answer.
 >
-> The authoritative spec for any real brand is that profile's own
-> `brand-spec.md`, outside this repo (see `BRAND_PROFILES_DIR` in CLAUDE.md).
+> The authoritative spec for any real brand is that brand's own `spec` document in
+> storage (`brand doc get <slug> spec`), never this file.
 > A real spec is never copied into this skill — it would drift, and it would
 > put brand data in the generic layer.
 

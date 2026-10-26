@@ -163,23 +163,24 @@ credit, every later one costs nothing.
 
 | Case | Where the cache lives |
 |---|---|
-| Casting for a brand in this repo | `profiles/<slug>/voice-samples/` — already ignored by `profiles/*` |
+| Casting for a brand in this repo | `$VOICE_WORKDIR/<slug>/voice-samples/` — `VOICE_WORKDIR` is an absolute path outside the repo that persists across sessions, e.g. `$HOME/voice-work` |
 | A standalone commission | the commission's working directory, outside the repo |
 | Never | anywhere under `.claude/` or `system/` |
 
-Verify rather than assume the path is ignored, because `profiles/example*` is
-un-ignored and would track anything placed under it:
-
-```bash
-git check-ignore -v profiles/<slug>/voice-samples/probe.mp3   # must print a rule
-```
+The check below runs **after** the directory is created, on its resolved path, and
+refuses anything inside this repo (a relative or not-yet-existing path would
+otherwise pass and land inside it). It is part of the script that follows.
 
 ```bash
 # The REAL paragraph the samples are judged on, already normalized.
 TXT='<first paragraph of the script>'
 
-CACHE="profiles/<slug>/voice-samples"        # or the commission's dir
+VOICE_WORKDIR="${VOICE_WORKDIR:?set an absolute path outside the repo, e.g. $HOME/voice-work}"
+CACHE="$VOICE_WORKDIR/<slug>/voice-samples"   # or the commission's dir
+case "$CACHE" in /*) ;; *) echo "refused: not absolute"; exit 1;; esac
 mkdir -p "$CACHE"
+REPO="$(git rev-parse --show-toplevel)"; REAL="$(cd "$CACHE" && pwd -P)"
+case "$REAL/" in "$REPO"/*) echo "refused: $REAL is inside the repo"; exit 1;; esac
 f="$CACHE/<voice-name>-$(printf '%s' "$TXT" | shasum | cut -c1-8).mp3"
 
 if [ -s "$f" ]; then

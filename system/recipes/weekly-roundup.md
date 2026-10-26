@@ -170,7 +170,7 @@ falla nombrando el período pedido — nunca renderiza vacío en silencio.
 
 ### 6. Escribir el input del carrusel
 
-`<perfil>/carousels/week-input.json`, sobreescribiendo el anterior. Forma
+Escribe el JSON del input en un directorio temporal fuera del repo, que se pasa con `--input` a `render-week.ts`; una marca en carpeta (sin corte) lo escribe en su carpeta de carruseles (`usar-perfil` dice dónde). Forma
 exacta: ver `system/config/brand.schema.md` → contrato de datos del carrusel.
 
 La geografía (`city`, `region`) viaja en el input porque describe **el

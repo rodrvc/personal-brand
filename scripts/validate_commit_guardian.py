@@ -108,7 +108,11 @@ KNOWN_TLDS = (
 )
 
 # An at sign glued to a word is an email or a package spec (`pkg@latest`), not a handle.
-HANDLE = re.compile(r'(?<![A-Za-z0-9_.])@([A-Za-z0-9._]{3,30})\b')
+# A dot before the at sign does not glue it (`end.@handle` is a handle), same as the storage side.
+# The storage derivation (`HANDLE` in storage/src/cli/denylist.ts) has more rules (letter required,
+# resolutions, at-rules, npm scopes, dotted handles kept); this one skips dotted captures. The
+# difference is intended: the gate checks the union of both sets.
+HANDLE = re.compile(r'(?<![A-Za-z0-9_])@([A-Za-z0-9._]{3,30})\b')
 
 # Field names of the profile schema. Written after an at sign they are the
 # citation of the concept ("the brand's @handle"), never anyone's real
@@ -440,46 +444,97 @@ STORAGE_TERMS_COMMAND = (
 STORAGE_TERMS_TIMEOUT = 5
 
 
+# After the group kill, the reap is bounded too: a descendant outside the group could still hold the pipe.
+REAP_TIMEOUT = 2
+
+
+def _stop(proc: 'subprocess.Popen') -> None:
+    """Kills the whole group (pnpm spawns node), falls back to the parent, and reaps within REAP_TIMEOUT."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.communicate(timeout=REAP_TIMEOUT)
+    except Exception:  # a second timeout or a decode problem: give up, never hang
+        pass
+
+
 def fetch_storage_terms() -> list[str] | None:
     """Watched terms of the brands in storage, or None when storage cannot be asked.
 
-    None covers every reason the answer is unknown: no DATABASE_URL, no pnpm,
-    a timeout, a non-zero exit (including the CLI's exit 1 for a missing
-    DATABASE_URL) or unparseable output. The caller treats None as "no
-    information", never as "no brands".
+    Never raises. None covers every reason the answer is unknown: no DATABASE_URL, no pnpm,
+    a timeout, a non-zero exit (including the CLI's exit 1 for a missing DATABASE_URL),
+    undecodable or unparseable output. The caller treats None as "no
+    information", never as "no brands". With DATABASE_URL set, a failure prints one
+    stderr line, so a misconfigured URL does not turn the comparison off in silence.
     """
     if not os.environ.get('DATABASE_URL'):
         return None
     try:
+        return _ask_storage()
+    except Exception as exc:  # the contract: never raises
+        _note(f'the storage query could not run ({type(exc).__name__})')
+        return None
+
+
+def _note(reason: str) -> None:
+    """The one stderr line of a degraded comparison; it never blocks."""
+    print(f'commit-gate: {reason}; the generated denylist was not compared with storage. '
+          'Check DATABASE_URL, pnpm and the migrations.', file=sys.stderr)
+
+
+def _ask_storage() -> list[str] | None:
+    try:
         proc = subprocess.Popen(
             STORAGE_TERMS_COMMAND, cwd=ROOT, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, start_new_session=True,
+            stderr=subprocess.DEVNULL, start_new_session=True,  # bytes: decoded below, tolerantly
         )
-    except OSError:
+    except OSError as exc:
+        _note(f'the storage query could not start ({exc.__class__.__name__})')
         return None
     try:
         stdout, _ = proc.communicate(timeout=STORAGE_TERMS_TIMEOUT)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)  # pnpm spawns node: kill the group, not just the parent
-        except OSError:
-            proc.kill()
-        proc.communicate()
+        _stop(proc)
         print(
             f'commit-gate: storage did not answer within {STORAGE_TERMS_TIMEOUT}s; '
             'the generated denylist was not compared with storage.',
             file=sys.stderr,
         )
         return None
+    except Exception as exc:
+        _stop(proc)
+        _note(f'the storage query could not be read ({type(exc).__name__})')
+        return None
     try:
         if proc.returncode != 0:
+            _note(f'the storage query failed (exit {proc.returncode})')
             return None
-        terms = json.loads(stdout[stdout.index('{'):]).get('terms')
-    except (ValueError, AttributeError):
+        text = stdout.decode('utf-8', errors='replace') if isinstance(stdout, bytes) else stdout
+        terms = json.loads(text[text.index('{'):]).get('terms')
+    except (ValueError, AttributeError, TypeError):
+        _note('the storage query printed no usable answer')
         return None
     if not isinstance(terms, list):
+        _note('the storage query printed no list of terms')
         return None
     return [t for t in terms if isinstance(t, str)]
+
+
+_UNASKED = object()
+_storage_answer: object = _UNASKED
+
+
+def storage_terms() -> list[str] | None:
+    """`fetch_storage_terms()` once per process: the warning and the leak check share one query."""
+    global _storage_answer
+    if _storage_answer is _UNASKED:
+        _storage_answer = fetch_storage_terms()
+    return _storage_answer  # type: ignore[return-value]
 
 
 def storage_denylist_warnings() -> list[str]:
@@ -494,7 +549,7 @@ def storage_denylist_warnings() -> list[str]:
     asked, the answer is unknown and nothing is said: a fresh clone or an
     offline machine must still be able to commit.
     """
-    watched = {t.lower() for t in (fetch_storage_terms() or []) if _watchable(t.strip())}
+    watched = {t.lower() for t in (storage_terms() or []) if _watchable(t.strip())}
     if not watched:
         return []
     name = BRAND_DENYLIST_GENERATED.name
@@ -507,8 +562,12 @@ def storage_denylist_warnings() -> list[str]:
     return []
 
 
-def denylist_with_origins() -> dict[str, set[str]]:
-    """Manual + derived. A term can have multiple origins.
+def denylist_with_origins(live: bool = False) -> dict[str, set[str]]:
+    """Manual + derived (+ the live terms of storage when `live`). A term can have multiple origins.
+
+    `live` asks storage (once per process, bounded) and adds its terms as origin
+    "storage (live)", so a stale or missing generated file cannot hide a term.
+    Unknown storage adds nothing.
 
     Collapsed by lowercase because search is case-insensitive: keeping
     "Brand" and "brand" as separate entries would duplicate every finding
@@ -516,7 +575,10 @@ def denylist_with_origins() -> dict[str, set[str]]:
     """
     combined: dict[str, set[str]] = {}
     index: dict[str, str] = {}
-    for source in (manual_terms(), generated_terms(), derive_terms()):
+    sources = [manual_terms(), generated_terms(), derive_terms()]
+    if live:
+        sources.append({t.strip(): {'storage (live)'} for t in (storage_terms() or []) if _watchable(t.strip())})
+    for source in sources:
         for term, origins in source.items():
             key = term.lower()
             canonical = index.setdefault(key, term)
@@ -570,7 +632,7 @@ def check_brand_leaks(staged_files: list[str]) -> list[str]:
     what is safe to a review is only as reliable as that review; this one
     does not depend on judgement at all.
     """
-    origins = denylist_with_origins()
+    origins = denylist_with_origins(live=True)
     if not origins:
         return []
     pattern = re.compile(
@@ -697,7 +759,7 @@ def scan_tree() -> int:
     Auditing only (1) is worse than not auditing: it prints "publishable"
     while commits stay in place.
     """
-    origins = denylist_with_origins()
+    origins = denylist_with_origins(live=True)
     terms = sorted(origins, key=str.lower)
     if not terms:
         print(
@@ -731,6 +793,8 @@ def scan_tree() -> int:
     warnings = storage_denylist_warnings()
     for warning in warnings:
         print(f'  WARNING: {warning}')
+    # Exactly one absent-file message: the storage warning above already says it when storage
+    # answered; this one covers storage that could not be asked.
     if not warnings and not BRAND_DENYLIST_GENERATED.is_file():
         print(f'  WARNING: {BRAND_DENYLIST_GENERATED.name} is absent: brands that live only in')
         print('  storage are invisible to this audit. Run `brand denylist --write`.')
@@ -894,7 +958,7 @@ def check_push(revisions: list[str]) -> int:
     if not revisions:
         return 0
 
-    origins = denylist_with_origins()
+    origins = denylist_with_origins(live=True)
     terms = sorted(origins, key=str.lower)
     if not terms:
         # No profiles on disk and no manual denylist: nothing to search for.

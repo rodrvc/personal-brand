@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { runCli } from "../src/cli/brand.ts";
 import { brandTerms, domainTerms, SCHEMA_FIELDS } from "../src/cli/denylist.ts";
+import { NotFoundError } from "../src/contracts/index.ts";
 import { createMemoryRepositories } from "../src/memory/index.ts";
 
 const work = mkdtempSync(join(tmpdir(), "denylist-"));
@@ -51,7 +52,15 @@ try {
 
   await repos.guidance.put(real.id, "links", { description: "d", body: "Profiles: https://social.test/@url_handle/video/1 and shop.test/@path.handle/post; tags @_lead @1lead, sizes @1080p @2160P." }, meta());
 
+  // Handle edge cases: a dot before the at sign does not glue it; an over-long run is no handle; a `url` that is not a host is not a domain.
+  await repos.guidance.put(real.id, "edges", { description: "d", body: `End.@after_dot, id @${"a".repeat(40)} and @${"b".repeat(30)}.` }, meta());
+  await repos.recipes.put(real.id, "paths", { params: { a: { url: "assets/relative-path" }, b: { url: "./local/place" }, c: { url: "logo.png" }, f: { url: "//cdn.fictional-proto.test/x" }, g: { url: "https://fictional-md.md/a.md" }, d: { url: "free text here" }, e: { url: "plainword" } } , schemaVersion: 1 }, meta());
+
   const terms = await brandTerms(repos);
+  assert.ok(terms.includes("after_dot") && terms.includes("b".repeat(30)), "a dot before the at sign, and a 30-character handle, are handles");
+  assert.ok(!terms.some((t) => t.startsWith("aaaa")), "a run over 30 characters is not truncated into a term");
+  for (const t of ["cdn.fictional-proto.test", "fictional-md.md"]) assert.ok(terms.includes(t), `a protocol-relative or .md-TLD host is kept: ${t}`);
+  for (const t of ["assets/relative-path", "./local/place", "logo.png", "free text here", "plainword"]) assert.ok(!terms.includes(t), `a url value that is not a host stays out: ${t}`);
   for (const t of ["url_handle", "path.handle", "_lead", "1lead"]) assert.ok(terms.includes(t), `parity: missing ${t}`);
   for (const t of ["1080p", "2160P"]) assert.ok(!terms.includes(t), `parity: unexpected ${t}`);
   for (const t of ["template_handle", "content_handle", "meta_handle", "deep_handle"]) assert.ok(terms.includes(t), `parity: missing ${t}`);
@@ -67,6 +76,18 @@ try {
   const old = await repos.brands.create({ slug: "retired-co", displayName: "Retired Company" }, meta());
   await repos.brands.archive(old.id, { ...meta(old.version), reason: "archive" as const });
   assert.ok((await brandTerms(repos)).includes("retired-co"), "an archived brand is still watched");
+
+  // An item that vanishes between the list and its read is skipped, not fatal; any other error still fails.
+  const racy = createMemoryRepositories();
+  const racyCo = await racy.brands.create({ slug: "racy-co", displayName: "Racy Company" }, meta());
+  await racy.guidance.put(racyCo.id, "gone", { description: "d", body: "@gone_handle" }, meta());
+  await racy.guidance.put(racyCo.id, "kept", { description: "d", body: "@kept_handle" }, meta());
+  const realGet = racy.guidance.get.bind(racy.guidance);
+  racy.guidance.get = async (brandId: string, name: string) => (name === "gone" ? Promise.reject(new NotFoundError("guidance gone")) : realGet(brandId, name));
+  const raced = await brandTerms(racy);
+  assert.ok(raced.includes("kept_handle") && !raced.includes("gone_handle"), "the vanished item is skipped, the rest is read");
+  racy.guidance.get = async () => Promise.reject(new Error("boom"));
+  await assert.rejects(() => brandTerms(racy), /boom/, "other read errors are not swallowed");
 
   // Reads are bounded and concurrent, not an N+1: a few hundred content items of a fictional brand.
   const many = createMemoryRepositories();
@@ -115,6 +136,16 @@ try {
   assert.ok(lstatSync(file).isDirectory());
   assert.equal((await run("denylist", "extra")).exitCode, 2, "no positionals");
   rmSync(file, { recursive: true });
+  // A scripts/ that is a symlink to a real directory works (decision: follow it); a dangling one is refused like a missing one.
+  const linked = join(work, "linked-repo");
+  mkdirSync(join(work, "real-scripts"));
+  mkdirSync(linked);
+  symlinkSync(join(work, "real-scripts"), join(linked, "scripts"));
+  assert.equal((await runCli(["denylist", "--write"], env, repos, undefined, { repoRoot: linked })).exitCode, 0);
+  assert.ok(readdirSync(join(work, "real-scripts")).includes("brand-denylist.generated.txt"));
+  rmSync(join(linked, "scripts"));
+  symlinkSync(join(work, "nowhere"), join(linked, "scripts"));
+  assert.equal((await runCli(["denylist", "--write"], env, repos, undefined, { repoRoot: linked })).exitCode, 6, "a dangling scripts/ link is refused");
   const bare = join(work, "no-scripts");
   mkdirSync(bare);
   const noScripts = await runCli(["denylist", "--write"], env, repos, undefined, { repoRoot: bare });

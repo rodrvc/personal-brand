@@ -75,9 +75,10 @@ those).
 Two cases, and they have different rules about the repo.
 
 **A brand in this repo.** Invoke `usar-perfil` **first** to resolve which
-profile and load its business rules — they live in `profiles/<slug>/`, not
-here. Announce the resolved profile before writing or rendering anything.
-Inputs and outputs go under that profile's folder.
+brand and load its business rules — they live in storage (read with the
+`brand` CLI), not here. Announce the resolved brand before writing or rendering
+anything. Inputs and outputs go in a working directory outside the repo, one
+per brand slug; a brand's stored assets are read with `brand asset get`.
 
 **A standalone commission** (a deck someone sent, work for an external
 organization, a one-off). **Nothing enters the repo.** Keep the deck, the
@@ -262,7 +263,7 @@ space; overwriting costs work that cannot be recovered.
   changes. A file that exists is not a video that works.
 - **No audio file is ever committed**, and none belongs under `.claude/` or
   `system/` at all. Voice samples are cached in a git-ignored directory —
-  `profiles/<slug>/voice-samples/` or the commission's own folder. Committing
+  `$VOICE_WORKDIR/<slug>/voice-samples/` (outside the repo, see `voice-casting.md`) or the commission's own folder. Committing
   a vendor's voice audio is redistribution, and a committed sample is a cache
   that cannot tell when its `voice_id` has gone stale.
 - **Nothing from a standalone commission enters the repo** — not the deck, not

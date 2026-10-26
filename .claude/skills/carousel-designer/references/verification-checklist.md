@@ -52,7 +52,7 @@ a jarring slide 5 nobody looked at.
 
 `wrapDocument` in `system/ig-carousel/document.ts` emits the font stylesheet
 `<link>` from the `fontsHref` argument each template passes it — sourced from
-`brand.googleFontsHref` in `profiles/<name>/brand.json`. A profile that omits
+`brand.googleFontsHref` in the brand's tokens (`brand doc get <slug> tokens`). A profile that omits
 that key gets no font stylesheet at all (deliberate: a system-fonts profile
 makes zero external font requests). The renderers call
 `page.setContent(html, { waitUntil: "networkidle" })` and then
