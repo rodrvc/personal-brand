@@ -38,7 +38,7 @@ await repos.brands.markCutover(brand.id, { ...meta, expectedVersion: brand.versi
 await repos.documents.put(brand.id, "tokens", "", tokens, meta);
 const objects = new FakeObjectStore();
 const library = createStorageAssetLibrary({ assets: repos.assets, blobs: objects, brandId: brand.id });
-const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: objects, blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
+const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, chat: repos.chat, files: objects, blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
 
 /** A generator that never leaves the process: copy per slide, a 1x1 PNG per image, and optional failure on the n-th image. */
 const calls = { prompts: [] as string[], languages: [] as Array<string | undefined>, images: 0, failOnImage: 0, hold: undefined as Promise<void> | undefined, onImage: undefined as ((n: number) => Promise<void>) | undefined };
@@ -197,6 +197,27 @@ const tests: Array<[string, () => Promise<void>]> = [
         calls.hold = undefined;
         calls.onImage = undefined;
       }
+    } finally {
+      setPlanClock(() => Date.now());
+    }
+  }],
+  ["the TTL runs from the last apply activity, so a partial apply keeps its resume, and an expired plan is a 404 at apply time even if nothing swept it", async () => {
+    const min = 60 * 1000;
+    let now = Date.parse(STAMP);
+    setPlanClock(() => now);
+    try {
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "partial", prompt: "weekly tips" })).status, 201);
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "lapsed", prompt: "weekly tips" })).status, 201);
+      now += 40 * min;
+      calls.failOnImage = calls.images + 1;
+      const failed = await post(`/${SLUG}/carousels/partial/plan/apply`, {});
+      calls.failOnImage = 0;
+      assert.equal(failed.status, 202, JSON.stringify(failed.body));
+      assert.equal(failed.body.planDropped, false);
+      now += 40 * min; // 80 minutes after the preview, 40 after the last apply
+      assert.equal((await post(`/${SLUG}/carousels/lapsed/plan/apply`, {})).status, 404, "never applied: expired at apply time, though nothing swept it");
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "sweeper", prompt: "weekly tips" })).status, 201, "a new plan sweeps by last activity, not creation");
+      assert.equal((await post(`/${SLUG}/carousels/partial/plan/apply`, {})).status, 201, "the partial apply resumed");
     } finally {
       setPlanClock(() => Date.now());
     }

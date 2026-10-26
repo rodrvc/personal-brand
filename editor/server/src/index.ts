@@ -86,7 +86,7 @@ app.use(assetsRouter(opened?.storage));
 app.use(renderRouter(opened?.storage));
 app.use(composeRouter(getGenerator, opened?.storage));
 app.use(exportRouter(opened?.storage));
-app.use(chatRouter(getGenerator));
+app.use(chatRouter(getGenerator, undefined, opened?.storage));
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });

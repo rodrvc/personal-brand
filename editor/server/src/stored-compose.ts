@@ -5,18 +5,12 @@ import { createStorageAssetLibrary } from "../../../system/assets/storage-librar
 
 import type { PlannerSource } from "./compose/planner.js";
 import { DocumentStoreError } from "./document-store.js";
-import { storedStyle, validateStored, type StoredBrand } from "./stored-read.js";
+import { storedConfig, storedStyle, validateStored, type StoredBrand } from "./stored-read.js";
 
-/** The stored `config` document's `profile.primary_language` (the importer stores config.yaml parsed as JSON); undefined when there is no config or no language. */
+/** The stored config's `profile.primary_language`; undefined when there is no config or no language. */
 async function storedLanguage(s: StoredBrand): Promise<string | undefined> {
-  try {
-    const config = (await s.storage.documents.get(s.brandId, "config", "", (body) => body)).value as { profile?: { primary_language?: unknown } } | null;
-    const language = config?.profile?.primary_language;
-    return typeof language === "string" && language.trim() ? language.trim() : undefined;
-  } catch (error) {
-    if (error instanceof NotFoundError) return undefined;
-    throw error;
-  }
+  const language = ((await storedConfig(s)) as { profile?: { primary_language?: unknown } } | null)?.profile?.primary_language;
+  return typeof language === "string" && language.trim() ? language.trim() : undefined;
 }
 
 /** A stored brand as the planner's source: its asset rows, stored style and copy language; generated images go to the bucket as `candidate` assets whose row carries the former sidecar as `generation`. */

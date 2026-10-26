@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
-import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
 import { detectImage } from "../../../../system/assets/index.js";
 import { loadIndexCached } from "../asset-index-cache.js";
 import { folderPlannerSource, generateForSlot, storeImage } from "../compose/planner.js";
@@ -12,6 +11,7 @@ import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, chatInstructions, type PosterRoute } from "../chat/chat-context.js";
 import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatProposal, type ChatRecord } from "../chat/chat-log.js";
+import { folderChatSource, storedChatSource, type ChatSource } from "../chat/chat-source.js";
 import {
   anchorLines,
   classifyLines,
@@ -37,12 +37,13 @@ import {
 import { referenceBackground } from "../chat/reference-background.js";
 import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, inkReader, remap, toPng } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
-import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
+import { chromiumRasteriser, folderRasterFonts, type Rasterise } from "../text-raster.js";
 import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
 import { documentExists, readDocumentRevision, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset } from "./compose.js";
 import { messages } from "../messages.js";
+import { guardStorage, resolveStored, type EditorStorage } from "../stored-read.js";
 import { handleStoreError } from "./store-errors.js";
 
 const BASE = "/api/profiles/:slug/carousels/:id/chat";
@@ -530,9 +531,11 @@ function awaitedMessage(history: ChatRecord[]): { text: string; references: Chat
   return message?.role === "user" && message.references?.length ? { text: message.text, references: message.references, asksFor: answer.asksFor } : undefined;
 }
 
+/** `storage` serves a brand cut over to storage: its log, currency and discard go through the chat repository (S10b7a); messages, references and apply are still folder-only (the guard answers 405). */
 export function chatRouter(
   getGenerator: (slug: string) => PieceGenerator,
-  rasteriserFor: (store: ProfileStore, brand: ReturnType<typeof buildChatContext>["brand"]) => Rasterise = chromiumRasteriser,
+  rasteriserFor: (store: ProfileStore, brand: ReturnType<typeof buildChatContext>["brand"]) => Rasterise = (store, brand) => chromiumRasteriser(brand, () => folderRasterFonts(store, brand)),
+  storage?: EditorStorage,
 ): Router {
   const router = Router();
 
@@ -541,16 +544,20 @@ export function chatRouter(
     return documentExists(store, id) ? store : undefined;
   }
 
-  router.get(BASE, (req, res) => {
+  /** The carousel's chat, folder or stored (one code path from here on); a 404 is already answered when this returns undefined. */
+  async function chatOf(req: { params: Record<string, string> }, res: import("express").Response): Promise<ChatSource | undefined> {
+    const stored = await resolveStored(storage && guardStorage(storage), req.params.slug!);
+    const source = stored ? await storedChatSource(stored, req.params.id!) : folderChatSource(new ProfileStore(req.params.slug!), req.params.id!);
+    if (!source) res.status(404).json({ error: `No carousel "${req.params.id}"` });
+    return source;
+  }
+
+  router.get(BASE, async (req, res) => {
     try {
-      const store = open(req.params.slug, req.params.id);
-      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
-      const log = readChatLog(store, req.params.id);
-      res.json({
-        records: log,
-        pendingProposalId: pendingProposal(log)?.id ?? null,
-        currency: readProfileCurrency(store.roots.profileDir) ?? { code: "USD", rate: 1 },
-      });
+      const chat = await chatOf(req, res);
+      if (!chat) return;
+      const log = await chat.read();
+      res.json({ records: log, pendingProposalId: pendingProposal(log)?.id ?? null, currency: await chat.currency() });
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -675,16 +682,12 @@ export function chatRouter(
 
   router.post(`${BASE}/proposals/:proposalId/discard`, async (req, res) => {
     try {
-      const store = open(req.params.slug, req.params.id);
-      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
-      if (pendingProposal(readChatLog(store, req.params.id))?.id !== req.params.proposalId) {
+      const chat = await chatOf(req, res);
+      if (!chat) return;
+      if (pendingProposal(await chat.read())?.id !== req.params.proposalId) {
         return void res.status(409).json({ error: messages.proposal.notPending });
       }
-      const record = await appendChatRecord(store, req.params.id, {
-        role: "user",
-        text: "",
-        resolves: { proposalId: req.params.proposalId, decision: "discard" },
-      });
+      const record = await chat.append({ role: "user", text: "", resolves: { proposalId: req.params.proposalId, decision: "discard" } });
       res.json({ records: [record] });
     } catch (error) {
       handleStoreError(error, res);
