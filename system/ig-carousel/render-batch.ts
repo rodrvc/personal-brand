@@ -53,12 +53,19 @@ export async function loadWithResolver(page: Page, html: string, resolve: AssetR
         problem = `resolver failed: ${(error as Error).message}`;
       }
     }
+    // The refusal names scheme, host and port too: `http://render.local:8080/...` and `https://render.local/...` are not the origin.
+    const what = `${url.protocol}//${url.host}${url.pathname}`;
     if (asset) {
-      await route.fulfill({ path: asset.path, contentType: asset.contentType });
-    } else {
-      refused.push(`${url.pathname} (${problem})`);
-      await route.abort();
+      try {
+        await route.fulfill({ path: asset.path, contentType: asset.contentType });
+        return;
+      } catch (error) {
+        // A cached file that vanished or cannot be read: the request is recorded and aborted, never left unsettled.
+        problem = `could not be served: ${(error as Error).message}`;
+      }
     }
+    refused.push(`${what} (${problem})`);
+    await route.abort().catch(() => {});
   });
   const check = (): void => {
     if (refused.length > 0) throw new Error(`The slide asked for assets it cannot have: ${refused.join(", ")}`);

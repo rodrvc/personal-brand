@@ -151,3 +151,12 @@ export class S3ObjectStore implements BlobStore {
     return results;
   }
 }
+
+/**
+ * The bucket blobs live in (the importer and the reel engine read it), from the same `S3_*` variables as the editor (`S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+ * `S3_SECRET_ACCESS_KEY`, optional `S3_ENDPOINT`, `S3_REGION`, `S3_FORCE_PATH_STYLE`); undefined when they are not all set.
+ */
+export function blobStoreFromEnv(env: NodeJS.ProcessEnv): BlobStore | undefined {
+  if (!env.S3_BUCKET || !env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY) return undefined;
+  return new S3ObjectStore({ bucket: env.S3_BUCKET, endpoint: env.S3_ENDPOINT, region: env.S3_REGION || "us-east-1", accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY, forcePathStyle: env.S3_FORCE_PATH_STYLE !== "false" });
+}

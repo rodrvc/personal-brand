@@ -387,12 +387,15 @@ the `reel-week` recipe, the input and the storyboard come from storage (`recipe_
 (`--card <id>`) appends a new clip and keeps the old one; `--assemble` stages the current clips from the blob cache, so it
 needs no output folder. Scratch (the Remotion staging dir and the audio/clip/render dir) is unique per run and removed
 afterwards, so two renders never touch each other's files. The final MP4 is written once to
-`exports/reels/<runId>/v<NNN>/reel.mp4` (the next free number) and verified; `--out <dir>` also copies it there.
+`exports/reels/<runId>/v<NNN>/reel.mp4` (the next free number) and verified; `--out <dir>` also copies it there as
+`reel-<period>-<run id prefix>-v<NNN>.mp4` (an existing file is never overwritten). If only that copy fails, the export is
+already stored: the error says so, and the exit code is 3 (not 1).
 Needs `DATABASE_URL` and `S3_*`. Folder brands are unchanged. An item `image` that is an asset id is staged from the asset library.
 
 A failed stored render keeps its work dir and prints the path: a temp dir `reel-<runId>-...` holding the audio, clips,
 renders and the run's own Remotion public dir (`public/`, passed to Remotion with `--public-dir`, so it never mixes with
-another run or with `remotion/public/`). Remove it by hand when you are done; the engine never sweeps it. Narration takes
+another run or with `remotion/public/`). That dir *replaces* the Remotion project's own `public/` tree for the render, so a
+stored render sees only the staged item images and logo font: any other static file under `remotion/public/` is not served. Remove it by hand when you are done; the engine never sweeps it. Narration takes
 finished before a *failure* are already stored (`tts_cache`). A hard interrupt (Ctrl-C, a killed process) skips that: the
 complete takes (`<card>.mp3` with its `<card>.json`) stay in `reel-<runId>-.../audio-cache/`. Re-running the same narration
 synthesises them again; copy them from there first if the provider charge matters. A stored run needs a storyboard in the

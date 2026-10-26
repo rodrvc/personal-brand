@@ -81,9 +81,13 @@ import type { ReelInput } from "./types.js";
 import { verifyOrThrow, type Period } from "./verify-items.js";
 import {
   clipInputsHash,
+  assertReelRunId,
+  copyExportToDir,
   createRunScratch,
+  exportCopyName,
   exportStoredReel,
   findStoredLogoFont,
+  isStoredAssetId,
   loadStoredReelRecipe,
   loadStoredReelRun,
   recordStoredClip,
@@ -93,6 +97,7 @@ import {
   timelineInputsHash,
   synthesiseStoredCards,
   type ReelStorage,
+  ExportCopyError,
 } from "./stored-reel.js";
 import { openReelSource } from "./stored-reel-source.js";
 import { composeMusic, durationOf, synthesise } from "./voice.js";
@@ -271,6 +276,11 @@ interface StoredContext {
   work: { dir: string };
 }
 
+/** Where a render's storyboard comes from: the run itself (with a label for messages) or a file of a folder brand. */
+type StoryboardRef =
+  | { kind: "stored"; label: string; body: Record<string, unknown> | null; workDir: string }
+  | { kind: "file"; path: string };
+
 async function main(): Promise<void> {
   const loaded = loadDotEnv(repoRoot);
   if (loaded.length > 0) {
@@ -293,7 +303,8 @@ async function main(): Promise<void> {
       return;
     }
     if (!runId) throw new Error(`Brand "${profile}" is served from storage: pass --run <runId> (the reel-week run to render).`);
-    const work = createRunScratch(tmpdir(), `reel-${runId}`);
+    // Validated before it names a temp dir: a malformed id leaves nothing behind.
+    const work = createRunScratch(tmpdir(), `reel-${assertReelRunId(runId)}`);
     scratch.push(work);
     await render(profile, source, { storage, runId, work });
     succeeded = true;
@@ -358,25 +369,29 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   const storyboardFlag = process.argv.indexOf("--storyboard");
   const storyboardArg = storyboardFlag === -1 ? undefined : process.argv[storyboardFlag + 1];
   const explicitStoryboard = storyboardArg && !storyboardArg.startsWith("--") ? resolve(storyboardArg) : undefined;
-  // A stored run carries its storyboard (or none): there is no file to name, so the label stands in for the path.
-  const storedStoryboardLabel = `the storyboard of run ${stored?.runId}`;
-  const storyboardPath = stored
-    ? storedStoryboardLabel
-    : explicitStoryboard
-      ?? (storyboardFlag !== -1 || existsSync(defaultStoryboardPath(profileDir, period.start))
-        ? defaultStoryboardPath(profileDir, period.start)
-        : undefined);
-  if (storyboardPath && scriptPath) {
+  // A stored run carries its storyboard inside the run (checked above), a folder brand has a file, or neither. The two are
+  // different things, so they are different variants: a label is never read as a path.
+  const folderStoryboardPath = explicitStoryboard
+    ?? (storyboardFlag !== -1 || existsSync(defaultStoryboardPath(profileDir, period.start)) ? defaultStoryboardPath(profileDir, period.start) : undefined);
+  const storyboardRef: StoryboardRef | undefined = stored && storedRun
+    ? { kind: "stored", label: `the storyboard of run ${stored.runId}`, body: storedRun.storyboard, workDir: stored.work.dir }
+    : folderStoryboardPath
+      ? { kind: "file", path: folderStoryboardPath }
+      : undefined;
+  const hasStoryboard = storyboardRef !== undefined;
+  const storyboardLabel = storyboardRef?.kind === "file" ? storyboardRef.path : storyboardRef?.label;
+  const folderStoryboard = storyboardRef?.kind === "file" ? storyboardRef.path : undefined;
+  if (hasStoryboard && scriptPath) {
     throw new Error(
-      `--voice and the storyboard are exclusive: ${storyboardPath} would derive the scene lengths ` +
+      `--voice and the storyboard are exclusive: ${storyboardLabel} would derive the scene lengths ` +
         "from its cards, and --voice lays one script over the fixed rhythm. Drop --voice, " +
         "or move the storyboard aside to render the legacy way.",
     );
   }
-  if (audioOnly && !storyboardPath) {
+  if (audioOnly && !hasStoryboard) {
     throw new Error("--audio-only needs a storyboard: it stops after the per-card narration and timeline.");
   }
-  if (clipModeCount > 0 && !storyboardPath) {
+  if (clipModeCount > 0 && !hasStoryboard) {
     throw new Error(
       "--clips, --card and --assemble all need a storyboard: the default fixed rhythm has no card ids " +
         "to name a clip after. Pass --storyboard, or use one of the default period's storyboard.yaml.",
@@ -391,12 +406,13 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   // How long the bed plays alone before the narration comes in — what gives an
   // opening fanfare room to land. Only meaningful when there is both a bed and
   // a voice; 0 puts the narration on the first frame, as before.
-  const narrated = Boolean(scriptPath || storyboardPath);
+  const narrated = Boolean(scriptPath || hasStoryboard);
   const introSeconds = wantsMusic && narrated ? (recipe.music?.intro_seconds ?? 0) : 0;
   /** Length of the fade from full bed to ducked bed. */
   const duckSeconds = 0.6;
 
-  const inputPath = stored ? `the input of run ${stored.runId}` : join(profileDir, "reels", "week-input.json");
+  const inputPath = join(profileDir, "reels", "week-input.json"); // folder brands only
+  const inputLabel = stored ? `the input of run ${stored.runId}` : inputPath;
   const input = storedRun ? storedRun.input : (JSON.parse(readFileSync(inputPath, "utf-8")) as ReelInput);
 
   // Every network call goes through the on-disk cache, so a re-run of the same
@@ -418,7 +434,7 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   }
 
   console.log(`Verifying items against ${period.start}..${period.end}`);
-  const verified = verifyOrThrow({ input, inputPath, bbox, period });
+  const verified = verifyOrThrow({ input, inputPath: inputLabel, bbox, period });
   console.log(`  ${verified.length} item(s) verified`);
   let items = verified;
 
@@ -431,17 +447,17 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   let storyboardCoverLabel: string | undefined;
   /** Card ids in scene order — parallel to `timeline.scenes`. Only set with a storyboard. */
   let cardIds: string[] | undefined;
-  if (storyboardPath) {
+  if (hasStoryboard) {
     if (!recipe.voice) {
       throw new Error(
         "A storyboard needs a `voice:` block in the profile's recipes/reel-week.yaml " +
           "(voice_id at minimum): which voice a brand speaks in is a profile decision.",
       );
     }
-    console.log(`Storyboard: ${storyboardPath}`);
-    const storyboard = storedRun
-      ? validateStoryboard(storedRun.storyboard, storyboardPath, input.items.length)
-      : loadStoryboard(storyboardPath, input.items.length);
+    console.log(`Storyboard: ${storyboardLabel}`);
+    const storyboard = storyboardRef.kind === "stored"
+      ? validateStoryboard(storyboardRef.body, storyboardRef.label, input.items.length)
+      : loadStoryboard(storyboardRef.path, input.items.length);
     storyboardCoverLabel = storyboard.cover_label;
     console.log(formatStoryboardTable(storyboard));
 
@@ -464,7 +480,7 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
 
     const voice = effectiveVoice(recipe.voice, storyboard.voice);
     // Stored: a scratch dir per run, filled from `tts_cache`; the dir is removed with the run, the takes stay in storage.
-    const cardsAudioDir = stored ? join(stored.work.dir, "audio-cache") : join(dirname(storyboardPath), "audio");
+    const cardsAudioDir = storyboardRef.kind === "stored" ? join(storyboardRef.workDir, "audio-cache") : join(dirname(storyboardRef.path), "audio");
     console.log("Synthesising the narration, one card at a time…");
     cardAudio = stored
       ? await synthesiseStoredCards(stored.storage, stored.runId, storyboard, voice, cardsAudioDir, { report: console.log })
@@ -474,10 +490,10 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
     cardIds = storyboard.cards.map((card) => card.id);
     for (const requested of requestedCardIds) {
       if (!cardIds.includes(requested)) {
-        throw new Error(`--card ${requested}: no such card in ${storyboardPath}. Cards: ${cardIds.join(", ")}.`);
+        throw new Error(`--card ${requested}: no such card in ${storyboardLabel}. Cards: ${cardIds.join(", ")}.`);
       }
     }
-    const timelinePath = join(stored ? stored.work.dir : dirname(storyboardPath), "timeline.json");
+    const timelinePath = join(storyboardRef.kind === "stored" ? storyboardRef.workDir : dirname(storyboardRef.path), "timeline.json");
     const timelineJson = JSON.stringify({ cards: timeline.cards, total: timeline.total }, null, 2);
     writeFileSync(timelinePath, timelineJson);
     if (stored) await recordStoredTimeline(stored.storage, stored.runId, timelineJson, timelineInputsHash(storyboard, cardAudio));
@@ -533,7 +549,8 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
         continue;
       }
       // Anything else must be a visible asset of the brand: a path would resolve to nothing, and silently.
-      const staged = /^[0-9a-f]{16}$/.test(item.image) ? await stageStoredAsset(stored.storage, item.image, stagingDir, `item${index + 1}`) : null;
+      if (!item.image) throw new Error(`Item ${index + 1} (${JSON.stringify(item.title)}): has no image; a stored reel needs an http(s) URL or an asset id for every item.`);
+      const staged = isStoredAssetId(item.image) ? await stageStoredAsset(stored.storage, item.image, stagingDir, `item${index + 1}`) : null;
       if (!staged) throw new Error(`Item ${index + 1} (${JSON.stringify(item.title)}): image ${JSON.stringify(item.image)} is neither an http(s) URL nor a visible asset of this brand.`);
       imageSrcs.push(`${stagingRel}/${staged.name}`);
       continue;
@@ -560,7 +577,7 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
       const font = readdirSync(fontsDir).find((name) => name.endsWith(".woff2"));
       if (font) {
         copyFileSync(join(fontsDir, font), join(stagingDir, font));
-        logoFontFile = `staging/${font}`;
+        logoFontFile = `${stagingRel}/${font}`;
       }
     } catch {
       // No font folder: the composition falls back to the named brand font.
@@ -956,28 +973,23 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   // A stored reel is final once it is in the bucket: the export key holds it, verified by `head`.
   if (stored) {
     const exported = await exportStoredReel(stored.storage, stored.runId, finalPath);
-    console.log(`\nReel exported: ${exported.key} (v${String(exported.versionNo).padStart(3, "0")})`);
+    console.log(`\nReel exported: ${exported.key} (${exported.versionLabel})`);
     const outFlag = flag("out");
     if (outFlag) {
-      mkdirSync(outFlag, { recursive: true });
-      const copy = join(outFlag, `reel-${period.start}-v${String(exported.versionNo).padStart(3, "0")}.mp4`);
-      try {
-        copyFileSync(finalPath, copy, constants.COPYFILE_EXCL);
-        console.log(`Copy: ${resolve(copy)}`);
-      } catch (error) {
-        // The export is already in the bucket and verified: an existing file is reported, never overwritten, and is not a failure.
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        console.log(`Copy not written: ${resolve(copy)} already exists (left as it is).`);
-      }
+      // The export is final and verified, so a copy that cannot be written is reported as such (ExportCopyError), never as a failed export.
+      const copy = copyExportToDir(finalPath, outFlag, exportCopyName(period.start, stored.runId, exported.versionLabel), exported.key);
+      if (copy.result === "copied") console.log(`Copy: ${copy.path}`);
+      else if (copy.result === "exists-same") console.log(`Copy not written: ${copy.path} already exists with the same content.`);
+      else console.log(`Copy not written: ${copy.path} already exists with other content (left as it is).`);
     }
     return;
   }
 
   // --- copy card audio files and storyboard/timeline snapshots to output ---
-  if (cardAudio.length > 0) {
+  if (cardAudio.length > 0 && folderStoryboard) {
     const cardsDir = join(audioDir, "cards");
     mkdirSync(cardsDir, { recursive: true });
-    const cardsAudioDir = join(dirname(storyboardPath!), "audio");
+    const cardsAudioDir = join(dirname(folderStoryboard), "audio");
     for (const audio of cardAudio) {
       if (audio.path && existsSync(audio.path)) {
         const fileName = basename(audio.path);
@@ -988,11 +1000,11 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
   }
 
   // Copy storyboard and timeline as snapshots of what was rendered
-  if (storyboardPath && existsSync(storyboardPath)) {
-    copyFileSync(storyboardPath, join(outputDir, "storyboard.yaml"));
+  if (folderStoryboard && existsSync(folderStoryboard)) {
+    copyFileSync(folderStoryboard, join(outputDir, "storyboard.yaml"));
   }
-  const timelinePath = join(dirname(storyboardPath || ""), "timeline.json");
-  if (storyboardPath && existsSync(timelinePath)) {
+  const timelinePath = join(dirname(folderStoryboard ?? ""), "timeline.json");
+  if (folderStoryboard && existsSync(timelinePath)) {
     copyFileSync(timelinePath, join(outputDir, "timeline.json"));
   }
 
@@ -1002,5 +1014,5 @@ async function render(profile: string, source: RenderSource, stored?: StoredCont
 
 main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exit(error instanceof ExportCopyError ? error.exitCode : 1);
 });

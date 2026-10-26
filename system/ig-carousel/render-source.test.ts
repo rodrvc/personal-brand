@@ -117,6 +117,18 @@ const tests: Array<[string, () => Promise<void>]> = [
     }
     await assert.rejects(loadStoredLayoutTemplate(repos.documents, brandId, "no-such-template", brand), /No layout template found for id "no-such-template"/);
   }],
+  ["a stored template of its own (no engine default) resolves, and an invalid one names the stored template", async () => {
+    const { repos, brandId } = await storedExample();
+    const brand = loadBrand(EXAMPLE);
+    const base = await loadStoredLayoutTemplate(repos.documents, brandId, "explicativo", brand);
+    await repos.documents.put(brandId, "template", "own-layout", { json: base, schemaVersion: 1 }, meta);
+    assert.deepEqual(await loadStoredLayoutTemplate(repos.documents, brandId, "own-layout", brand), base);
+    await repos.documents.put(brandId, "template", "broken-layout", { json: { zones: "not-an-object" }, schemaVersion: 1 }, meta);
+    await assert.rejects(loadStoredLayoutTemplate(repos.documents, brandId, "broken-layout", brand), /Invalid layout template "broken-layout" \(resolved from the stored template "broken-layout"\)/);
+    // On an engine default id the error names both the default and the stored override.
+    await repos.documents.put(brandId, "template", "explicativo", { json: { zones: "not-an-object" }, schemaVersion: 1 }, meta);
+    await assert.rejects(loadStoredLayoutTemplate(repos.documents, brandId, "explicativo", brand), /\+ the stored template "explicativo"\)/);
+  }],
   ["a stored brand applies its rules, and needs --input and --out", async () => {
     const { repos, brandId } = await storedExample();
     await repos.rules.create(brandId, { kind: "forbidden_terms", params: { terms: ["bargain"], fields: ["title"], slides: "all" }, severity: "error", appliesTo: ["carousel"], message: "no bargains" }, meta);

@@ -19,8 +19,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { BlobHashMismatchError, putAt, putBlob, type BlobCache } from "@personal-brand/storage/blob";
 import {
@@ -45,6 +45,20 @@ import type { ReelInput } from "./types.js";
 import type { VoiceConfig } from "./voice.js";
 
 export const REEL_RECIPE = "reel-week";
+
+/** A run id is a row UUID (the shape `reelExportKey` also demands); anything else never reaches a path or a query. */
+const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The id of an asset (an item image or a font) in the brand's library: 16 lowercase hex characters, as the asset contract mints them. */
+const ASSET_ID = /^[0-9a-f]{16}$/;
+
+export const isStoredAssetId = (value: unknown): value is string => typeof value === "string" && ASSET_ID.test(value);
+
+/** Refuses a `--run` value that is not a run UUID, before it is used in a temp path or sent to the database. */
+export function assertReelRunId(runId: string): string {
+  if (!RUN_ID.test(runId)) throw new Error(`--run ${JSON.stringify(runId.slice(0, 64))}: not a run id (expected a UUID such as 123e4567-e89b-42d3-a456-426614174000).`);
+  return runId;
+}
 
 /** What a stored reel render needs, for one brand. Tests pass memory repositories and a fake object store. */
 export interface ReelStorage {
@@ -123,8 +137,8 @@ function sidecarSeconds(sidecarPath: string, hash: string): number | undefined {
 }
 
 /**
- * Per-card narration for a stored run. A card whose narration hash has a `tts_cache` take is laid into `audioDir` from
- * the blob cache (no API call); the rest are synthesised by the unchanged `synthesiseCards` into that same dir, then
+ * Per-card narration for a stored run. `audioDir` is run-owned scratch (a unique dir the caller removes with the run), never
+ * a shared directory. A card whose narration hash has a `tts_cache` take is laid into it from the blob cache (no API call); the rest are synthesised by the unchanged `synthesiseCards` into that same dir, then
  * stored as a blob + `tts_cache` take. Every spoken card is recorded as an `audio` artifact of the run.
  */
 export async function synthesiseStoredCards(
@@ -142,7 +156,15 @@ export async function synthesiseStoredCards(
     const [mp3, sidecarPath] = [join(audioDir, `${card.id}.mp3`), join(audioDir, `${card.id}.json`)];
     // A retry in the same dir: the card is already here for this very narration (laid before, or synthesised before the failure). Keep it.
     const hash = narrationCacheKey(card.narration, voice);
-    if (existsSync(mp3) && sidecarSeconds(sidecarPath, hash) !== undefined) continue;
+    if (existsSync(mp3) && sidecarSeconds(sidecarPath, hash) !== undefined) {
+      // Already stored (laid from the cache earlier): remember it so the storing loop records no second take for it.
+      try {
+        laid.set(card.id, (await storage.tts.get(storage.brandId, hash)).sha256);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) throw error;
+      }
+      continue;
+    }
     // Files of another narration in this scratch dir (a stale retry): drop the links so nothing writes through a staged cache file.
     rmSync(mp3, { force: true });
     rmSync(sidecarPath, { force: true });
@@ -247,7 +269,7 @@ const MAX_EXPORT_ATTEMPTS = 8;
  * 412, which `putAt` turns into the existing-object check); a backend that ignores it would overwrite. The check by `head`
  * compares size and the `sha256` metadata `putAt` wrote itself: that is the writer's own claim, not a content check.
  */
-export async function exportStoredReel(storage: ReelStorage, runId: string, file: string): Promise<{ key: string; versionNo: number; sha256: string }> {
+export async function exportStoredReel(storage: ReelStorage, runId: string, file: string): Promise<{ key: string; versionNo: number; versionLabel: string; sha256: string }> {
   const bytes = readFileSync(file);
   const sha256 = sha256Of(bytes);
   const taken = (await storage.store.list(reelExportPrefix(storage.brandId, runId))).map((entry) => /\/v(\d+)\/reel\.mp4$/.exec(entry.key)?.[1]);
@@ -258,10 +280,79 @@ export async function exportStoredReel(storage: ReelStorage, runId: string, file
       await putAt(storage.store, key, bytes, "video/mp4");
       const head = await storage.store.head(key);
       if (head.size !== bytes.byteLength || head.metadata.sha256 !== sha256) throw new Error(`Export ${key} did not verify: size or sha256 differ from the rendered file.`);
-      return { key, versionNo, sha256 };
+      // The label (`v001`) is read back from the key, which owns the format.
+      const versionLabel = /\/(v\d+)\/reel\.mp4$/.exec(key)?.[1];
+      if (!versionLabel) throw new Error(`Export key ${key} has no version label.`);
+      return { key, versionNo, versionLabel, sha256 };
     } catch (error) {
       if (!(error instanceof InvalidInputError) || attempt >= MAX_EXPORT_ATTEMPTS) throw error;
     }
+  }
+}
+
+/** Raised when the optional `--out` copy fails after the export is already stored and verified. */
+export class ExportCopyError extends Error {
+  readonly exitCode = 3;
+  constructor(exportKey: string, cause: unknown) {
+    super(`The reel is already exported and verified (${exportKey}); only the --out copy failed: ${(cause as Error).message}. Copy it from the kept work dir, or fetch the export.`, { cause });
+  }
+}
+
+/** `reel-<period>-<first 8 of the run id>-<vNNN>.mp4`: the run id keeps two runs of one period from sharing a name. */
+export const exportCopyName = (periodStart: string, runId: string, versionLabel: string): string => `reel-${periodStart}-${runId.slice(0, 8)}-${versionLabel}.mp4`;
+
+/** Errors of a filesystem that cannot hard-link (exFAT/FAT32, some network shares): the copy then goes straight to the final name. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "ENOSYS", "EXDEV"]);
+
+/**
+ * Copies the exported file into `dir` without ever overwriting. An existing file is `"exists-same"` (identical bytes) or
+ * `"exists-different"` (left as it is). Any other failure is an `ExportCopyError`, because the export itself is already final.
+ * `link` is injectable so the no-hard-links path is testable on any filesystem.
+ */
+export function copyExportToDir(file: string, dir: string, name: string, exportKey: string, link: typeof linkSync = linkSync): { path: string; result: "copied" | "exists-same" | "exists-different" } {
+  const copy = join(dir, name);
+  const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    throw new ExportCopyError(exportKey, error); // also an existing file where the dir should be (EEXIST)
+  }
+  // Copied to `<name>.partial` (exclusive) and linked to the final name, so the final name never holds half a file and an existing
+  // one is never replaced. Only a partial this call created is removed; a stale one from an earlier run is never touched.
+  const partial = `${copy}.partial`;
+  let created = false;
+  try {
+    try {
+      copyFileSync(file, partial, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (codeOf(error) === "EEXIST") {
+        throw new ExportCopyError(exportKey, new Error(`${resolve(partial)} is left over from an earlier copy: check it and remove it by hand, then run again`));
+      }
+      rmSync(partial, { force: true }); // a failed copy may have left a partial of ours
+      throw error;
+    }
+    created = true;
+    try {
+      link(partial, copy);
+    } catch (error) {
+      if (!NO_HARD_LINKS.has(codeOf(error) ?? "")) throw error;
+      rmSync(partial, { force: true });
+      created = false;
+      copyFileSync(file, copy, constants.COPYFILE_EXCL); // no hard links here: straight to the final name (EEXIST still means "exists")
+    }
+    return { path: resolve(copy), result: "copied" };
+  } catch (error) {
+    if (error instanceof ExportCopyError) throw error;
+    if (codeOf(error) !== "EEXIST") throw new ExportCopyError(exportKey, error);
+    try {
+      // Sizes first: different sizes need no hashing of two reels.
+      const same = statSync(file).size === statSync(copy).size && sha256Of(readFileSync(file)) === sha256Of(readFileSync(copy));
+      return { path: resolve(copy), result: same ? "exists-same" : "exists-different" };
+    } catch {
+      return { path: resolve(copy), result: "exists-different" }; // not a readable file (a directory, say): left as it is
+    }
+  } finally {
+    if (created) rmSync(partial, { force: true });
   }
 }
 
