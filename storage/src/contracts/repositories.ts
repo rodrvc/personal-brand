@@ -78,8 +78,13 @@ export interface Revision {
   createdAt: string;
 }
 
+/** A revision without its body: what a history listing needs, with none of the stored documents loaded. */
+export type RevisionHead = Omit<Revision, "body" | "bodyText">;
+
 export interface RevisionRepository {
   list(entityType: RevisionEntity, entityId: string): Promise<Revision[]>;
+  /** `list` without the bodies, oldest first, optionally only the given reasons. An unknown entity is an empty list. */
+  listHeads(entityType: RevisionEntity, entityId: string, reasons?: RevisionReason[]): Promise<RevisionHead[]>;
   get(entityType: RevisionEntity, entityId: string, version: number): Promise<Revision>;
   /** One brand's revisions of one entity type created strictly after `since` (an ISO instant), oldest first (then entity id, then version). One query, however many entities changed. */
   listSince(brandId: string, entityType: RevisionEntity, since: string): Promise<Revision[]>;

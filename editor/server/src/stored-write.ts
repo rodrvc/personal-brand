@@ -1,5 +1,6 @@
 import { BrandArchivedError, InvalidInputError, VersionConflictError, type RevisionReason } from "@personal-brand/storage/contracts";
 
+import { approveCandidates, pinnedAssetIds } from "./stored-assets.js";
 import { assertValidCarouselId, isStructuralChange } from "./document-store.js";
 import { messages } from "./messages.js";
 import { editorStatus, etagOf, storedCarouselRaw, validateStored, type StoredBrand } from "./stored-read.js";
@@ -58,6 +59,10 @@ export async function saveStoredCarousel(s: StoredBrand, id: string, body: unkno
       { title: result.document.title, document: { json: document, schemaVersion: 1 } },
       { expectedVersion: expected, author: "editor", source: "editor", reason },
     );
+    // Pinning approves the asset (asset-library: "pinning approves it"). Every pinned piece is considered on each save, not
+    // only newly pinned ones as the folder does: approving is idempotent, and a failure here (the save is committed and must
+    // answer 200) is logged and retried by the next save instead of being lost.
+    await approveCandidates(s, pinnedAssetIds(result.document), "editor").catch((approveError: unknown) => console.error("Approving pinned assets failed:", approveError));
     return { status: 200, etag: etagOf(saved.version), body: { ...result.document, status: editorStatus(saved.value.status) } };
   } catch (error) {
     // The row exists (just read), so `currentVersion` is never null here: a lost race, answered with the winner's copy.

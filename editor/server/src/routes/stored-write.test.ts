@@ -14,6 +14,7 @@ const root = mkdtempSync(join(tmpdir(), "editor-server-stored-write-"));
 process.env.BRAND_PROFILES_DIR = join(root, "profiles");
 
 const { default: express } = await import("express");
+const { createStorageAssetLibrary } = await import("../../../../system/assets/storage-library.js");
 const { profilesRouter } = await import("./profiles.js");
 const { renderRouter } = await import("./render.js");
 const { composeRouter } = await import("./compose.js");
@@ -35,14 +36,16 @@ const slide = (id: string) => ({ id, kind: "cover", background: { mode: "color",
 const document = { schemaVersion: 1, id: "week-one", title: "First title", createdAt: STAMP, updatedAt: STAMP, canvas: { w: 1080, h: 1350 }, prompt: { text: "x", createdAt: STAMP }, slides: [slide("s1")] };
 const carousel = await repos.carousels.create(brand.id, { slug: "week-one", title: "First title", document: { json: document, schemaVersion: 1 } }, meta);
 
-const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: new FakeObjectStore(), blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
+const objects = new FakeObjectStore();
+const library = createStorageAssetLibrary({ assets: repos.assets, blobs: objects, brandId: brand.id });
+const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: objects, blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
 app.use(profilesRouter(storage));
 app.use(renderRouter(storage));
 app.use(composeRouter(() => new NonePieceGenerator(), storage));
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((resolve) => server.once("listening", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/profiles`;
 
@@ -55,7 +58,7 @@ async function withApp(override: Partial<EditorStorage>, run: (url: string) => P
   const extra = express();
   extra.use(express.json());
   extra.use(profilesRouter({ ...storage, ...override }));
-  const extraServer = extra.listen(0);
+  const extraServer = extra.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => extraServer.once("listening", resolve));
   try {
     await run(`http://127.0.0.1:${(extraServer.address() as AddressInfo).port}/api/profiles/${SLUG}`);
@@ -146,7 +149,10 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.deepEqual([res.headers.get("etag"), row.value.title, row.value.status], [`"${row.version}"`, "Brand new", "draft"]);
     assert.equal("status" in ((await repos.revisions.get("carousel", row.id, 1)).body as { document: object }).document, false, "the column owns status");
     assert.equal((await put({ ...created, title: "Renamed" }, res.headers.get("etag")!, `/${SLUG}/carousels/fresh-one`)).status, 200);
-    assert.equal((await create({ title: "Again", blank: true, id: "fresh-one" })).status, 409);
+    const duplicate = await create({ title: "Again", blank: true, id: "fresh-one" });
+    assert.equal(duplicate.status, 409);
+    assert.equal(((await duplicate.json()) as { error: string }).error, 'Ya existe un carrusel "fresh-one".', "the guarded storage passes AlreadyExistsError (a VersionConflictError) through, so the message is the duplicate's, not the save conflict's");
+    for (const bad of [{ title: 7, blank: true }, { title: {}, blank: true }, { title: "T", templateId: 3 }, { title: "T", blank: true, id: 9 }]) assert.equal((await create(bad)).status, 400, JSON.stringify(bad));
     assert.equal((await create({ title: "Both", blank: true, templateId: null })).status, 400);
     assert.equal((await create({ blank: true })).status, 400);
     assert.equal((await create({ title: "Planned", prompt: "make slides" })).status, 501);
@@ -155,6 +161,36 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await create({ title: "Missing template", templateId: "no-such-template", id: "tmpl-one" })).status, 400);
     assert.equal((await repos.carousels.list(brand.id)).some((c) => c.value.slug === "tmpl-one"), false);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
+  }],
+  ["saving a document that pins an asset approves it once, and an unpinned candidate stays a candidate", async () => {
+    const [pinned, loose] = await Promise.all(["pinned piece", "loose piece"].map(async (text, i) => {
+      const asset = await library.register(Buffer.from(text), { destRelPath: `pin-${i}.png` });
+      await repos.assets.update(brand.id, asset.id, { status: "candidate" }, { ...meta, expectedVersion: (await repos.assets.get(brand.id, asset.id)).version });
+      return asset;
+    }));
+    const pin = (id: string, isPinned: boolean) => ({ id: `s-${id}`, kind: "cover", background: { mode: "asset", assetId: id, pinned: isPinned, source: "ai" }, objects: [] });
+    const v = await current();
+    const res = await put({ ...document, slides: [pin(pinned.id, true), pin(loose.id, false)] }, `"${v}"`);
+    assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
+    assert.equal((await repos.assets.get(brand.id, pinned.id)).value.status, "approved");
+    assert.equal((await repos.assets.get(brand.id, loose.id)).value.status, "candidate");
+    const audit = (await repos.revisions.list("brand_asset", (await repos.assets.get(brand.id, pinned.id)).id)).at(-1)!;
+    assert.deepEqual([audit.reason, audit.author], ["status", "editor"]);
+  }],
+  ["approving pinned assets reads each id (never lists the library), and one failure does not stop the others: they fail together at the end", async () => {
+    const { approveCandidates } = await import("../stored-assets.js");
+    const [first, second] = await Promise.all(["first piece", "second piece"].map(async (text, i) => {
+      const asset = await library.register(Buffer.from(text), { destRelPath: `multi-${i}.png` });
+      await repos.assets.update(brand.id, asset.id, { status: "candidate" }, { ...meta, expectedVersion: (await repos.assets.get(brand.id, asset.id)).version });
+      return asset;
+    }));
+    const assets = { ...repos.assets, list: async () => { throw new Error("must not list"); }, update: async (...args: Parameters<typeof repos.assets.update>) => { if (args[1] === first.id) throw new Error("disk full"); return repos.assets.update(...args); } };
+    await assert.rejects(
+      () => approveCandidates({ storage: { ...storage, assets } as EditorStorage, slug: SLUG, brandId: brand.id }, new Set([first.id, "0000000000000000", second.id]), "editor"),
+      (error) => error instanceof AggregateError && error.errors.length === 1 && /1 of 3.*disk full/.test(error.message),
+    );
+    assert.equal((await repos.assets.get(brand.id, second.id)).value.status, "approved", "the other asset was approved despite the failure");
+    assert.equal((await repos.assets.get(brand.id, first.id)).value.status, "candidate");
   }],
   ["creating with a template id (and with none, the default) works; an archived brand is 403, a bad id 400 and a storage outage 503", async () => {
     const create = (body: object, url = `${base}/${SLUG}`) => fetch(`${url}/carousels`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
@@ -175,7 +211,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     down.use(express.json());
     const unreachable = async () => { throw new Error("connection refused"); };
     down.use(composeRouter(() => new NonePieceGenerator(), { ...storage, brands: { getBySlug: unreachable, list: unreachable } }));
-    const downServer = down.listen(0);
+    const downServer = down.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => downServer.once("listening", resolve));
     try {
       assert.equal((await create({ title: "Down", blank: true }, `http://127.0.0.1:${(downServer.address() as AddressInfo).port}/api/profiles/${SLUG}`)).status, 503);
@@ -242,7 +278,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const corruptApp = express();
     corruptApp.use(express.json());
     corruptApp.use(profilesRouter(corrupt));
-    const corruptServer = corruptApp.listen(0);
+    const corruptServer = corruptApp.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => corruptServer.once("listening", resolve));
     const url = `http://127.0.0.1:${(corruptServer.address() as AddressInfo).port}/api/profiles/${SLUG}`;
     const log = console.error;

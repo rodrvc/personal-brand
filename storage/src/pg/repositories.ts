@@ -255,6 +255,12 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       if (!isUuid(entityId)) return [];
       return (await sql`SELECT * FROM revisions WHERE entity_type = ${entityType} AND entity_id = ${entityId} ORDER BY version`).map(toRevision);
     },
+    async listHeads(entityType, entityId, reasons) {
+      if (!isUuid(entityId)) return [];
+      const rows = await sql`SELECT brand_id, entity_type, entity_id, version, reason, author, source, source_hash, created_at FROM revisions
+                             WHERE entity_type = ${entityType} AND entity_id = ${entityId} AND (${reasons === undefined} OR reason = ANY(${reasons ?? []})) ORDER BY version`;
+      return rows.map((row) => { const { body: _body, bodyText: _bodyText, ...head } = toRevision({ ...row, body: null, body_text: null }); return head; });
+    },
     async get(entityType, entityId, version) {
       const [row] = isUuid(entityId)
         ? await sql`SELECT * FROM revisions WHERE entity_type = ${entityType} AND entity_id = ${entityId} AND version = ${version}`

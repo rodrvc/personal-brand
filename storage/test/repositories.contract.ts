@@ -199,6 +199,12 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       const revs = await r.revisions.list("brand_guidance", put.id);
       assert.deepEqual(revs.map((x) => [x.version, x.bodyText]), [[1, "# Criteria"], [2, "# New"]], "guidance history supports `--since` diffs");
       assert.deepEqual((await r.guidance.list(a.id)).map((x) => x.id).sort(), [put.id, (await r.guidance.get(a.id, "alpha")).id, (await r.guidance.get(a.id, "big")).id].sort(), "list carries the entity ids that revisions use");
+      const heads = await r.revisions.listHeads("brand_guidance", put.id);
+      assert.deepEqual(heads.map((x) => [x.version, x.reason, "body" in x, "bodyText" in x]), [[1, "save", false, false], [2, "save", false, false]], "heads carry no bodies");
+      assert.deepEqual((await r.revisions.listHeads("brand_guidance", put.id, ["snapshot"])).length, 0, "the reason filter");
+      assert.equal((await r.revisions.listHeads("brand_guidance", put.id, ["save", "snapshot"])).length, 2);
+      assert.deepEqual(await r.revisions.listHeads("brand_guidance", put.id, []), [], "an empty reason list matches nothing, on both backends");
+      assert.deepEqual(await r.revisions.listHeads("brand_guidance", "00000000-0000-4000-8000-000000000000"), []);
       // listSince: one query across entities, brand-scoped, type-scoped and exclusive of the cursor.
       const other = await r.brands.create({ slug: "example", displayName: "E" }, meta());
       await o.put(other.id, "elsewhere", { description: "", body: "z" }, meta());

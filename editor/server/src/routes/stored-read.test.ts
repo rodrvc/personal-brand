@@ -94,11 +94,11 @@ failingApp.use("/api/profiles/:slug", storedBrandGuard(failing));
 failingApp.use(profilesRouter(failing));
 const racingApp = express();
 racingApp.use(profilesRouter(racing));
-const failingServer = failingApp.listen(0);
-const racingServer = racingApp.listen(0);
+const failingServer = failingApp.listen(0, "127.0.0.1");
+const racingServer = racingApp.listen(0, "127.0.0.1");
 await Promise.all([failingServer, racingServer].map((srv) => new Promise<void>((resolve) => srv.once("listening", resolve))));
 const urlOf = (srv: typeof failingServer) => `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/profiles`;
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((resolve) => server.once("listening", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/profiles`;
 
@@ -128,7 +128,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["an archived cut-over brand is not in the picker (nor is its folder twin), but the guard still serves it as stored", async () => {
     mkdirSync(join(root, "profiles", "archived-cut"), { recursive: true });
     assert.ok(!(await json("/")).body.profiles.some((p: { slug: string }) => p.slug === "archived-cut"));
-    assert.equal((await json("/archived-cut/carousels/x/stats")).status, 501);
+    assert.equal((await json("/archived-cut/assets/0123456789abcdef/generation")).status, 501);
   }],
   ["a storage outage while the page loads fails the PNG with a 503 and is not cached", async () => {
     const real = storage.blobs;
@@ -136,7 +136,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const flaky = { ...storage, blobs: (brandId: string) => ({ read: async (sha: string) => { if (broken) throw new Error("blob store down"); return real(brandId).read(sha); } }) };
     const flakyApp = express();
     flakyApp.use(renderRouter(flaky));
-    const flakyServer = flakyApp.listen(0);
+    const flakyServer = flakyApp.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => flakyServer.once("listening", resolve));
     const log = console.error;
     console.error = () => {};
@@ -213,25 +213,47 @@ const tests: Array<[string, () => Promise<void>]> = [
     const chat = await json(`/${SLUG}/carousels/week-one/chat`);
     assert.deepEqual(chat.body, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } });
     assert.deepEqual((await json(`/${SLUG}/carousels/week-one/outputs`)).body, { versions: [] });
-    for (const path of ["stats"]) {
-      const res = await json(`/${SLUG}/carousels/week-one/${path}`);
-      assert.equal(res.status, 501, path);
-    }
     assert.equal((await json(`/${SLUG}/assets/0123456789abcdef/generation`)).status, 501);
-    assert.match((await json(`/${SLUG}/carousels/week-one/stats`)).body.error, /próximo cambio/);
+    assert.match((await json(`/${SLUG}/assets/0123456789abcdef/generation`)).body.error, /próximo cambio/);
+    assert.equal(existsSync(join(root, "profiles", SLUG)), false);
+  }],
+  ["stats come from storage: this carousel's library ratio and the others' history, newest first; an unknown one is 404", async () => {
+    await repos.carousels.create(brand.id, { slug: "stats-other", title: "Other", document: { json: { ...document, id: "stats-other", updatedAt: "2026-08-18T10:00:00.000Z", slides: [{ id: "s1", kind: "cover", background: { mode: "asset", assetId: image.id, pinned: false, source: "ai" }, objects: [] }] }, schemaVersion: 1 } }, meta);
+    const { status, body } = await json(`/${SLUG}/carousels/week-one/stats`);
+    assert.equal(status, 200);
+    assert.equal(body.carouselId, "week-one");
+    assert.equal(body.libraryRatio, 100);
+    assert.deepEqual(body.history[0], { carouselId: "stats-other", updatedAt: "2026-08-18T10:00:00.000Z", libraryRatio: 0 });
+    assert.ok(body.history.every((h: { carouselId: string }) => h.carouselId !== "week-one"));
+    assert.equal((await json(`/${SLUG}/carousels/nope-one/stats`)).status, 404);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["the gate sees the decoded slug, so an encoded one cannot dodge it", async () => {
     const encoded = SLUG.replace("-", "%2D");
-    assert.equal((await json(`/${encoded}/carousels/week-one/stats`)).status, 501);
+    assert.equal((await json(`/${encoded}/assets/0123456789abcdef/generation`)).status, 501);
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["chat, plan/apply and regenerate are still 405 for a stored brand (S10b4), whatever the body", async () => {
-    for (const path of ["chat/messages", "plan/apply", "regenerate"]) {
+  ["chat and plan/apply are still 405 for a stored brand (S10b5), whatever the body", async () => {
+    for (const path of ["chat/messages", "plan/apply"]) {
       const res = await json(`/${SLUG}/carousels/week-one/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       assert.equal(res.status, 405, path);
     }
+    assert.equal(existsSync(join(root, "profiles", SLUG)), false);
+  }],
+  ["regenerate for a stored brand serves only the final-prompt preview (no model call, no write); generating is 501", async () => {
+    const post = (body: object, query = "") => json(`/${SLUG}/carousels/week-one/regenerate${query}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const before = (await json(`/${SLUG}/carousels/week-one`)).etag;
+    const preview = await post({ target: { slideId: "s1", objectId: "background" }, preview: true });
+    assert.equal(preview.status, 200);
+    assert.match(preview.body.prompt, /\S/);
+    assert.equal((await post({ target: { slideId: "s1", objectId: "background" }, prompt: " my words " }, "?dryRun=true")).body.prompt.startsWith("my words"), true, "the override replaces the suggestion");
+    assert.equal((await post({ target: { slideId: "s1", scope: "unpinned" }, preview: true })).status, 400);
+    assert.equal((await post({ target: { slideId: "nope" }, preview: true })).status, 404);
+    assert.equal((await post({ preview: true })).status, 400);
+    for (const target of [{ slideId: 5, objectId: "background" }, { slideId: "s1", objectId: 5 }, { slideId: "nope" }]) assert.equal((await post({ target, preview: true })).status, target.slideId === "nope" ? 404 : 400, JSON.stringify(target));
+    assert.equal((await post({ target: { slideId: "s1", objectId: "background" } })).status, 501);
+    assert.equal((await json(`/${SLUG}/carousels/week-one`)).etag, before, "nothing was written");
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["an invalid template params JSON is a 400, and the free template does not need it", async () => {
