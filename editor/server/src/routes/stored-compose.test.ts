@@ -9,7 +9,7 @@ import { BlobCache, FakeObjectStore } from "@personal-brand/storage/blob";
 import { NotFoundError, ObjectNotFoundError, PreconditionFailedError } from "@personal-brand/storage/contracts";
 import { createMemoryRepositories } from "@personal-brand/storage/memory";
 
-/** The planner for a stored brand (S10b5): plan preview, plan/apply, the regenerate prompt check and the stats history, over real HTTP, the memory repositories and a fake generator (no network). */
+/** The planner for a stored brand (S10b5): plan preview, plan/apply (resume, races), generating regenerate and the stats history, over real HTTP, the memory repositories and a fake generator (no network). */
 const root = mkdtempSync(join(tmpdir(), "editor-server-stored-compose-"));
 process.env.BRAND_PROFILES_DIR = join(root, "profiles");
 
@@ -18,6 +18,8 @@ const { createStorageAssetLibrary } = await import("../../../../system/assets/st
 const { composeRouter } = await import("./compose.js");
 const { storedBrandGuard } = await import("../stored-read.js");
 const { approveCandidates } = await import("../stored-assets.js");
+const { storedPlannerSource } = await import("../stored-compose.js");
+const { setPlanClock } = await import("./compose.js");
 const { guardStorage, resolveStored } = await import("../stored-read.js");
 const { putBlob } = await import("@personal-brand/storage/blob");
 type EditorStorage = import("../stored-read.js").EditorStorage;
@@ -39,12 +41,15 @@ const library = createStorageAssetLibrary({ assets: repos.assets, blobs: objects
 const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: objects, blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
 
 /** A generator that never leaves the process: copy per slide, a 1x1 PNG per image, and optional failure on the n-th image. */
-const calls = { prompts: [] as string[], images: 0, failOnImage: 0 };
+const calls = { prompts: [] as string[], languages: [] as Array<string | undefined>, images: 0, failOnImage: 0, hold: undefined as Promise<void> | undefined, onImage: undefined as ((n: number) => Promise<void>) | undefined };
 const generator = {
-  draftCopy: async (plan: { slides: Array<{ slideId: string }> }) => ({ slides: plan.slides.map((s) => ({ slideId: s.slideId, headline: `Headline ${s.slideId}`, body: "Body" })), model: "fake", costCents: 0 }),
+  draftCopy: async (plan: { slides: Array<{ slideId: string }>; brand?: { language?: string } }) => (calls.languages.push(plan.brand?.language), { slides: plan.slides.map((s) => ({ slideId: s.slideId, headline: `Headline ${s.slideId}`, body: "Body" })), model: "fake", costCents: 0 }),
   generateImage: async (spec: { prompt: string }) => {
     calls.prompts.push(spec.prompt);
-    if (++calls.images === calls.failOnImage) throw new Error("provider down");
+    const n = ++calls.images;
+    await calls.onImage?.(n);
+    await calls.hold;
+    if (n === calls.failOnImage) throw new Error("provider down");
     return { buffer: PNG, mime: "image/png", model: "fake-image", costCents: 4, usedReferenceIds: [] };
   },
   completeJson: async () => ({ json: {}, model: "fake", costCents: 0 }),
@@ -66,7 +71,7 @@ const post = async (path: string, body: unknown, base = main.base) => {
   return { status: res.status, body: (await res.json()) as any, etag: res.headers.get("etag") };
 };
 const row = (id: string) => repos.carousels.get(brand.id, id, (b) => b);
-const slide = (id: string) => ({ id, kind: "step", background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" }, objects: [] });
+const slide = (id: string, objects: object[] = []) => ({ id, kind: "step", background: { mode: "color", colorKey: "paper", pinned: false, source: "manual" }, objects });
 const base = { schemaVersion: 1, createdAt: STAMP, updatedAt: STAMP, canvas: { w: 1080, h: 1350 }, prompt: { text: "weekly tips", createdAt: STAMP } };
 
 const tests: Array<[string, () => Promise<void>]> = [
@@ -95,15 +100,121 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await objects.get(generated[0]!.value.blobKey)).body.equals(PNG), true);
     assert.equal((await post(`/${SLUG}/carousels/planned/plan/apply`, {})).status, 404, "the plan is spent");
   }],
-  ["a generation failing mid-apply answers 202 with the slots done so far already stored, and a retry finishes", async () => {
-    assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "flaky", prompt: "weekly tips" })).status, 201);
-    calls.failOnImage = calls.images + 2;
-    const partial = await post(`/${SLUG}/carousels/flaky/plan/apply`, {});
-    assert.equal(partial.status, 202);
-    assert.match(partial.body.error, /provider down/);
-    assert.equal(JSON.stringify((await row("flaky")).value.document).includes('"source":"ai"'), true, "the first generated slot was persisted");
-    assert.equal((await post(`/${SLUG}/carousels/flaky/plan/apply`, {})).status, 201);
-    calls.failOnImage = 0;
+  ["a generation failing mid-apply answers 202 with the slots done so far already stored, and a retry resumes from them without paying again", async () => {
+    const preview = await post(`/${SLUG}/carousels?mode=plan`, { id: "flaky", prompt: "weekly tips" });
+    assert.equal(preview.status, 201);
+    const total = preview.body.generatedPieces as number;
+    assert.equal(total >= 2, true, "the plan has slots to resume");
+    const start = calls.images;
+    try {
+      calls.failOnImage = start + 2;
+      const partial = await post(`/${SLUG}/carousels/flaky/plan/apply`, {});
+      assert.equal(partial.status, 202);
+      assert.equal(partial.body.planDropped, false, "a provider failure keeps the plan for a retry");
+      assert.match(partial.body.error, /provider down/);
+      assert.equal(JSON.stringify((await row("flaky")).value.document).includes('"source":"ai"'), true, "the first generated slot was persisted");
+      const afterFirst = (await row("flaky")).version;
+      assert.equal(afterFirst, 2, "the first write created the row (v1) and the first slot was saved at the version it named (v2)");
+      assert.equal((await post(`/${SLUG}/carousels/flaky/plan/apply`, {})).status, 201);
+      assert.equal(calls.images - start, total + 1, "the retry generated only the slots still missing: one failed attempt, then total - 1");
+      assert.equal((await row("flaky")).version > afterFirst, true, "the retry saved on top of the first run's version");
+    } finally {
+      calls.failOnImage = 0;
+    }
+  }],
+  ["a save landing mid-apply keeps the user's version (202, plan dropped, nothing regenerated or overwritten); two applies at once are refused (409)", async () => {
+    assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "raced", prompt: "weekly tips" })).status, 201);
+    const start = calls.images;
+    try {
+      calls.onImage = async (n) => {
+        if (n !== start + 1) return;
+        const current = await row("raced");
+        await repos.carousels.save(current.id, { title: "Edited by the user", document: { json: { ...(current.value.document as object), title: "Edited by the user" }, schemaVersion: 1 } }, { ...meta, expectedVersion: current.version });
+      };
+      const raced = await post(`/${SLUG}/carousels/raced/plan/apply`, {});
+      assert.equal(raced.status, 202, JSON.stringify(raced.body));
+      assert.equal(raced.body.planDropped, true);
+      assert.equal((await row("raced")).value.title, "Edited by the user", "the user's save is what the row holds");
+      assert.equal((await row("raced")).version, 2, "v1 was the apply's first write, v2 the user's save; the apply's own later write was refused");
+      assert.equal(calls.images - start, 1, "the apply stopped at the conflict");
+      assert.equal((await post(`/${SLUG}/carousels/raced/plan/apply`, {})).status, 404, "a stale plan is spent, not retried over the user's version");
+    } finally {
+      calls.onImage = undefined;
+    }
+    assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "twice", prompt: "weekly tips" })).status, 201);
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    calls.hold = new Promise<void>((resolve) => (release = resolve));
+    calls.onImage = async () => started();
+    try {
+      const first = post(`/${SLUG}/carousels/twice/plan/apply`, {});
+      await running;
+      assert.equal((await post(`/${SLUG}/carousels/twice/plan/apply`, {})).status, 409, "the second apply would pay for the same slots");
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "twice", prompt: "other" })).status, 409, "a re-plan would replace the plan being paid for");
+      release();
+      assert.equal((await first).status, 201);
+    } finally {
+      release();
+      calls.hold = undefined;
+      calls.onImage = undefined;
+    }
+  }],
+  ["the first write of a stored apply only creates: a carousel that appeared since the preview is a 409, left as it is, and the plan is dropped", async () => {
+    assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "appeared", prompt: "weekly tips" })).status, 201);
+    await repos.carousels.create(brand.id, { slug: "appeared", title: "Mine", document: { json: { ...base, id: "appeared", title: "Mine", slides: [] }, schemaVersion: 1 } }, meta);
+    const images = calls.images;
+    const applied = await post(`/${SLUG}/carousels/appeared/plan/apply`, {});
+    assert.equal(applied.status, 409, JSON.stringify(applied.body));
+    assert.equal(applied.body.planDropped, true);
+    assert.equal((await row("appeared")).value.title, "Mine");
+    assert.equal((await row("appeared")).version, 1, "not overwritten");
+    assert.equal(calls.images, images, "nothing was generated");
+    assert.equal((await post(`/${SLUG}/carousels/appeared/plan/apply`, {})).status, 404);
+  }],
+  ["a pending plan is forgotten after an hour, but never while its apply is running", async () => {
+    let now = Date.parse(STAMP);
+    setPlanClock(() => now);
+    try {
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "stale", prompt: "weekly tips" })).status, 201);
+      now += 61 * 60 * 1000;
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "fresh", prompt: "weekly tips" })).status, 201, "any new plan sweeps the old ones");
+      assert.equal((await post(`/${SLUG}/carousels/stale/plan/apply`, {})).status, 404);
+      let release!: () => void;
+      let started!: () => void;
+      const running = new Promise<void>((resolve) => (started = resolve));
+      calls.hold = new Promise<void>((resolve) => (release = resolve));
+      calls.onImage = async () => started();
+      try {
+        const first = post(`/${SLUG}/carousels/fresh/plan/apply`, {});
+        await running;
+        now += 61 * 60 * 1000;
+        assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id: "other", prompt: "weekly tips" })).status, 201);
+        release();
+        assert.equal((await first).status, 201, "the running apply survived the sweep");
+      } finally {
+        release();
+        calls.hold = undefined;
+        calls.onImage = undefined;
+      }
+    } finally {
+      setPlanClock(() => Date.now());
+    }
+  }],
+  ["the copy is drafted in the stored config's primary_language (none without one)", async () => {
+    const draftIn = async (id: string) => {
+      assert.equal((await post(`/${SLUG}/carousels?mode=plan`, { id, prompt: "weekly tips" })).status, 201);
+      assert.equal((await post(`/${SLUG}/carousels/${id}/plan/apply`, {})).status, 201);
+      return calls.languages.at(-1);
+    };
+    assert.equal(await draftIn("no-config"), undefined);
+    await repos.documents.put(brand.id, "config", "", { json: { profile: { primary_language: " fr-FR " } }, schemaVersion: 1 }, meta);
+    assert.equal(await draftIn("with-config"), "fr-FR");
+  }],
+  ["a vanished asset costs 0 (like the folder); any other lookup failure propagates", async () => {
+    const source = (get: () => Promise<never>) => storedPlannerSource({ storage: { ...storage, assets: { ...storage.assets, get } } as EditorStorage, brandId: brand.id, slug: SLUG });
+    assert.equal(await source(async () => { throw new NotFoundError("gone"); }).costCents("0000000000000000"), 0);
+    await assert.rejects(source(async () => { throw new Error("pool exhausted"); }).costCents("0000000000000000"), /pool exhausted/);
   }],
   ["plan/apply on an archived brand is 403", async () => {
     const old = await repos.brands.create({ slug: "old-compose", displayName: "Old" }, meta);
@@ -113,12 +224,46 @@ const tests: Array<[string, () => Promise<void>]> = [
     await repos.brands.archive(old.id, { ...meta, expectedVersion: cut.version });
     assert.equal((await post(`/old-compose/carousels/late/plan/apply`, {})).status, 403);
   }],
-  ["regenerate for a stored brand refuses a non-string prompt (400, preview or not); the generating regenerate is still 501", async () => {
-    await repos.carousels.create(brand.id, { slug: "regen", title: "Regen", document: { json: { ...base, id: "regen", title: "Regen", slides: [slide("s1")] }, schemaVersion: 1 } }, meta);
-    const regen = (extra: object, query = "") => post(`/${SLUG}/carousels/regen/regenerate${query}`, { target: { slideId: "s1", objectId: "background" }, ...extra });
-    for (const [extra, query] of [[{ prompt: 7 }, ""], [{ prompt: {}, preview: true }, ""], [{ prompt: ["x"] }, "?dryRun=true"]] as const) assert.equal((await regen(extra, query)).status, 400, JSON.stringify(extra));
-    assert.equal((await regen({ prompt: "fine" })).status, 501);
-    assert.equal((await regen({ prompt: "fine", preview: true })).status, 200);
+  ["a generating regenerate stores a candidate, snapshots the save and moves the ETag; pinned pieces and non-string prompts are refused; a save landing meanwhile is a 409", async () => {
+    const piece = (id: string, pinned: boolean) => ({ id, kind: "asset", slot: "media", pinned, locked: false, source: "library", assetId: undefined, awaitingImage: true, fit: "cover" });
+    const document = { ...base, id: "regen", title: "Regen", slides: [slide("s1", [piece("img", false), piece("fixed", true), { id: "t", kind: "text", slot: "title", pinned: false, locked: false, source: "manual", text: "old" }])] };
+    const created = await repos.carousels.create(brand.id, { slug: "regen", title: "Regen", document: { json: document, schemaVersion: 1 } }, meta);
+    const regen = (target: object, extra: object = {}) => post(`/${SLUG}/carousels/regen/regenerate`, { target: { slideId: "s1", ...target }, ...extra });
+    const before = (await repos.assets.list(brand.id)).length;
+    assert.equal((await regen({ objectId: "fixed" })).status, 400);
+    assert.equal((await regen({ objectId: "img" }, { prompt: 7 })).status, 400);
+    assert.equal((await regen({})).status, 400);
+    assert.equal((await regen({ objectId: 5 })).status, 400, "a non-string objectId is refused before anything is generated");
+    assert.equal((await repos.assets.list(brand.id)).length, before, "nothing was generated for a refused request");
+    assert.equal((await regen({ objectId: "img" }, { prompt: "fine", preview: true })).status, 200, "the preview still serves");
+    const done = await regen({ objectId: "img" }, { prompt: " my words " });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.equal(done.body.costCents, 4);
+    assert.equal(calls.prompts.at(-1)!.startsWith("my words"), true);
+    const asset = done.body.document.slides[0].objects[0].assetId;
+    assert.equal((await repos.assets.get(brand.id, asset)).value.status, "candidate");
+    assert.equal(done.etag, `"${(await row("regen")).version}"`);
+    assert.equal((await repos.revisions.list("carousel", created.id)).at(-1)!.reason, "snapshot");
+    assert.equal((await regen({ objectId: "background" })).status, 200);
+    assert.equal((await regen({ scope: "unpinned" })).body.document.slides[0].objects[2].text, "Headline s1");
+    try {
+      calls.onImage = async () => { const current = await row("regen"); await repos.carousels.save(current.id, { title: "Mine", document: { json: current.value.document as Record<string, unknown>, schemaVersion: 1 } }, { ...meta, expectedVersion: current.version }); };
+      const conflicted = await regen({ objectId: "img" });
+      assert.equal(conflicted.status, 409, JSON.stringify(conflicted.body) + " the regenerate does not overwrite the save that landed during generation");
+      assert.equal((await row("regen")).value.title, "Mine");
+    } finally {
+      calls.onImage = undefined;
+    }
+  }],
+  ["a generating regenerate on an archived brand is 403 and generates nothing", async () => {
+    const old = await repos.brands.create({ slug: "old-regen", displayName: "Old" }, meta);
+    const cut = await repos.brands.markCutover(old.id, { ...meta, expectedVersion: old.version });
+    await repos.documents.put(old.id, "tokens", "", tokens, meta);
+    await repos.carousels.create(old.id, { slug: "c", title: "C", document: { json: { ...base, id: "c", title: "C", slides: [slide("s1")] }, schemaVersion: 1 } }, meta);
+    await repos.brands.archive(old.id, { ...meta, expectedVersion: cut.version });
+    const images = calls.images;
+    assert.equal((await post(`/old-regen/carousels/c/regenerate`, { target: { slideId: "s1", objectId: "background" } })).status, 403);
+    assert.equal(calls.images, images);
   }],
   ["the stats history skips a sibling that vanished, falls back to the row's updatedAt, and fails whole on any other sibling error", async () => {
     await repos.carousels.create(brand.id, { slug: "no-stamp", title: "N", document: { json: { ...base, id: "no-stamp", title: "N", updatedAt: undefined, slides: [] }, schemaVersion: 1 } }, meta);
