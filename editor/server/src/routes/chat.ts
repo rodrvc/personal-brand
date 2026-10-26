@@ -385,7 +385,7 @@ async function runProposal(
   try {
     await runProposalBody(ws, proposal, generator, references, rasterise);
   } finally {
-    await ws.settle?.();
+    await ws.settle?.(proposal.id);
   }
 }
 
@@ -480,7 +480,14 @@ async function runProposalBody(
     const before = await notPlaced(ws, validation.document, results);
     if (before) throw new Error(messages.proposal.imageNotPlaced(before.slide, before.image));
     const documentVersion = await ws.writeDocument(validation.document, base);
-    const after = await notPlaced(ws, (await ws.open()).ctx.doc, results);
+    // The write is committed: failing to reopen the document for this check (an outage) must not turn a saved apply into a `failed` event.
+    let reopened: CarouselDocument | undefined;
+    try {
+      reopened = (await ws.open()).ctx.doc;
+    } catch (error) {
+      console.error(`Chat proposal ${proposal.id} was saved but could not be re-checked:`, error);
+    }
+    const after = reopened && (await notPlaced(ws, reopened, results));
     if (after) throw new Error(messages.proposal.imageRemovedMeanwhile(after.slide, after.image));
     await ws.append({
       role: "event",
@@ -568,11 +575,6 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator, optio
         images,
         tier: references.some((r) => r.role === "layout") ? "vision" : "fast",
       });
-      const user = await ws.append({
-        role: "user",
-        text,
-        ...(references.length > 0 ? { references } : {}),
-      });
       const outcome = toProposal(
         ctx,
         completion.json,
@@ -585,6 +587,12 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator, optio
         [...history.flatMap((r) => (r.role === "user" && r.text !== "" ? [r.text] : [])), text],
         awaited?.asksFor ?? [],
       );
+      // The proposal is built before the first append (it is synchronous), so only the gap between the two back-to-back appends remains.
+      const user = await ws.append({
+        role: "user",
+        text,
+        ...(references.length > 0 ? { references } : {}),
+      });
       const assistant = await ws.append({
         role: "assistant",
         text: "rejected" in outcome ? [outcome.text, outcome.rejected].filter(Boolean).join("\n\n") : outcome.text,
@@ -625,10 +633,18 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator, optio
     }
   });
 
+  // Applies running now, by slug/carousel/proposal. In-process only: the editor is a single server, so a second one would not see it. Set before any await, like compose's plan guard, so two requests cannot both read "pending" and both pay.
+  const applying = new Set<string>();
+
   router.post(`${BASE}/proposals/:proposalId/apply`, async (req, res) => {
+    const key = `${req.params.slug}/${req.params.id}/${req.params.proposalId}`;
+    if (applying.has(key)) return void res.status(409).json({ error: messages.proposal.applyInFlight });
+    applying.add(key);
+    let running = false;
     try {
       const ws = await chatOf(req, res);
       if (!ws) return;
+      await ws.assertWritable?.();
       const log = await ws.read();
       const proposal = pendingProposal(log);
       if (proposal?.id !== req.params.proposalId) {
@@ -644,13 +660,17 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator, optio
         costCents: 0,
         results: [],
       });
+      // The guard's release is attached as soon as the run exists, before anything else can throw.
+      runProposal(ws, proposal, getGenerator(req.params.slug), references, rasteriserFor(ws, ctx.brand))
+        .catch((error: unknown) => console.error(`Chat proposal ${proposal.id} could not record its outcome:`, error))
+        .finally(() => applying.delete(key));
+      running = true;
       res.status(202).json({ records: [started] });
-      runProposal(ws, proposal, getGenerator(req.params.slug), references, rasteriserFor(ws, ctx.brand)).catch((error: unknown) =>
-        console.error(`Chat proposal ${proposal.id} could not record its outcome:`, error),
-      );
     } catch (error) {
       if (error instanceof ChatActionError) return void res.status(409).json({ error: error.message });
       handleStoreError(error, res);
+    } finally {
+      if (!running) applying.delete(key);
     }
   });
 

@@ -7,8 +7,9 @@ import { hashContent, registerFile } from "../../../../system/assets/index.js";
 import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ImageToolUnavailableError, withSips } from "../image-tools.js";
 import { messages } from "../messages.js";
-import type { ProfileStore } from "../profile-store.js";
-import { storedAssetFile, type StoredBrand } from "../stored-read.js";
+import type { AssetFileResolver } from "../ai/piece-generator.js";
+import { ProfileStore } from "../profile-store.js";
+import { guardStorage, resolveStored, storedAssetFile, type EditorStorage, type StoredBrand } from "../stored-read.js";
 
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 
@@ -75,6 +76,14 @@ export async function readStoredAsset(s: StoredBrand, assetId: string): Promise<
     if (error instanceof NotFoundError) return undefined;
     throw error;
   }
+}
+
+/** The image provider's reader of a brand's reference images: storage for a cut-over brand, else its folder (which must not be created for a stored one). */
+export function assetResolverFor(storage: EditorStorage | undefined, slug: string): AssetFileResolver {
+  return async (id) => {
+    const stored = await resolveStored(storage && guardStorage(storage), slug);
+    return stored ? readStoredAsset(stored, id) : readAssetFile(new ProfileStore(slug), id);
+  };
 }
 
 export async function loadReferenceImages(read: (assetId: string) => Promise<AssetFile | undefined>, ids: string[]): Promise<Array<{ mime: string; base64: string }>> {

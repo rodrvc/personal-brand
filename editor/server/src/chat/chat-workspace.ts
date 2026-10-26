@@ -36,7 +36,7 @@ export interface ChatWorkspace extends ChatSource {
   planner: PlannerSource;
   fonts(brand: BrandTokens): () => RasterFonts | Promise<RasterFonts>;
   /** Runs after a proposal's background run: the folder uploads what it wrote to the mirror, a stored brand has nothing to sync. */
-  settle?(): Promise<void>;
+  settle?(proposalId: string): Promise<void>;
 }
 
 /** The folder carousel's workspace; undefined when it does not exist. */
@@ -62,10 +62,10 @@ export function folderChatWorkspace(store: ProfileStore, carouselId: string): Ch
     assetName: async (assetId) => entries().find((e) => e.id === assetId)?.path.split("/").pop() ?? assetId,
     planner: folderPlannerSource(store),
     fonts: (brand) => () => folderRasterFonts(store, brand),
-    settle: async () => {
+    settle: async (proposalId) => {
       // A proposal runs after its request, so the per-request sync-up middleware never sees its writes (a no-op in `fs` mode).
       const { syncUpNow } = await import("../storage/runtime.js");
-      await syncUpNow(store.slug).catch((error) => console.error("Chat proposal: could not sync its output to the bucket:", error));
+      await syncUpNow(store.slug).catch((error) => console.error(`Chat proposal ${proposalId}: could not sync its output to the bucket:`, error));
     },
   };
 }

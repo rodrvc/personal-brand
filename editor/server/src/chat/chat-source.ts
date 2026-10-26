@@ -4,7 +4,7 @@ import { readProfileCurrency } from "../../../../system/ig-carousel/profile.js";
 
 import { documentExists } from "../document-store.js";
 import type { ProfileStore } from "../profile-store.js";
-import { storedCarouselRaw, storedConfig, type StoredBrand } from "../stored-read.js";
+import { StorageFailure, storedCarouselRaw, storedConfig, type StoredBrand } from "../stored-read.js";
 import { appendChatRecord, readChatLog, stampRecord, type ChatRecord, type NewRecord } from "./chat-log.js";
 
 export interface ChatCurrency {
@@ -42,6 +42,17 @@ function currencyOf(config: unknown): ChatCurrency {
   return typeof raw?.code === "string" && /^[A-Za-z]{3}$/.test(raw.code) && Number.isFinite(rate) && rate > 0 ? { code: raw.code.toUpperCase(), rate } : DEFAULT_CURRENCY;
 }
 
+const isText = (v: unknown): v is string => typeof v === "string";
+
+/** The minimum a record must be for the routes to use it (a pending proposal is read from it, the client renders it). */
+function isChatRecord(body: unknown): body is ChatRecord {
+  const r = body as Record<string, unknown> | null;
+  if (typeof r !== "object" || r === null || !isText(r.id) || !isText(r.at)) return false;
+  if (r.role === "user") return isText(r.text) && (r.references === undefined || Array.isArray(r.references)) && (r.resolves === undefined || (typeof r.resolves === "object" && r.resolves !== null && isText((r.resolves as { proposalId?: unknown }).proposalId)));
+  if (r.role === "assistant") return isText(r.text) && (r.proposal === undefined || (typeof r.proposal === "object" && r.proposal !== null && isText((r.proposal as { id?: unknown }).id) && Array.isArray((r.proposal as { actions?: unknown }).actions)));
+  return r.role === "event" && isText(r.proposalId) && isText(r.kind) && Array.isArray(r.results);
+}
+
 /** The chat repository's log of a stored carousel (each body is the whole record, as the importer keeps it) and the stored config's currency; undefined when the carousel does not exist. */
 export async function storedChatSource(s: StoredBrand, carouselId: string): Promise<ChatSource | undefined> {
   let rowId: string;
@@ -52,7 +63,8 @@ export async function storedChatSource(s: StoredBrand, carouselId: string): Prom
     throw error;
   }
   return {
-    read: async () => (await s.storage.chat.list(rowId)).map((m) => m.body as unknown as ChatRecord),
+    // A body that is not a record is a corrupt row, like a corrupt document: a 503 (never served as data, never skipped, which would hide a pending proposal).
+    read: async () => (await s.storage.chat.list(rowId)).map((m) => { if (!isChatRecord(m.body)) throw new StorageFailure(new Error(`Chat record ${m.seq} of carousel "${carouselId}" is malformed`)); return m.body; }),
     append: async (record) => {
       const full = stampRecord(record);
       await s.storage.chat.append(rowId, full as unknown as Record<string, unknown>);
