@@ -3,8 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-import { featuresOf, loadBrand } from "./brand-schema.js";
-import { resolveProfileDir } from "./profile.js";
+import { featuresOf } from "./brand-schema.js";
+import { openRenderSource, type RenderSource } from "./render-source.js";
 import { chunkSlides, renderDocuments, renderSlides } from "./render-batch.js";
 import { renderDecorativeFrame } from "./templates/decorative-frame.js";
 import { renderFullBleed } from "./templates/full-bleed.js";
@@ -77,12 +77,19 @@ function parseArgs(argv: string[]): { profile: string } {
 
 async function main(): Promise<void> {
   const { profile } = parseArgs(process.argv.slice(2));
+  // A folder brand reads `profiles/<slug>/`; a cut-over brand reads storage (D12). Either way: the same code below.
+  const { source, close } = await openRenderSource(profile);
+  try {
+    await renderVariants(source);
+  } finally {
+    await close();
+  }
+}
+
+async function renderVariants(source: RenderSource): Promise<void> {
   // Every variant this harness renders declares its own needs, so the set is
   // the union of them — it stays correct as variants are added or removed.
-  const brand = loadBrand(
-    resolveProfileDir(profile),
-    featuresOf([...Object.values(VARIANTS), renderListFormat]),
-  );
+  const brand = await source.loadBrand(featuresOf([...Object.values(VARIANTS), renderListFormat]));
   const input = loadInput();
   const { slides: allSlides } = input;
   if (allSlides.length === 0) {
@@ -94,12 +101,13 @@ async function main(): Promise<void> {
   // through four templates, and it is the one script wired into package.json,
   // so exempting it is how an invented URL reaches a PNG anyway. No period:
   // the fixture is not date-bound.
+  // A fixture that ships with the engine is not brand content: the brand's content rules do not apply to it.
+  const binding = await source.verifyBinding("layout-comparison");
   const slides = verifyOrThrow({
     slides: allSlides,
     input,
     inputPath: INPUT_PATH,
-    profileDir: resolveProfileDir(profile),
-    recipe: "layout-comparison",
+    ...(binding.policy ? { policy: { ...binding.policy, rules: [] } } : binding),
     // The fixture ships with the engine and is reviewed in the diff, so its
     // own `sourceImageHosts` is the authority — there is no profile recipe.
     selfDeclaredProvenance: true,

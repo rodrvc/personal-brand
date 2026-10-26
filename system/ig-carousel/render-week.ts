@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { featuresOf, interpolate, loadBrand, type BrandTokens } from "./brand-schema.js";
-import { resolveOutputBaseDir, resolveProfileDir } from "./profile.js";
+import { featuresOf, interpolate, type BrandTokens } from "./brand-schema.js";
+import { openRenderSource, type RenderSource } from "./render-source.js";
 import { chunkSlides, renderSlides } from "./render-batch.js";
 import { renderListFormat } from "./templates/list-format.js";
 import type { CarouselInput } from "./types.js";
@@ -69,6 +69,7 @@ function parseArgs(argv: string[]): {
   profile: string;
   city?: string;
   input?: string;
+  out?: string;
   reference: Date;
   eventsPerSlide: number;
 } {
@@ -76,6 +77,7 @@ function parseArgs(argv: string[]): {
   const cityIndex = argv.indexOf("--city");
   const inputIndex = argv.indexOf("--input");
   const eventsPerSlideIndex = argv.indexOf("--events-per-slide");
+  const outIndex = argv.indexOf("--out");
   // `--date YYYY-MM-DD` renders the calendar week containing that date, so a
   // week other than the current one (e.g. "la próxima semana") can be built
   // without waiting for it to arrive. Parsed as local time — a bare
@@ -102,6 +104,7 @@ function parseArgs(argv: string[]): {
     // and input falls back to the profile's default carousel input.
     city: cityIndex !== -1 ? argv[cityIndex + 1] : undefined,
     input: inputIndex !== -1 ? argv[inputIndex + 1] : undefined,
+    out: outIndex !== -1 ? argv[outIndex + 1] : undefined,
     reference,
     eventsPerSlide:
       eventsPerSlideIndex !== -1
@@ -111,20 +114,32 @@ function parseArgs(argv: string[]): {
 }
 
 async function main(): Promise<void> {
-  const { profile, city: cityOverride, input, reference, eventsPerSlide } = parseArgs(
+  const { profile, city: cityOverride, input, out, reference, eventsPerSlide } = parseArgs(
     process.argv.slice(2),
   );
   if (!Number.isInteger(eventsPerSlide) || eventsPerSlide < 1) {
     throw new Error(`--events-per-slide must be a positive integer, got: ${eventsPerSlide}`);
   }
 
-  const profileDir = resolveProfileDir(profile);
+  // A folder brand reads `profiles/<slug>/`; a cut-over brand reads storage (D12). Either way: the same code below.
+  const { source, close } = await openRenderSource(profile);
+  try {
+    await renderWeek(source, { input, out, city: cityOverride, reference, eventsPerSlide });
+  } finally {
+    await close();
+  }
+}
+
+async function renderWeek(
+  source: RenderSource,
+  { input, out, city: cityOverride, reference, eventsPerSlide }: { input?: string; out?: string; city?: string; reference: Date; eventsPerSlide: number },
+): Promise<void> {
   // Whatever the list-format template declares it reads, plus "dates": this
   // script builds the week label itself (weekLabel below), so that one is the
   // script's own requirement rather than the template's.
-  const brand = loadBrand(profileDir, featuresOf([renderListFormat], "dates"));
+  const brand = await source.loadBrand(featuresOf([renderListFormat], "dates"));
 
-  const inputPath = input ?? join(profileDir, "carousels", "week-input.json");
+  const inputPath = source.inputPath(input, "week-input.json");
   const parsed = JSON.parse(readFileSync(inputPath, "utf-8")) as CarouselInput;
   const { slides } = parsed;
   if (slides.length === 0) {
@@ -135,7 +150,7 @@ async function main(): Promise<void> {
   const city = cityOverride ?? parsed.city;
   const region = parsed.region;
 
-  const baseDir = resolveOutputBaseDir(profileDir);
+  const baseDir = source.outputRoot(out);
   const { label: headerLabel, monday, sunday } = weekLabel(reference, brand.dates!);
   const outputDir = join(
     baseDir,
@@ -159,8 +174,7 @@ async function main(): Promise<void> {
     slides,
     input: parsed,
     inputPath,
-    profileDir,
-    recipe: "weekly-roundup",
+    ...(await source.verifyBinding("weekly-roundup")),
     period: { start: monday, end: sunday },
     label: headerLabel,
   });
