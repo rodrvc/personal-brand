@@ -46,3 +46,8 @@ export function carouselExportKey(brandId: string, carouselId: string, versionNo
 export function reelExportKey(brandId: string, runId: string, versionNo: number): string {
   return `brands/${uuid("brandId", brandId)}/exports/reels/${uuid("runId", runId)}/${version(versionNo)}/reel.mp4`;
 }
+
+/** The prefix shared by every export version of one reel run (ends with `/`). */
+export function reelExportPrefix(brandId: string, runId: string): string {
+  return `brands/${uuid("brandId", brandId)}/exports/reels/${uuid("runId", runId)}/`;
+}
