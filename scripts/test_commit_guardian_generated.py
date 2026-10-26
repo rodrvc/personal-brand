@@ -30,6 +30,7 @@ class GateCase(unittest.TestCase):
         gate.BRAND_DENYLIST = root / 'scripts' / 'brand-denylist.txt'
         gate.BRAND_DENYLIST_LOCAL = root / 'scripts' / 'brand-denylist.local.txt'
         gate.real_profile_dirs = lambda: []  # no folders on disk
+        gate._storage_answer = gate._UNASKED  # the per-process query memo starts empty in every test
 
 
 class GeneratedTermsTest(GateCase):
@@ -93,17 +94,18 @@ class StorageWarningsTest(GateCase):
 
 
 class FakeProc:
-    def __init__(self, stdout='', returncode=0, hang=False):
-        self.stdout, self.returncode, self.hang, self.pid, self.calls = stdout, returncode, hang, 4242, 0
+    def __init__(self, stdout='', returncode=0, hang=False, stuck=False):
+        self.stdout, self.returncode, self.hang, self.stuck, self.pid, self.calls = stdout, returncode, hang, stuck, 4242, 0
+        self.killed = 0
 
     def communicate(self, timeout=None):
         self.calls += 1
-        if self.hang and self.calls == 1:
+        if (self.hang and self.calls == 1) or self.stuck:  # `stuck`: a descendant outside the group still holds the pipe
             raise subprocess.TimeoutExpired('pnpm', timeout)
         return self.stdout, None
 
     def kill(self):
-        pass
+        self.killed += 1
 
 
 class FetchStorageTermsTest(GateCase):
@@ -142,11 +144,114 @@ class FetchStorageTermsTest(GateCase):
         self.assertEqual(self.killed, [4242])
         self.assertIn('did not answer', err)
 
-    def test_launch_failure_is_unknown(self):
+    def test_undecodable_output_never_raises(self):
+        terms, _ = self.fetch(FakeProc(b'{"terms": ["caf\xc3\xa9-co", "bad\xff"]}'))
+        self.assertEqual(terms, ['café-co', 'bad\ufffd'])
+
+    def test_fast_failure_says_so_once_on_stderr(self):
+        terms, err = self.fetch(FakeProc('', returncode=1))
+        self.assertIsNone(terms)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertIn('exit 1', err)
+
+    def test_reap_after_the_kill_is_bounded(self):
+        proc = FakeProc(stuck=True)
+        terms, err = self.fetch(proc)  # the second communicate() times out too: still returns
+        self.assertIsNone(terms)
+        self.assertEqual(self.killed, [4242])
+        self.assertIn('did not answer', err)
+
+    def test_group_kill_failure_falls_back_to_the_parent_and_stays_bounded(self):
+        def refuse(pid, sig):
+            raise ProcessLookupError()
+        gate.os.killpg = refuse
+        proc = FakeProc(hang=True, stuck=True)
+        self.assertIsNone(self.fetch(proc)[0])
+        self.assertEqual(proc.killed, 1)
+
+    def test_launch_failure_is_unknown_and_says_so(self):
         def boom(*a, **k):
             raise OSError('no pnpm')
         gate.subprocess.Popen = boom
-        self.assertIsNone(gate.fetch_storage_terms())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(gate.fetch_storage_terms())
+        self.assertEqual(len(err.getvalue().strip().splitlines()), 1)
+
+    def test_every_degraded_answer_says_so_once(self):
+        for stdout in ('no json here', '{"terms": "nope"}', '{"terms": '):
+            terms, err = self.fetch(FakeProc(stdout))
+            self.assertIsNone(terms, stdout)
+            self.assertEqual(len(err.strip().splitlines()), 1, stdout)
+
+    def test_an_unexpected_error_never_escapes(self):
+        class Broken(FakeProc):
+            def communicate(self, timeout=None):
+                raise RuntimeError('boom')
+        terms, err = self.fetch(Broken())
+        self.assertIsNone(terms)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+
+
+class LiveTermsTest(GateCase):
+    """S6: the live terms of storage join the leak check, so a stale generated file cannot hide a term."""
+
+    def setUp(self):
+        super().setUp()
+        saved = (gate.fetch_storage_terms, gate.staged_blob, gate.git, gate._storage_answer, sys.argv)
+        self.addCleanup(lambda: (setattr(gate, 'fetch_storage_terms', saved[0]), setattr(gate, 'staged_blob', saved[1]), setattr(gate, 'git', saved[2]), setattr(gate, '_storage_answer', saved[3]), setattr(sys, 'argv', saved[4])))
+        self.asked = 0
+        gate.staged_blob = lambda path: 'const name = "Newer Mark";\n'
+
+    def storage_has(self, terms):
+        def fetch():
+            self.asked += 1
+            return terms
+        gate.fetch_storage_terms = fetch
+
+    def test_stale_file_cannot_hide_a_term(self):
+        gate.BRAND_DENYLIST_GENERATED.write_text('fictionalco\n', encoding='utf-8')  # lacks "Newer Mark"
+        self.storage_has(['fictionalco', 'Newer Mark'])
+        leaks = gate.check_brand_leaks(['system/x.ts'])
+        self.assertEqual(len(leaks), 1)
+        self.assertIn('storage (live)', leaks[0])
+
+    def test_unknown_storage_adds_nothing(self):
+        self.storage_has(None)
+        self.assertEqual(gate.check_brand_leaks(['system/x.ts']), [])
+
+    def test_live_terms_pass_the_same_filters(self):
+        self.storage_has(['abc', 'norte'])
+        self.assertEqual(gate.denylist_with_origins(live=True), {})
+
+    def test_warning_and_leak_check_share_one_query(self):
+        self.storage_has(['Newer Mark'])
+        gate.storage_denylist_warnings()
+        gate.check_brand_leaks(['system/x.ts'])
+        self.assertEqual(self.asked, 1)
+
+    def scan(self):
+        gate.git = lambda *a: ''  # empty tree, empty history
+        sys.argv = ['validate_commit_guardian.py', '--scan']
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = gate.main()
+        return code, out.getvalue()
+
+    def test_scan_wiring_prints_one_absent_warning_and_still_audits(self):
+        self.storage_has(['Newer Mark'])
+        code, out = self.scan()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count('is absent'), 1, 'the storage warning only; the legacy fallback stays quiet')
+        self.assertIn('CURRENT TREE', out)
+        self.assertIn('storage (live)', out)
+
+    def test_scan_wiring_unknown_storage_prints_the_fallback_once(self):
+        gate.BRAND_DENYLIST.write_text('fictionalco\n', encoding='utf-8')  # something to search for
+        self.storage_has(None)
+        code, out = self.scan()
+        self.assertEqual(out.count('is absent'), 1)
+        self.assertNotIn('while storage has real brands', out)
 
 
 class HandleLookbehindTest(GateCase):
@@ -159,6 +264,13 @@ class HandleLookbehindTest(GateCase):
         self.assertIn('real_handle', terms)
         self.assertNotIn('zzversion', terms)
         self.assertNotIn('hostzz', terms)
+
+    def test_a_dot_before_the_at_sign_does_not_glue_it(self):
+        profile = gate.ROOT / 'profiles' / 'fictional-co'
+        profile.mkdir(parents=True)
+        (profile / 'notes.md').write_text('and so on.@after_dot', encoding='utf-8')
+        gate.real_profile_dirs = lambda: [profile]
+        self.assertIn('after_dot', gate.derive_terms())
 
 
 if __name__ == '__main__':

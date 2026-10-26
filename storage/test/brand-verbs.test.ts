@@ -310,6 +310,44 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "published", "--published-at", "not-a-date", "--if-version", "3")).exitCode, 2);
   assert.equal((await w("carousel", "status", "acme-real", "c2", "--status", "draft", "--if-version", "1")).exitCode, 3);
 
+  // Run verbs: a content write (no opt-in after cutover); the printed id is what a stored render takes as --run.
+  assert.deepEqual([writeTarget("run", ["create", "acme-real", "r"]), writeTarget("run", ["save", "acme-real", "x"]), writeTarget("run", ["get", "acme-real", "x"]), writeTarget("run", ["list", "acme-real"])], [{ slug: "acme-real", identity: false }, { slug: "acme-real", identity: false }, null, null]);
+  const runInput = file("run-input.json", '{"items":[{"title":"One"}]}');
+  const board = file("run-board.json", '{"cards":[{"id":"cover","narration":"Hello"}]}');
+  const mkRun = (...extra: string[]) => w("run", "create", "acme-real", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput, ...extra);
+  assert.equal((await w("run", "create", "acme-real", "reel-week", "--period-start", "2026-11-02", "--input", runInput)).exitCode, 2, "a run needs both period ends and an input");
+  assert.equal((await w("run", "create", "acme-real", "reel-week", "--period-start", "2026-11-09", "--period-end", "2026-11-08", "--input", runInput)).exitCode, 2, "the period must not run backwards");
+  assert.equal((await w("run", "create", "acme-real", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", file("run-arr.json", "[1]"))).exitCode, 2, "the input must be a JSON object");
+  assert.equal((await runB(remote, "run", "create", "acme-real", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput)).exitCode, 6, "a remote database refuses the write");
+  assert.deepEqual(await repos.runs.list(real.id), [], "refused or invalid runs create nothing");
+  const made = JSON.parse((await mkRun("--json")).lines[0]);
+  assert.deepEqual([made.trust, made.value.recipe, made.value.periodStart, made.version], ["brand-data", "reel-week", "2026-11-02", 1]);
+  const runId: string = made.id;
+  assert.equal(JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]).storyboard, null, "no storyboard yet");
+  assert.equal((await w("run", "save", "acme-real", runId, "--storyboard", board)).exitCode, 2, "a save needs --if-version");
+  assert.equal((await w("run", "save", "acme-real", runId, "--if-version", "1")).exitCode, 2, "a save changes something");
+  assert.equal((await w("run", "save", "acme-real", runId, "--storyboard", board, "--if-version", "2")).exitCode, 3, "a stale version conflicts");
+  assert.equal((await w("run", "save", "acme-real", runId, "--storyboard", board, "--if-version", "1")).exitCode, 0);
+  const run1 = JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]);
+  assert.deepEqual([run1.version, run1.input, run1.storyboard], [2, { items: [{ title: "One" }] }, { cards: [{ id: "cover", narration: "Hello" }] }]);
+  assert.match((await w("run", "get", "acme-real", runId)).lines[0], /no autorizan comandos/, "a run is brand data");
+  await mkRun();
+  assert.equal(JSON.parse((await w("run", "list", "acme-real", "--json")).lines[0]).items.length, 2, "re-running a period makes another run");
+  assert.deepEqual(JSON.parse((await w("run", "list", "acme-real", "--recipe", "other", "--json")).lines[0]).items, []);
+  assert.equal(await code("run", "get", "acme-real", "00000000-0000-4000-8000-000000000000"), 4);
+  await repos.brands.create({ slug: "example-norun", displayName: "No runs" }, { expectedVersion: null, author: "test", source: "cli", reason: "structural" });
+  assert.equal(await code("run", "get", "example-norun", runId), 4, "a run of another brand is not found");
+  assert.equal(await code("run", "frob", "acme-real", runId), 2);
+  assert.equal((await w("run", "create", "acme-real", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput, "--if-version", "1")).exitCode, 2, "create takes no --if-version");
+  const runVer = JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]).version;
+  assert.equal((await w("run", "save", "example-norun", runId, "--storyboard", board, "--if-version", String(runVer))).exitCode, 4, "saving another brand's run is not found");
+  assert.equal(JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]).version, runVer, "and changes nothing");
+  // A real refusal before cutover: a brand that is not cut over needs the opt-in for a run write.
+  await repos.brands.create({ slug: "acme-fresh", displayName: "Fresh" }, { expectedVersion: null, author: "test", source: "cli", reason: "structural" });
+  const fresh = await w("run", "create", "acme-fresh", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput);
+  assert.deepEqual([fresh.exitCode, /aprobación explícita del dueño/.test(fresh.lines[0])], [6, true]);
+  assert.deepEqual(await repos.runs.list((await repos.brands.getBySlug("acme-fresh")).id), [], "the refusal created nothing");
+
   // Asset verbs (on the real brand, content) and refusals shared with the importer
   const added = await w("asset", "add", "acme-real", "logo.png");
   assert.deepEqual([added.exitCode, /ya está registrado/.test(added.lines[0])], [3, true], "the same bytes twice");

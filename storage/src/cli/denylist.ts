@@ -20,12 +20,40 @@ const PRIVATE_SUFFIX = ["github.io", "vercel.app", "netlify.app", "pages.dev"];
 const GENERIC_TLD = new Set(["com", "net", "org"]);
 /**
  * An at sign not glued to a word (so `person@host.test` is an email, not a handle), then 3 to 30 handle characters that
- * start and end on a letter, digit or underscore, with at least one letter somewhere and not a resolution like `1080p`. Dots inside are kept (`first.last`); a trailing dot is
- * sentence punctuation. A match followed by a slash is an npm scope (`@scope/pkg`) unless a slash precedes the at sign (`site.test/@handle/post` is a profile URL); the caller checks.
+ * start and end on a letter, digit or underscore, with at least one letter somewhere and not a resolution like `1080p`.
+ * A word character right after the 30 is no match (an id or hash is not a truncated handle); a dotted run over 30 characters
+ * may backtrack to a shorter handle that ends at a dot (`@a.b.c...`), which errs on the side of watching. Dots inside are kept
+ * (`first.last`); a trailing dot is sentence punctuation. A dot before the at sign does not glue it (`end.@handle` is a
+ * handle: leaking one is worse than watching one too many). `isSkippedHandle` holds the exclusions that need the text around the match.
+ *
+ * The Python folder derivation (`HANDLE` in the gate) is deliberately simpler: same lookbehind and the same schema-field
+ * list, but it skips every dotted handle and has no letter, resolution, at-rule or npm-scope rules. The two sides watch
+ * different handle sets on purpose; the union is what the gate checks (design doc, "Decided in S11a2b").
  */
-const HANDLE = /(?<![A-Za-z0-9_.])@([A-Za-z0-9_][A-Za-z0-9_.]{1,28}[A-Za-z0-9_])/g;
+const HANDLE = /(?<![A-Za-z0-9_])@([A-Za-z0-9_][A-Za-z0-9_.]{1,28}[A-Za-z0-9_])(?![A-Za-z0-9_])/g;
 /** A capture needs a letter somewhere (`@400;600` is a font weight list) and is not a resolution (`@1080p`); `@_name` and `@1name` stay. */
 const handleLike = (h: string): boolean => /[A-Za-z]/.test(h) && !/^\d+p$/i.test(h);
+
+/** A match followed by a slash is an npm scope (`@scope/pkg`), unless a slash precedes the at sign (`site.test/@handle/post` is a profile URL). */
+const isNpmScope = (text: string, m: RegExpMatchArray): boolean => text[m.index! + m[0].length] === "/" && text[m.index! - 1] !== "/";
+/** Everything that is not a real handle: no letter or a resolution, an npm scope, a schema field name, a CSS at-rule. */
+const isSkippedHandle = (text: string, m: RegExpMatchArray): boolean => {
+  const word = m[1].toLowerCase();
+  return !handleLike(m[1]) || isNpmScope(text, m) || SCHEMA_FIELDS.has(word) || AT_RULES.has(word);
+};
+
+/**
+ * A `url` value worth parsing as a host: no spaces, a dot in the host part, not a relative path (`./x`, `~/x`). With a scheme
+ * or a leading `//` (protocol-relative) the first segment is a host whatever its TLD (`https://brand.md`); a bare value that
+ * looks like a file name (`logo.png`, `notes.md`) is not one.
+ */
+const hostLike = (value: string): boolean => {
+  const v = value.trim();
+  const explicit = /^([a-z]+:)?\/\//i.test(v);
+  const host = v.replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0];
+  const fileName = !explicit && /\.(png|jpe?g|gif|svg|webp|json|ya?ml|md|txt|css|js|ts|html?|mp[34])$/i.test(host);
+  return !/\s/.test(v) && (explicit || !/^[./~]/.test(v)) && host.includes(".") && !fileName;
+};
 
 /**
  * `www.example.test` -> the full host and its base name (prose names the brand without the TLD). Third-party hosts yield nothing.
@@ -34,7 +62,7 @@ const handleLike = (h: string): boolean => /[A-Za-z]/.test(h) && !/^\d+p$/i.test
  * `com`/`net`/`org` (`brand.zz.com`), and before a shared hosting suffix. Userinfo, port and a trailing FQDN dot are dropped.
  */
 export function domainTerms(value: string): string[] {
-  const host = (value.trim().replace(/^[a-z]+:\/\//i, "").split(/[/?#]/)[0].split("@").pop() ?? "").replace(/:\d{1,5}$/, "").replace(/\.$/, "").toLowerCase();
+  const host = (value.trim().replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0].split("@").pop() ?? "").replace(/:\d{1,5}$/, "").replace(/\.$/, "").toLowerCase();
   if (!host.includes(".")) return host ? [host] : [];
   if (PRIVATE_SUFFIX.includes(host)) return [host]; // the suffix itself names no brand
   if (THIRD_PARTY.some((t) => host === t || host.endsWith(`.${t}`))) return [];
@@ -73,7 +101,7 @@ function* walk(v: unknown, key = "", depth = 0): Generator<[string, string]> {
 
 /**
  * Raw candidate terms for the commit gate, from storage alone (no folder is read), mirroring the gate's folder derivation
- * (`derive_terms` in `scripts/validate_commit_guardian.py`). For every brand that is not an example: its slug and display
+ * (`derive_terms` in `scripts/validate_commit_guardian.py`): the same sources, not the same handle rules (see `HANDLE`). For every brand that is not an example: its slug and display
  * name; the tokens' wordmark and owned domains; the identifying hashtags of the config; any `name` key of the config and
  * tokens; every recipe's `city` and `url` (domain and base name); every carousel's `city`; and the @handles written in any
  * stored text (identity, spec, templates, guidance, recipes, config, tokens, carousels, content items). The gate applies its own length and
@@ -91,7 +119,7 @@ export async function brandTerms(repos: ImportRepos): Promise<string[]> {
     }
   };
   const handles = (text: string): void => {
-    for (const m of text.matchAll(HANDLE)) if (handleLike(m[1]) && !(text[m.index + m[0].length] === "/" && text[m.index - 1] !== "/") && !SCHEMA_FIELDS.has(m[1].toLowerCase()) && !AT_RULES.has(m[1].toLowerCase())) terms.add(m[1]);
+    for (const m of text.matchAll(HANDLE)) if (!isSkippedHandle(text, m)) terms.add(m[1]);
   };
   const scan = (body: unknown, onKey?: (key: string, value: string) => void): void => {
     for (const [key, value] of walk(body)) {
@@ -115,8 +143,10 @@ export async function brandTerms(repos: ImportRepos): Promise<string[]> {
       if (identifying(body)) terms.add(body);
     }
     scan(config, addName);
-    // One list per kind, then bounded-concurrency reads: no sequential N+1 (the gate gives this whole command a few seconds).
-    const each = async <T,>(list: Promise<T[]>, read: (x: T) => Promise<void>): Promise<void> => void (await forEachLimited(await list, READ_CONCURRENCY, read));
+    // One list per kind, then bounded-concurrency reads (the gate gives this whole command a few seconds). An item that vanished
+    // between the list and its read (deleted, purged, renamed) is skipped: one race must not fail the whole command.
+    const each = async <T,>(list: Promise<T[]>, read: (x: T) => Promise<void>): Promise<void> =>
+      void (await forEachLimited(await list, READ_CONCURRENCY, (x) => read(x).catch((e) => (e instanceof NotFoundError ? undefined : Promise.reject(e)))));
     await Promise.all([
       Promise.all((["identity", "spec"] as const).map(async (kind) => scan(await doc(brand.id, kind)))),
       each(repos.documents.list(brand.id, "template"), async (t) => scan(await doc(brand.id, "template", t.name))),
@@ -128,7 +158,7 @@ export async function brandTerms(repos: ImportRepos): Promise<string[]> {
       each(repos.recipes.list(brand.id), async (r) => {
         scan((await repos.recipes.get(brand.id, r.recipe, (b) => b)).value, (key, value) => {
           if (key === "city") terms.add(value);
-          else if (key === "url") domainTerms(value).forEach((t) => terms.add(t));
+          else if (key === "url" && hostLike(value)) domainTerms(value).forEach((t) => terms.add(t));
         });
       }),
       each(repos.carousels.list(brand.id), async (c) => {

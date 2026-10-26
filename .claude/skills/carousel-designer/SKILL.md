@@ -26,14 +26,15 @@ at **1080×1350**, data contract is the `Slide`/`CarouselInput` types in
 
 `system/ig-carousel/` is a **generic engine** and holds no brand values. Every
 color, font, radius, gradient, category and string lives in
-`profiles/<name>/brand.json`, loaded and validated by `loadBrand()` in
-`system/ig-carousel/brand-schema.ts`. Templates receive that `BrandTokens`
+the brand's `tokens` document (`brand doc get <slug> tokens`, the `brand.json` shape), loaded and validated by `loadBrand()` in
+`system/ig-carousel/brand-schema.ts` (folder brands) or `loadStoredBrand()` in
+`system/ig-carousel/stored-brand.ts` (stored brands). Templates receive that `BrandTokens`
 object as their first argument and ask for **semantic roles** — `color(brand,
 "accent")`, not a palette name like `terracotta` — so a profile whose palette
 uses entirely different color names renders without touching the engine. Your
 design decisions therefore land in one of two places, and it's worth being
-explicit about which: brand *values* go in the profile's `brand.json` (mirrored
-from its `brand-spec.md`); layout, structure and CSS go in the templates.
+explicit about which: brand *values* go in the brand's tokens (mirrored
+from its `spec` document); layout, structure and CSS go in the templates.
 
 ## Quick reference — dispatch table
 
@@ -46,14 +47,16 @@ from its `brand-spec.md`); layout, structure and CSS go in the templates.
 | Carousel-specific structure: slide count, hook/content/CTA, aspect ratios, mobile legibility | [references/carousel-format.md](references/carousel-format.md) |
 | To confirm a finished design actually works before calling it done | [references/verification-checklist.md](references/verification-checklist.md) |
 | A blank brand-spec.md to fill in for a new profile | [templates/brand-spec-template.md](templates/brand-spec-template.md) |
-| A worked example of a complete brand-spec.md | [examples/worked-brand-spec.md](examples/worked-brand-spec.md) (an invented brand; the authoritative spec for a real brand is that profile's own `brand-spec.md`) |
+| A worked example of a complete brand-spec.md | [examples/worked-brand-spec.md](examples/worked-brand-spec.md) (an invented brand; the authoritative spec for a real brand is that brand's own `spec` document) |
 
 Don't load everything up front. Read only the reference the current step needs — that's the point of this structure.
 
 ## The workflow
 
 ```
-1. Identify the profile/brand    -> does profiles/<name>/ have a brand-spec.md? If not, run the
+1. Identify the profile/brand    -> resolve it with `usar-perfil`, then read its spec where it is served
+                                     (stored brand: `brand doc get <slug> spec`; folder brand: as that skill
+                                     says). No spec yet? Run the
                                      brand-context-protocol before touching colors or type.
 2. Identify the ask               -> new carousel, restyle existing template, or design critique?
 3. If the brief is vague           -> propose 2-3 named styles from style-library.md, pick one together.
@@ -63,18 +66,24 @@ Don't load everything up front. Read only the reference the current step needs �
 6. Hand off decisions              -> translate the system into concrete values for the relevant
                                      file(s) in system/ig-carousel/templates/ (delegate the actual
                                      code edit per this repo's normal dev workflow).
-7. Verify                          -> render.ts output at real size, check the checklist.
+7. Verify                          -> render.ts output at real size, check the checklist. The engine has no
+                                     scratch-tokens option, so proposed token values cannot be previewed
+                                     before the owner writes them: verification follows the owner's write.
 ```
 
 Step 1 matters even for an existing brand: read the `brand-spec.md` if one
-exists (`profiles/<name>/brand-spec.md`) instead of re-deriving colors from
-memory, and read its compiled `profiles/<name>/brand.json` for the exact
-values and role mappings the templates actually resolve. If neither exists
+exists (`brand doc get <slug> spec`) instead of re-deriving colors from
+memory, and read its compiled tokens (`brand doc get <slug> tokens`) for the
+exact values and role mappings the templates actually resolve. Resolve the brand
+and where it is served from with `usar-perfil` first; a brand not yet cut over
+is read from its folder as that skill says. If neither exists
 yet, that's the first deliverable — see
 [references/brand-context-protocol.md](references/brand-context-protocol.md).
-When a design decision changes a brand value, update `brand-spec.md` first
-(it's the source of truth and carries provenance), then mirror it into
-`brand.json`.
+When a design decision changes a brand value, update the spec first
+(it's the source of truth and carries provenance), then mirror it into the
+tokens. Both are identity writes: they are the owner's (`brand doc put`
+needs the owner opt-in; never set it yourself), so hand the owner the exact
+values instead of writing them.
 
 ## When the brief is vague
 
