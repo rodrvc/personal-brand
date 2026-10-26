@@ -71,11 +71,13 @@ const storage = {
   documents: repos.documents,
   assets: repos.assets,
   carousels: repos.carousels,
+  exports: repos.exports,
+  files: objects,
   blobs: (brandId: string) => new BlobCache(objects, brandId, blobDir),
 };
 // A storage whose reads fail, and one whose carousel listing names a head that is gone by the time it is read.
 const failing = { ...storage, brands: { getBySlug: async () => { throw new Error("connection refused"); }, list: async () => { throw new Error("connection refused"); } } };
-const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), save: repos.carousels.save.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
+const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), save: repos.carousels.save.bind(repos.carousels), setStatus: repos.carousels.setStatus.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
@@ -85,7 +87,7 @@ app.use(assetsRouter(storage));
 app.use(renderRouter(storage));
 app.use(chatRouter(() => new NonePieceGenerator()));
 app.use(composeRouter(() => new NonePieceGenerator()));
-app.use(exportRouter());
+app.use(exportRouter(storage));
 const failingApp = express();
 failingApp.use("/api/profiles/:slug", storedBrandGuard(failing));
 failingApp.use(profilesRouter(failing));
@@ -210,7 +212,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const chat = await json(`/${SLUG}/carousels/week-one/chat`);
     assert.deepEqual(chat.body, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } });
     assert.deepEqual((await json(`/${SLUG}/carousels/week-one/outputs`)).body, { versions: [] });
-    for (const path of ["stats", "export/job-1"]) {
+    for (const path of ["stats"]) {
       const res = await json(`/${SLUG}/carousels/week-one/${path}`);
       assert.equal(res.status, 501, path);
     }

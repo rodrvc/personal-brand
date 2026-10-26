@@ -323,6 +323,8 @@ export const es = {
   "editor.conflictReloaded":
     "Este carrusel cambió en otra pestaña o por el chat. Se cargó la versión guardada; tus últimos cambios sin guardar no se aplicaron.",
 
+  "editor.versionMissing": "No se pudo guardar porque falta la versión del carrusel. Se cargó la versión guardada; vuelve a hacer tu último cambio.",
+
   // AI chat (editor/ChatPanel.tsx)
   "chat.title": "Chat",
   "statusBar.spend": "Gasto: {amount}",

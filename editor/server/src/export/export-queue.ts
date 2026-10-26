@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Browser } from "playwright";
 
 import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
+import type { AssetResolve } from "../../../../system/ig-carousel/render-batch.js";
 import type { LayoutTemplate } from "../../../../system/ig-carousel/layout-template.js";
 import { resolveOutputSubfolder } from "../../../../system/ig-carousel/profile.js";
 import { hashContent, updateEntry } from "../../../../system/assets/index.js";
@@ -30,6 +31,8 @@ export type RenderFn = (opts: {
   outputDir: string;
   assetExists: (assetId: string) => boolean;
   browser?: Browser;
+  /** Serves a stored brand's assets from the blob cache (`renderCarouselDocument` option of the same name). */
+  resolve?: AssetResolve;
 }) => Promise<string[]>;
 
 export interface ExportJob {
@@ -46,6 +49,15 @@ export interface ExportJob {
 
 const jobs = new Map<string, ExportJob>();
 let queueTail: Promise<void> = Promise.resolve();
+
+/** Registers a job and runs it strictly after every export already queued, folder or stored: one warm browser, no contention. */
+export function queueExportJob(job: ExportJob, run: () => Promise<void>): void {
+  jobs.set(job.id, job);
+  queueTail = queueTail.then(run).catch((error) => {
+    job.status = "error";
+    job.error = (error as Error).message;
+  });
+}
 
 export function getExportJob(id: string): ExportJob | undefined {
   return jobs.get(id);
@@ -103,7 +115,7 @@ function hashTemplate(template: unknown): string {
   return hashContent(Buffer.from(JSON.stringify(template)));
 }
 
-function collectAssetIds(doc: CarouselDocument): string[] {
+export function collectAssetIds(doc: CarouselDocument): string[] {
   const ids = new Set<string>();
   for (const slide of doc.slides) {
     if (slide.background.mode === "asset") ids.add(slide.background.assetId);
@@ -129,7 +141,7 @@ function collectAssetIds(doc: CarouselDocument): string[] {
  * Both states mean "this piece has no final content yet", so both block
  * export the same way unless the caller explicitly overrides it.
  */
-function hasUnfinishedPieces(doc: CarouselDocument): boolean {
+export function hasUnfinishedPieces(doc: CarouselDocument): boolean {
   return doc.slides.some(
     (slide) =>
       slide.background.pending ||
@@ -182,15 +194,7 @@ export async function enqueueExport(
     totalSlides: doc.slides.length,
     renderedSlides: 0,
   };
-  jobs.set(jobId, job);
-
-  queueTail = queueTail
-    .then(() => runExport(store, doc, revision, job, render))
-    .catch((error) => {
-      job.status = "error";
-      job.error = (error as Error).message;
-    });
-
+  queueExportJob(job, () => runExport(store, doc, revision, job, render));
   return jobId;
 }
 

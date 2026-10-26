@@ -27,7 +27,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, onResponse?: (res: Response) => void): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: {
@@ -35,6 +35,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  onResponse?.(res);
   if (!res.ok) {
     let message = res.statusText;
     try {
@@ -81,8 +82,22 @@ export function listCarousels(slug: string): Promise<{ carousels: CarouselSummar
   return request(`/profiles/${slug}/carousels`);
 }
 
+/**
+ * The version tag (`ETag`) of the last copy of each carousel this tab read or saved. A brand served from storage answers
+ * it on every read and save and demands it back as `If-Match`; a folder brand never sends one, so its entry is dropped
+ * and its saves go out without the header, as before.
+ */
+const lastEtag = new Map<string, string>();
+const rememberEtag = (key: string) => (res: Response) => {
+  const tag = res.headers.get("ETag");
+  // Only an answer that carries the copy it describes: a 409's tag belongs to the winner's copy, which this tab has not loaded.
+  if (!res.ok) return;
+  if (tag) lastEtag.set(key, tag);
+  else lastEtag.delete(key);
+};
+
 export function getCarousel(slug: string, id: string): Promise<CarouselDocument> {
-  return request(`/profiles/${slug}/carousels/${id}`);
+  return request(`/profiles/${slug}/carousels/${id}`, undefined, rememberEtag(`${slug}/${id}`));
 }
 
 /**
@@ -100,12 +115,19 @@ export function putCarousel(
   if (opts?.snapshot) params.set("snapshot", "true");
   if (opts?.base) params.set("base", opts.base);
   const query = params.size > 0 ? `?${params}` : "";
-  return request(`/profiles/${slug}/carousels/${doc.id}${query}`, {
-    method: "PUT",
-    body: JSON.stringify(doc),
-    ...(opts?.keepalive ? { keepalive: true } : {}),
-    ...(opts?.signal ? { signal: opts.signal } : {}),
-  });
+  const key = `${slug}/${doc.id}`;
+  const ifMatch = lastEtag.get(key);
+  return request(
+    `/profiles/${slug}/carousels/${doc.id}${query}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(doc),
+      ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}),
+      ...(opts?.keepalive ? { keepalive: true } : {}),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    },
+    rememberEtag(key),
+  );
 }
 
 /**

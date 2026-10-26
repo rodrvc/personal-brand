@@ -85,7 +85,7 @@ app.use(profilesRouter(opened?.storage));
 app.use(assetsRouter(opened?.storage));
 app.use(renderRouter(opened?.storage));
 app.use(composeRouter(getGenerator));
-app.use(exportRouter());
+app.use(exportRouter(opened?.storage));
 app.use(chatRouter(getGenerator));
 
 app.use((_req, res) => {
