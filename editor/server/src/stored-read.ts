@@ -1,11 +1,14 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import type { AssetRepository, BrandDocumentRepository, BrandRepository, CarouselRepository } from "@personal-brand/storage/contracts";
+import { NotFoundError, type AssetRepository, type BrandDocumentRepository, type BrandRepository, type CarouselRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
 import { FREE_TEMPLATE_ID, freeLayoutTemplate, type LayoutTemplate, type LayoutTemplateSummary } from "../../../system/ig-carousel/layout-template.js";
 import { listStoredLayoutTemplates, loadStoredBrand, loadStoredBrandStyle, loadStoredLayoutTemplate } from "../../../system/ig-carousel/stored-brand.js";
+import { renderFreeLayoutSlide, type FreeLayoutRenderContext } from "../../../system/ig-carousel/templates/free-layout.js";
+import { buildStoredRenderContext, storedAssetResolver } from "../../../system/ig-carousel/stored-render-context.js";
+import type { AssetResolve } from "../../../system/ig-carousel/render-batch.js";
 import { computeUsageFrom, storageUsageSource } from "../../../system/assets/usage.js";
 
 import type { CarouselListingEntry } from "./document-store.js";
@@ -29,6 +32,42 @@ export interface StoredBrand {
 }
 
 const SLUG = /^[a-z0-9-]+$/;
+
+/** A failure of the storage layer itself (database, bucket, blob cache), as opposed to a missing row or a deterministic render error. */
+export class StorageFailure extends Error {
+  constructor(readonly cause: unknown) {
+    super("storage failure");
+  }
+}
+
+/**
+ * Classifies at the source: every repository and blob read of `storage` rejects with a `StorageFailure` unless the error
+ * is a `NotFoundError` (a missing row is an answer, not an outage). Rendering code built on top is untouched, so its own
+ * deterministic errors keep their meaning.
+ */
+export function guardStorage(storage: EditorStorage): EditorStorage {
+  const guard = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get(obj, prop, receiver) {
+        const value = Reflect.get(obj, prop, receiver);
+        if (typeof value !== "function") return value;
+        return async (...args: unknown[]) => {
+          try {
+            return await value.apply(obj, args);
+          } catch (error) {
+            throw error instanceof NotFoundError ? error : new StorageFailure(error);
+          }
+        };
+      },
+    });
+  return {
+    brands: guard(storage.brands),
+    documents: guard(storage.documents),
+    assets: guard(storage.assets),
+    carousels: guard(storage.carousels),
+    blobs: (brandId) => guard(storage.blobs(brandId)),
+  };
+}
 
 /**
  * The one switch between the two live read paths, the same one the engines use (`resolveBrandSource`, D12): a brand is
@@ -84,13 +123,19 @@ export async function storedCarousel(s: StoredBrand, id: string): Promise<{ resu
 export async function storedCarouselListing(s: StoredBrand): Promise<CarouselListingEntry[]> {
   const heads = await s.storage.carousels.list(s.brandId);
   const entries = await Promise.all(
-    heads.map(async (head) => {
-      const { document, updatedAt } = await storedCarouselRaw(s, head.value.slug);
-      const stamp = typeof document.updatedAt === "string" ? document.updatedAt : updatedAt;
-      return { id: head.value.slug, title: head.value.title, status: document.status as CarouselDocument["status"], updatedAt: stamp, slideCount: Array.isArray(document.slides) ? document.slides.length : 0 };
+    heads.map(async (head): Promise<CarouselListingEntry | undefined> => {
+      try {
+        const { document, updatedAt } = await storedCarouselRaw(s, head.value.slug);
+        const stamp = typeof document.updatedAt === "string" ? document.updatedAt : updatedAt;
+        return { id: head.value.slug, title: head.value.title, status: document.status as CarouselDocument["status"], updatedAt: stamp, slideCount: Array.isArray(document.slides) ? document.slides.length : 0 };
+      } catch (error) {
+        // Removed between the list and the get: it is simply not there any more, the rest of the listing still is.
+        if (error instanceof NotFoundError) return undefined;
+        throw error;
+      }
     }),
   );
-  return entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return entries.filter((entry): entry is CarouselListingEntry => entry !== undefined).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 const EXTENSION: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "font/woff2": "woff2", "font/woff": "woff", "font/ttf": "ttf", "font/otf": "otf" };
@@ -128,14 +173,19 @@ export async function storedAssetFile(s: StoredBrand, assetId: string): Promise<
   return { path: await s.storage.blobs(s.brandId).read(a.sha256), mime: a.mime, sha256: a.sha256 };
 }
 
-/** Every brand cut over to storage: it is served from there even when a folder of the same name is still on disk. */
-export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<string[]> {
-  if (!storage) return [];
-  return (await storage.brands.list()).filter((row) => row.value.cutoverAt).map((row) => row.value.slug);
+/**
+ * Every brand cut over to storage: it is served from there even when a folder of the same name is still on disk.
+ * `shadowed` is every cut-over slug, archived ones included, because `resolveStored` serves them and their folder entry
+ * must stay hidden; `listed` is the non-archived subset, the only ones the picker shows.
+ */
+export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<{ shadowed: string[]; listed: string[] }> {
+  if (!storage) return { shadowed: [], listed: [] };
+  const cut = (await storage.brands.list({ includeArchived: true })).filter((row) => row.value.cutoverAt);
+  return { shadowed: cut.map((row) => row.value.slug), listed: cut.filter((row) => row.value.status !== "archived").map((row) => row.value.slug) };
 }
 
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
-const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/assets(\/(files|thumbs)\/.+)?$/];
+const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
 /** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet, no exports yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [
@@ -146,7 +196,7 @@ const EMPTY_READS: Array<[RegExp, unknown]> = [
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
  * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat and outputs answer empty;
- * every other route (stats, export, slides until their stored branch lands, generation sidecars) is a 501; writes are a
+ * every other route (stats, export, generation sidecars) is a 501; writes are a
  * 405, because they would land in a folder nobody reads. No route below this point ever builds a `ProfileStore` for a
  * stored brand, which would create an empty `profiles/<slug>` folder. Writes arrive with S10b.
  */
@@ -165,6 +215,26 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
       const empty = EMPTY_READS.find(([re]) => re.test(req.path));
       if (empty) return void res.json(empty[1]);
       res.status(501).json({ error: messages.storedNotYet });
-    }, next);
+    }, (error: unknown) => {
+      // A storage failure is an error, never a reason to serve the folder instead (D12): say so, and log the cause.
+      console.error(`Storage lookup failed for "${slug}":`, error);
+      res.status(503).json({ error: messages.storageUnavailable });
+    });
   };
+}
+
+/**
+ * One slide's HTML from storage. For Playwright (`preview` false) assets are `http://render.local/assets/<id>`, served
+ * by `resolve` out of the blob cache. For the browser preview (the iframe) they are this server's own
+ * `/assets/files/<id>` URLs instead, because a browser cannot reach `render.local`.
+ */
+export async function storedSlideHtml(s: StoredBrand, doc: CarouselDocument, n: number, preview: boolean): Promise<{ html: string; brand: BrandTokens; template: LayoutTemplate; resolve: AssetResolve }> {
+  const brand = await storedBrandTokens(s);
+  const template = doc.template ? await loadStoredLayoutTemplate(s.storage.documents, s.brandId, doc.template.id, brand, doc.template.params) : freeLayoutTemplate();
+  const base = await buildStoredRenderContext(s.storage.assets, s.brandId);
+  const fileUrl = (assetId: string): string => `/api/profiles/${encodeURIComponent(s.slug)}/assets/files/${assetId}`;
+  const ctx: FreeLayoutRenderContext = preview
+    ? { ...base, assetUrl: (assetId) => (base.assetUrl(assetId), fileUrl(assetId)), fontFaces: (base.fontFaces ?? []).map((face) => ({ ...face, url: fileUrl(assetIdOfPath(face.url)) })) }
+    : base;
+  return { html: renderFreeLayoutSlide(brand, template, doc, n, ctx), brand, template, resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };
 }

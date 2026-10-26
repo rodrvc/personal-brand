@@ -80,9 +80,16 @@ export function profilesRouter(storage?: EditorStorage): Router {
   router.get("/api/profiles", async (_req, res) => {
     try {
       // A cut-over brand is served from storage: its folder entry (if any) is replaced, never read for a card.
-      const cut = await cutOverSlugs(storage);
+      let cut: Awaited<ReturnType<typeof cutOverSlugs>>;
+      try {
+        cut = await cutOverSlugs(storage);
+      } catch (error) {
+        // Without the stored list a folder entry could shadow a cut-over brand: fail the listing, never guess.
+        console.error("Storage listing failed:", error);
+        return void res.status(503).json({ error: messages.storageUnavailable });
+      }
       const folders = (await listProfilesAsync())
-        .filter((entry) => !cut.includes(entry.slug))
+        .filter((entry) => !cut.shadowed.includes(entry.slug))
         .map((entry) => {
           if (!entry.hasBrand) return entry;
           try {
@@ -92,7 +99,7 @@ export function profilesRouter(storage?: EditorStorage): Router {
           }
         });
       // A stored brand has no card yet (it is built from the folder): it is listed like a profile mid-setup.
-      const stored = cut.map((slug) => ({ slug, hasBrand: true }));
+      const stored = cut.listed.map((slug) => ({ slug, hasBrand: true }));
       res.json({ profiles: [...folders, ...stored].sort((a, b) => a.slug.localeCompare(b.slug)) });
     } catch (error) {
       handleStoreError(error, res);
@@ -207,13 +214,22 @@ export function profilesRouter(storage?: EditorStorage): Router {
    */
   router.get("/api/profiles/:slug/template/:id", async (req, res) => {
     try {
+      // Parsed only when a template is actually loaded, so the free sentinel never depends on it. Only this parse
+      // maps to a 400: any other SyntaxError (a corrupt engine layout) is a server problem and stays a 500.
       const paramsRaw = req.query.params;
-      const params =
-        typeof paramsRaw === "string" && paramsRaw.length > 0
-          ? (JSON.parse(paramsRaw) as Record<string, unknown>)
-          : undefined;
+      const parseParams = (): Record<string, unknown> | undefined | "invalid" => {
+        if (typeof paramsRaw !== "string" || paramsRaw.length === 0) return undefined;
+        try {
+          return JSON.parse(paramsRaw) as Record<string, unknown>;
+        } catch (error) {
+          res.status(400).json({ error: `"params" is not valid JSON: ${(error as Error).message}` });
+          return "invalid";
+        }
+      };
       const stored = await resolveStored(storage, req.params.slug);
       if (stored) {
+        const params = req.params.id === FREE_TEMPLATE_ID ? undefined : parseParams();
+        if (params === "invalid") return;
         res.json(await storedTemplate(stored, req.params.id, params));
         return;
       }
@@ -224,8 +240,9 @@ export function profilesRouter(storage?: EditorStorage): Router {
         res.json(freeLayoutTemplate());
         return;
       }
-      const template = loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params);
-      res.json(template);
+      const params = parseParams();
+      if (params === "invalid") return;
+      res.json(loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params));
     } catch (error) {
       if (error instanceof LayoutTemplateError) {
         res.status(400).json({ error: error.message });

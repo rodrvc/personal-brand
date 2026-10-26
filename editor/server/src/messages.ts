@@ -6,6 +6,7 @@ export const messages = {
   },
   profileWithoutBrand: (slug: string) => `El perfil "${slug}" no tiene brand.json.`,
   storedReadOnly: (slug: string) => `La marca "${slug}" se lee desde el almacenamiento y por ahora no se puede modificar desde el editor.`,
+  storageUnavailable: "No se pudo consultar el almacenamiento de marcas. Intenta de nuevo en unos segundos.",
   storedNotYet: "Esta función para marcas guardadas llega en el próximo cambio.",
   uploadTooLarge: "El archivo es demasiado grande para subirlo (máximo ~28 MB). Adjunta una versión más liviana.",
   imageToolUnavailable:
