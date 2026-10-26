@@ -1,37 +1,41 @@
 # channel-adapter
 
-## Rol
-Explotar una pieza base en múltiples formatos y canales sin perder la tesis central. El objetivo no es "adaptar" pasivamente — es multiplicar el output de una sola buena idea ya escrita, antes de pedirle al sistema que genere algo nuevo desde cero.
+## Role
+Turn one base piece into several formats and channels without losing the central thesis. The goal is not passive "adaptation": it is to multiply the output of a single good idea that is already written, before asking the system to generate something new from scratch.
 
-## Cuándo usarlo
-Cada vez que una pieza pase a `Listo` o `Aprobado`, antes de darla por cerrada: preguntar si vale la pena derivarla a 1-2 formatos adicionales. Priorizar piezas con datos concretos, una tesis clara y experiencia real — esas son las que más rinden al derivar.
+## When to use
+Every time a piece is a `draft` the owner approved, or a `published` piece, before closing it: ask whether it is worth deriving into 1-2 additional formats. Prioritize pieces with concrete data, a clear thesis and real experience; those pay off most when derived.
 
-## Lee primero
-- pieza origen (draft o publicada)
-- `profiles/<perfil>/profile.md`
-- `profiles/<perfil>/config.yaml`
-- template del formato destino: `system/templates/linkedin-post.md`, `system/templates/script-short.md`, o `system/templates/carousel-thread.md`
+## Brand and content access
+Resolve the brand with the `usar-perfil` skill. The `brand` verbs below run as `pnpm --filter @personal-brand/storage brand <verb> --json`. For a brand served from storage, read and write pieces with the `brand content` verbs (see "Output"); for a folder brand, `usar-perfil` says where its files are and the same stages apply to them.
 
-## Derivaciones soportadas
+## Read first
+- the source piece (draft or published): `brand content get <slug> <piece> --json`
+- the brand's identity and config: `brand doc get <slug> identity` and `brand doc get <slug> config`
+- the template of the target format: `system/templates/linkedin-post.md`, `system/templates/script-short.md`, or `system/templates/carousel-thread.md`
 
-| Origen | Destino | Cómo |
+## Supported derivations
+
+| Source | Target | How |
 |---|---|---|
-| Artículo largo | Post corto LinkedIn | Extraer LA idea más fuerte (no un resumen del todo); reescribir con su propio gancho |
-| Artículo largo | Carrusel/hilo | Descomponer en 3-6 puntos autocontenidos (ver `carousel-thread.md`) |
-| Artículo largo o post | Script corto (30-60s) | Quedarse con un solo dato/aprendizaje; cortar todo lo demás |
-| Post corto | Comentario para postear en discusiones ajenas del mismo tema | Reducir a 2-3 líneas, sin CTA propio, aportando el dato/experiencia distintiva |
+| Long article | Short LinkedIn post | Extract THE strongest idea (not a summary of everything); rewrite it with its own hook |
+| Long article | Carousel/thread | Break it into 3-6 self-contained points (see `carousel-thread.md`) |
+| Long article or post | Short script (30-60s) | Keep a single fact/learning; cut everything else |
+| Short post | Comment to post in other people's discussions on the same topic | Reduce to 2-3 lines, no CTA of its own, adding the distinctive fact/experience |
 
-## Tareas
-1. Leer la pieza origen completa e identificar su tesis en una sola frase.
-2. Elegir qué merece derivarse: no todo formato aplica a toda pieza — un artículo denso en datos rinde bien en carrusel; una anécdota corta rinde bien en script, no en carrusel.
-3. Reescribir desde cero para el formato destino siguiendo su template. Nunca copiar párrafos literales entre formatos — cada uno tiene su propio ritmo.
-4. Cada derivado necesita su propio gancho, específico a ese formato — el gancho de un artículo no funciona igual en un script de 3 segundos.
+## Tasks
+1. Read the whole source piece and identify its thesis in one sentence.
+2. Choose what deserves to be derived: not every format fits every piece. A data-dense article does well as a carousel; a short anecdote does well as a script, not as a carousel.
+3. Rewrite from scratch for the target format, following its template. Never copy paragraphs verbatim between formats; each has its own rhythm.
+4. Each derivative needs its own hook, specific to that format. An article's hook does not work the same in a 3-second script.
 
 ## Output
-Nueva pieza en `profiles/<perfil>/content/drafts/<YYYY-MM-DD-slug>-<formato>.md`, con metadata que referencia la pieza origen (`derivado_de: <slug-origen>`).
+A new draft per derivative:
+`brand content put <slug> <YYYY-MM-DD-slug>-<format> --file <abs/body.md> --title <title> --stage draft --channel <channel> --format <format> --derived-from <source-piece>`
+(write the body to a scratch file outside the repo first, and pass its absolute path; add `--if-version <n>` only to edit a draft that already exists). `--derived-from` takes the source piece's slug (the CLI resolves it; an unknown slug exits 4) and is how the derivative references its source; it cannot be changed later. A folder brand gets the same draft under its `content/drafts/`, with `derived_from: <source-slug>` in the metadata.
 
-## Reglas
-- mantener la tesis original intacta; el ángulo puede enfatizarse distinto, no contradecirse
-- no copiar literal entre formatos — cada canal tiene su propio ritmo y longitud
-- cada derivado pasa por `draft-reviewer` igual que una pieza nueva, incluyendo el chequeo de hook
-- si la pieza origen no tiene suficiente sustancia para 2+ formatos (ej. es solo una opinión sin datos ni experiencia concreta), decirlo en vez de forzar una derivación débil
+## Rules
+- keep the original thesis intact; the angle can be emphasized differently, never contradicted
+- do not copy verbatim between formats; each channel has its own rhythm and length
+- each derivative goes through `draft-reviewer` like a new piece, including the hook check
+- if the source piece lacks substance for 2+ formats (for example, an opinion with no data or concrete experience), say so instead of forcing a weak derivation

@@ -107,8 +107,10 @@ Los perfiles que generan piezas visuales (carruseles) necesitan además sus
 
 | Archivo | Para quién | Contenido |
 |---|---|---|
-| `profiles/<perfil>/brand-spec.md` | humanos | paleta con **la fuente de cada color** (dónde se verificó), tipografías, usos permitidos/prohibidos del logo, keywords de tono, notas de completitud |
-| `profiles/<perfil>/brand.json` | el motor de render | los mismos valores, sin prosa, en la forma que consume `system/ig-carousel/` |
+| `brand-spec.md` | humanos | paleta con **la fuente de cada color** (dónde se verificó), tipografías, usos permitidos/prohibidos del logo, keywords de tono, notas de completitud |
+| `brand.json` | el motor de render | los mismos valores, sin prosa, en la forma que consume `system/ig-carousel/` |
+
+**Where they live (S11b).** A brand served from storage keeps the first as the `spec` document (`brand doc get <slug> spec`) and the second as the `tokens` document (`brand doc get <slug> tokens`); it has no folder to read. A folder brand that is not cut over yet has them as `<brand folder>/brand-spec.md` and `<brand folder>/brand.json` (`usar-perfil` says how to find the folder).
 
 El `.md` es la fuente de verdad: es el único que puede explicar *por qué* un
 color es el que es. El `.json` es su forma compilada. Al cambiar algo, se
@@ -148,7 +150,7 @@ puede) porque va directo a un prompt, no a una vista para humanos. Un
 perfil sin ninguno de estos encabezados no falla: `loadBrandStyle()` nunca
 lanza, solo devuelve campos vacíos — la pestaña "Marca" del editor muestra
 entonces "Esta marca no tiene guía de estilo todavía" nombrando los
-archivos a crear. Ver `profiles/example/brand-spec.md` para un ejemplo
+archivos a crear. Ver `brand-spec.md` de la marca ficticia `example` para un ejemplo
 completo y ficticio de las cuatro secciones.
 
 ## Estructura de `brand.json`
@@ -234,7 +236,7 @@ Consecuencias deliberadas:
 
 - Un perfil de **marca personal** que solo usa `brand-message` no declara
   taxonomía de categorías, ni los 12 meses, ni copy de listado — y carga.
-  Ver `profiles/example-personal/`, que existe justamente como esa prueba.
+  Ver la marca ficticia `example-personal`, que existe justamente como esa prueba.
 
   Lo que ese perfil **sí** necesita es su `recipes/brand-message.yaml`, aunque
   quede casi vacío: es donde declara de dónde pueden venir sus imágenes, y el
@@ -455,7 +457,7 @@ No en una fecha, que se vence y se ignora, sino en una condición observable:
 
 Hoy no se sostiene ningún costo porque **la app todavía no guarda**:
 `guardar_brand()` existe y está testeada, pero la interfaz no la invoca. En
-cuanto lo haga, `profiles/<slug>/` tendrá dos archivos con el color de marca y
+cuanto lo haga, `brand.yaml` (el de la app) y `brand.json` tendrán cada uno el color de marca y
 **nada que verifique que coinciden** — el usuario cambiará el acento en el
 editor, renderizará un reel y saldrá el color viejo. Ese bug parecerá un fallo
 de render y no lo será.
@@ -478,7 +480,7 @@ de unificar, no de parchear.
 
 **Resuelto: el logo es una pieza de la biblioteca de assets, no un token.**
 `brand.json` **sigue sin** un bloque `logo{}` y **así se queda**: el logo vive
-como una o más piezas `kind: "logo"` en `profiles/<slug>/assets/` (ver
+como una o más piezas `kind: "logo"` de la biblioteca de assets de la marca (ver
 `system/config/assets.schema.md`), etiquetadas `ink:dark` / `ink:light` según
 la tinta del logo. `system/assets/logo.ts` elige la variante contra el color
 real del fondo con `pickLogoVariant()` de `core/color.js`, y si la biblioteca
@@ -496,7 +498,7 @@ archivo.
 
 Define cómo se ve la marca. Alimenta el preview de posts y el render de afiches.
 
-Ver ejemplo comentado en `profiles/example/brand.yaml`.
+Ver el `brand.yaml` comentado de la marca ficticia `example`.
 
 ## Campos
 
@@ -564,7 +566,7 @@ para la dirección de proyección y el disparador de unificación.
 
 `system/` es el motor genérico y **no debe contener literales de marca**:
 ni colores hex, ni nombres propios, ni hashtags concretos. Los toma de
-`profiles/`.
+la marca (storage; hasta su corte, su carpeta).
 
 Test de aceptación: un segundo perfil debe renderizar sin tocar `system/`.
 
