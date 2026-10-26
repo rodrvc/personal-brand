@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { NotFoundError } from "@personal-brand/storage/contracts";
@@ -8,7 +9,7 @@ import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ImageToolUnavailableError, withSips } from "../image-tools.js";
 import { messages } from "../messages.js";
 import type { AssetFileResolver } from "../ai/piece-generator.js";
-import { ProfileStore } from "../profile-store.js";
+import { ProfileStore, resolveProfileRoots } from "../profile-store.js";
 import { guardStorage, resolveStored, storedAssetFile, type EditorStorage, type StoredBrand } from "../stored-read.js";
 
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
@@ -82,7 +83,9 @@ export async function readStoredAsset(s: StoredBrand, assetId: string): Promise<
 export function assetResolverFor(storage: EditorStorage | undefined, slug: string): AssetFileResolver {
   return async (id) => {
     const stored = await resolveStored(storage && guardStorage(storage), slug);
-    return stored ? readStoredAsset(stored, id) : readAssetFile(new ProfileStore(slug), id);
+    if (stored) return readStoredAsset(stored, id);
+    // `new ProfileStore` creates the folder: an unknown slug has none to read, so it must not get one.
+    return existsSync(resolveProfileRoots(slug).profileDir) ? readAssetFile(new ProfileStore(slug), id) : undefined;
   };
 }
 

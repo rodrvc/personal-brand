@@ -105,9 +105,9 @@ export function ProfilePickerRoute() {
       {!showLoader && profiles && profiles.length === 0 && (
         <p className="picker-hint">{t("profilePicker.empty")}</p>
       )}
-      {!showLoader && profiles && profiles.length > 0 && (
+      {!showLoader && profiles && profiles.some((p) => !p.archived) && (
         <div className="brand-card-grid ui-reveal">
-          {profiles.map((profile) =>
+          {profiles.filter((p) => !p.archived).map((profile) =>
             profile.hasBrand ? (
               <BrandCard key={profile.slug} profile={profile} />
             ) : (
@@ -115,6 +115,17 @@ export function ProfilePickerRoute() {
             ),
           )}
         </div>
+      )}
+      {!showLoader && profiles && profiles.some((p) => p.archived) && (
+        <details className="picker-archived">
+          <summary>{t("profilePicker.archived")}</summary>
+          <p className="picker-hint">{t("profilePicker.archivedHint")}</p>
+          <div className="brand-card-grid">
+            {profiles.filter((p) => p.archived).map((profile) => (
+              <BrandCard key={profile.slug} profile={profile} />
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );

@@ -55,3 +55,7 @@
   font-weight: 600;
   box-shadow: var(--ui-shadow-md);
 }
+
+/* Archived brand: an extra row for the read-only notice. */
+.editor-app--readonly { grid-template-rows: 52px auto 1fr 26px; }
+.editor-readonly-banner { padding: 6px 16px; font-size: 13px; font-weight: 600; text-align: center; color: var(--ui-ink-2); background: var(--ui-bg-2, rgba(128, 128, 128, 0.15)); }

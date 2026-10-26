@@ -47,6 +47,8 @@ export const es = {
   "profilePicker.title": "Elige una",
   "profilePicker.titleAccent": "marca",
   "profilePicker.loading": "Cargando perfiles",
+  "profilePicker.archived": "Archivadas",
+  "profilePicker.archivedHint": "Solo lectura: una marca archivada no admite cambios.",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
   "profilePicker.noBrandHint": "Sin brand.json configurado",
@@ -81,6 +83,7 @@ export const es = {
 
   // Editor route (routes/EditorRoute.tsx)
   "editorRoute.loading": "Abriendo carrusel",
+  "editorRoute.archivedReadOnly": "Marca archivada: solo lectura. Los cambios no se guardan.",
 
   // Top bar (editor/TopBar.tsx)
   "topbar.back": "← Carruseles",

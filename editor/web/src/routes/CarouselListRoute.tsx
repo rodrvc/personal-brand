@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { getBrand, listCarousels } from "../api/client";
+import { useArchivedBrand } from "../hooks/useArchivedBrand";
 import type { CarouselSummary } from "../api/types";
 import { Button } from "../components/Button";
 import { SheetLoader } from "../components/SheetLoader";
@@ -46,6 +47,7 @@ export function CarouselListRoute() {
   // rather than breaking the list.
   const [accentColor, setAccentColor] = useState<string | undefined>(undefined);
   const { creating, createError, handleCreate } = useCreateCarousel(slug, accentColor);
+  const archived = useArchivedBrand(slug ?? "");
 
   const rawStatus = searchParams.get("status");
   const statusFilter: StatusFilter = isStatusFilter(rawStatus) ? rawStatus : "all";
@@ -109,7 +111,7 @@ export function CarouselListRoute() {
            * happens, and showing both would be the exact "double loader"
            * this replaces.
            */}
-          <Button variant="primary" onClick={handleCreate} disabled={creating}>
+          <Button variant="primary" onClick={handleCreate} disabled={creating || archived === true}>
             {creating ? t("carouselList.creating") : t("carouselList.new")}
           </Button>
         </header>

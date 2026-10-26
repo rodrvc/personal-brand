@@ -126,9 +126,12 @@ const tests: Array<[string, () => Promise<void>]> = [
     const twin = (await json("/")).body.profiles.filter((p: { slug: string }) => p.slug === "folder-twin");
     assert.deepEqual(twin, [{ slug: "folder-twin", hasBrand: true }]);
   }],
-  ["an archived cut-over brand is not in the picker (nor is its folder twin), but the guard still serves it as stored", async () => {
+  ["an archived cut-over brand is listed flagged archived, once, after the live ones (its folder twin stays hidden), and the guard still serves it as stored", async () => {
     mkdirSync(join(root, "profiles", "archived-cut"), { recursive: true });
-    assert.ok(!(await json("/")).body.profiles.some((p: { slug: string }) => p.slug === "archived-cut"));
+    const listing = (await json("/")).body.profiles as Array<{ slug: string; archived?: boolean }>;
+    assert.deepEqual(listing.filter((p) => p.slug === "archived-cut"), [{ slug: "archived-cut", hasBrand: true, archived: true }]);
+    assert.equal(listing.findIndex((p) => p.archived), listing.length - listing.filter((p) => p.archived).length, "archived entries come last");
+    assert.ok(listing.filter((p) => !p.archived).every((p) => !("archived" in p)));
     assert.equal((await json("/archived-cut/assets/0123456789abcdef/generation")).status, 501);
   }],
   ["a storage outage while the page loads fails the PNG with a 503 and is not cached", async () => {

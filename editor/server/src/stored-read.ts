@@ -213,12 +213,17 @@ export async function storedConfig(s: StoredBrand): Promise<unknown> {
 /**
  * Every brand cut over to storage: it is served from there even when a folder of the same name is still on disk.
  * `shadowed` is every cut-over slug, archived ones included, because `resolveStored` serves them and their folder entry
- * must stay hidden; `listed` is the non-archived subset, the only ones the picker shows.
+ * must stay hidden; `archived` is the archived subset: the picker lists them apart, read-only.
  */
-export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<{ shadowed: string[]; listed: string[] }> {
-  if (!storage) return { shadowed: [], listed: [] };
-  const cut = (await storage.brands.list({ includeArchived: true })).filter((row) => row.value.cutoverAt);
-  return { shadowed: cut.map((row) => row.value.slug), listed: cut.filter((row) => row.value.status !== "archived").map((row) => row.value.slug) };
+export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<{ shadowed: string[]; listed: string[]; archived: string[] }> {
+  if (!storage) return { shadowed: [], listed: [], archived: [] };
+  const out = { shadowed: [] as string[], listed: [] as string[], archived: [] as string[] };
+  for (const row of await storage.brands.list({ includeArchived: true })) {
+    if (!row.value.cutoverAt) continue;
+    out.shadowed.push(row.value.slug);
+    (row.value.status === "archived" ? out.archived : out.listed).push(row.value.slug);
+  }
+  return out;
 }
 
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
