@@ -52,15 +52,23 @@ const render = async (opts: { outputDir: string; doc: unknown; resolve?: unknown
   });
 };
 
-const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, files: objects, blobs: (brandId: string) => new BlobCache(objects, brandId, join(root, ".blobs")) };
+const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: objects, blobs: (brandId: string) => new BlobCache(objects, brandId, join(root, ".blobs")) };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
 app.use(exportRouter(storage, render as never));
+// A storage whose carousel reads fail: every export route answers 503, never a raw 500.
+const broken = { ...storage, carousels: { ...repos.carousels, get: async () => { throw new Error("connection refused"); } } };
+const brokenApp = express();
+brokenApp.use(express.json());
+brokenApp.use("/api/profiles/:slug", storedBrandGuard(broken));
+brokenApp.use(exportRouter(broken, render as never));
+const brokenServer = brokenApp.listen(0);
 const server = app.listen(0);
-await new Promise<void>((resolve) => server.once("listening", resolve));
+await Promise.all([server, brokenServer].map((srv) => new Promise<void>((resolve) => srv.once("listening", resolve))));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/profiles/export-example/carousels`;
 
+const brokenBase = `http://127.0.0.1:${(brokenServer.address() as AddressInfo).port}/api/profiles/export-example/carousels`;
 const post = (id: string, body: object = {}) => fetch(`${base}/${id}/export`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 async function finished(res: Response): Promise<{ status: string; version?: number; error?: string }> {
   assert.equal(res.status, 202, JSON.stringify(await res.clone().json()));
@@ -134,16 +142,55 @@ const tests: Array<[string, () => Promise<void>]> = [
   }],
   ["a save that lands while the export renders keeps its work: the export is complete, the status flip is refused as an error", async () => {
     const racing = await add(brand.id, "racing-one", document("racing-one"));
+    const fail = repos.exports.fail;
+    let failCalls = 0;
+    repos.exports.fail = (async (...args: Parameters<typeof fail>) => (failCalls += 1, fail(...args))) as typeof fail;
     onRender = async () => void (await repos.carousels.save(racing.id, { title: "Edited meanwhile", document: { json: document("racing-one"), schemaVersion: 1 } }, { ...meta, expectedVersion: racing.version }));
     try {
       const job = await finished(await post("racing-one"));
       assert.deepEqual([job.status, job.version], ["error", 1], "the complete export's version is still reported");
     } finally {
       onRender = async () => {};
+      repos.exports.fail = fail;
     }
+    assert.equal(failCalls, 0, "a row that completed is never marked failed");
     const current = await repos.carousels.get(brand.id, "racing-one", (b) => b);
     assert.deepEqual([current.value.title, current.value.status], ["Edited meanwhile", "draft"]);
     assert.deepEqual((await repos.exports.list(racing.id)).map((e) => e.status), ["done"]);
+  }],
+  ["a stored export is polled by its job id: another carousel's id or an unknown id is 404", async () => {
+    const res = await post("draft-one");
+    const { jobId } = (await res.clone().json()) as { jobId: string };
+    assert.equal((await finished(res)).status, "done");
+    assert.equal((await fetch(`${base}/draft-one/export/${jobId}`)).status, 200);
+    assert.equal((await fetch(`${base}/pending-one/export/${jobId}`)).status, 404);
+    assert.equal((await fetch(`${base.replace("export-example", "other-example")}/draft-one/export/${jobId}`)).status, 404);
+    assert.equal((await fetch(`${base}/draft-one/export/no-such-job`)).status, 404);
+  }],
+  ["a storage outage answers 503 on export and on outputs", async () => {
+    const exported = await fetch(`${brokenBase}/draft-one/export`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(exported.status, 503);
+    assert.match(((await exported.json()) as { error: string }).error, /almacenamiento|disponible/i);
+    assert.equal((await fetch(`${brokenBase}/draft-one/outputs`)).status, 503);
+  }],
+  ["an approval race (the asset changed after the library was listed) is retried once and audited as a status change", async () => {
+    const library = createStorageAssetLibrary({ assets: repos.assets, blobs: objects, brandId: brand.id });
+    const piece = await library.register(Buffer.from("raced piece"), { destRelPath: "raced.png" });
+    await repos.assets.update(brand.id, piece.id, { status: "candidate" }, { ...meta, expectedVersion: (await repos.assets.get(brand.id, piece.id)).version });
+    const withAsset = { ...slide("s1"), background: { mode: "asset", assetId: piece.id, pinned: false, source: "library" } };
+    const raced = await add(brand.id, "approval-one", document("approval-one", [withAsset]));
+    // The row is touched after the library was listed, so the version the export holds is stale.
+    onRender = async () => void (await repos.assets.update(brand.id, piece.id, { tags: ["touched"] }, { ...meta, expectedVersion: (await repos.assets.get(brand.id, piece.id)).version }));
+    try {
+      assert.equal((await finished(await post("approval-one"))).status, "done");
+    } finally {
+      onRender = async () => {};
+    }
+    const after = await repos.assets.get(brand.id, piece.id);
+    assert.equal(after.value.status, "approved");
+    assert.deepEqual((await repos.exports.list(raced.id)).map((e) => e.status), ["done"]);
+    const audit = (await repos.revisions.list("brand_asset", after.id)).at(-1)!;
+    assert.deepEqual([audit.reason, audit.author], ["status", "editor:export"]);
   }],
   ["an archived brand refuses to export (403) and an unknown carousel is 404", async () => {
     const { brand: old, cut } = await makeBrand("old-export");
@@ -167,6 +214,7 @@ for (const [name, run] of tests) {
   }
 }
 server.close();
+brokenServer.close();
 rmSync(root, { recursive: true, force: true });
 console.log(`\n${tests.length - failed}/${tests.length} passed`);
 if (failed > 0) process.exitCode = 1;

@@ -1,6 +1,6 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -23,8 +23,10 @@ export interface EditorStorage {
   brands: Pick<BrandRepository, "getBySlug" | "list">;
   documents: Pick<BrandDocumentRepository, "get" | "list">;
   assets: Pick<AssetRepository, "list" | "get" | "update">;
-  carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus">;
+  carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus" | "create">;
   exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
+  /** Snapshots of a carousel (`GET .../versions`). */
+  revisions: Pick<RevisionRepository, "list">;
   /** The bucket, for the deliverables (export keys from storage's `keys.ts`); written write-once. */
   files: BlobStore;
   /** The local blob cache of one brand (content-addressed, read-only). */
@@ -50,6 +52,9 @@ export class StorageFailure extends Error {
 /** Errors that are an answer about the request, not an outage: a missing row, a lost version race, a refused input, an archived brand. */
 const isDomainError = (error: unknown): boolean =>
   error instanceof NotFoundError || error instanceof VersionConflictError || error instanceof InvalidInputError || error instanceof BrandArchivedError;
+
+/** Errors the stored layer raises (domain answers and outages), as opposed to the folder's own. */
+export const isStoredError = (error: unknown): boolean => error instanceof StorageFailure || isDomainError(error);
 
 /**
  * Classifies at the source: every repository and blob call of `storage` rejects with a `StorageFailure` unless the error
@@ -78,6 +83,7 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
     assets: guard(storage.assets),
     carousels: guard(storage.carousels),
     exports: guard(storage.exports),
+    revisions: guard(storage.revisions),
     files: guard(storage.files),
     blobs: (brandId) => guard(storage.blobs(brandId)),
   };
@@ -201,8 +207,8 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
 const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The writes a stored brand takes so far (S10b): saving a carousel document and exporting it. Every other write stays a 405. */
-const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels\/[^/]+\/export$/]];
+/** The writes a stored brand takes so far (S10b): creating, saving and exporting a carousel. Every other write (chat, plan/apply, regenerate) stays a 405. */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/export$/]];
 
 /** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [
@@ -213,7 +219,7 @@ const EMPTY_READS: Array<[RegExp, unknown]> = [
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
  * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat answers empty;
  * every other route (stats, generation sidecars) is a 501; writes other than
- * the carousel save and export are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
+ * the carousel create, save and export are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
  * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
 export function storedBrandGuard(storage: EditorStorage | undefined) {
@@ -260,4 +266,19 @@ export async function storedRenderParts(s: StoredBrand, doc: CarouselDocument) {
   const template = doc.template ? await loadStoredLayoutTemplate(s.storage.documents, s.brandId, doc.template.id, brand, doc.template.params) : freeLayoutTemplate();
   const base = await buildStoredRenderContext(s.storage.assets, s.brandId);
   return { brand, template, base, resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };
+}
+
+/**
+ * `GET .../versions` for a stored carousel: one stamp per recorded snapshot (revisions with reason `snapshot` or
+ * `structural`, the two the folder writes version files for), most recent first, in the folder's stamp format
+ * (`toISOString()` with `:` and `.` as `-`). Meaning differs: a folder version file holds the document as it was BEFORE
+ * the save, a revision holds it AFTER, so the stamp marks the save that created the snapshot.
+ */
+export async function storedVersions(s: StoredBrand, id: string): Promise<string[]> {
+  const { rowId } = await storedCarouselRaw(s, id);
+  return (await s.storage.revisions.list("carousel", rowId))
+    .filter((revision) => revision.reason === "snapshot" || revision.reason === "structural")
+    .map((revision) => revision.createdAt.replace(/[:.]/g, "-"))
+    .sort()
+    .reverse();
 }

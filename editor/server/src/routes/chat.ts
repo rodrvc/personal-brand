@@ -43,7 +43,7 @@ import { documentExists, readDocumentRevision, readValidatedDocument, snapshotDo
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset, readGeneratedAssetCostCents } from "./compose.js";
 import { messages } from "../messages.js";
-import { handleStoreError } from "./profiles.js";
+import { handleStoreError } from "./store-errors.js";
 
 const BASE = "/api/profiles/:slug/carousels/:id/chat";
 

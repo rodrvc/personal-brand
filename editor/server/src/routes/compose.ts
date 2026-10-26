@@ -30,6 +30,9 @@ import {
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { estimateImageCostCents, IMAGE_MODEL } from "../ai/pricing.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { handleStoreError } from "./store-errors.js";
+import { createStoredCarousel } from "../stored-create.js";
+import { guardStorage, isStoredError, resolveStored, type EditorStorage } from "../stored-read.js";
 
 /**
  * Pending plans held in memory between a *preview* POST `/carousels`
@@ -42,7 +45,8 @@ import { ProfileStore, ProfileStoreError } from "../profile-store.js";
  */
 const pendingPlans = new Map<string, ReturnType<typeof buildCompositionPlan>>();
 
-export function composeRouter(getGenerator: (slug: string) => PieceGenerator): Router {
+/** `storage` serves a brand cut over to storage, which so far can only create a blank carousel (S10b3); the rest stays on the folder. */
+export function composeRouter(getGenerator: (slug: string) => PieceGenerator, storage?: EditorStorage): Router {
   const router = Router();
 
   /**
@@ -69,6 +73,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
    */
   router.post("/api/profiles/:slug/carousels", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        const outcome = await createStoredCarousel(found, req.body ?? {}, req.query.mode === "plan" || req.body?.preview === true);
+        if (outcome.etag) res.setHeader("ETag", outcome.etag);
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const body = req.body as {
         title?: string;
@@ -619,6 +630,8 @@ class RegenerateBlockedError extends Error {}
  * "reload and diff" flow the way the editor PUT route's 409 does.
  */
 function handlePlanError(error: unknown, res: import("express").Response): void {
+  // Storage errors (a stored brand's create) share the profile routes' mapping: 404, 403, 400, 503.
+  if (isStoredError(error)) return handleStoreError(error, res);
   if (
     error instanceof ProfileStoreError ||
     error instanceof DocumentStoreError ||

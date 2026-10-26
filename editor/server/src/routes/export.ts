@@ -15,7 +15,7 @@ import { getSharedBrowser } from "../browser.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
 import { enqueueStoredExport, storedOutputVersions } from "../stored-export.js";
 import { guardStorage, resolveStored, StorageFailure, type EditorStorage } from "../stored-read.js";
-import { handleStoreError } from "./profiles.js";
+import { handleStoreError } from "./store-errors.js";
 
 const productionRender: RenderFn = async (opts) => {
   const browser = await getSharedBrowser();
@@ -43,22 +43,18 @@ function toExportJobResponse(job: ExportJob) {
 /** `storage` serves a brand cut over to storage (S10b2): its export lands in the bucket. `render` is injectable for tests. */
 export function exportRouter(storage?: EditorStorage, render: RenderFn = productionRender): Router {
   const router = Router();
-  const stored = async (slug: string) => {
-    const found = await resolveStored(storage, slug);
-    return found && { ...found, storage: guardStorage(found.storage) };
-  };
+  // Guarded at the source, the lookup included: an outage is a StorageFailure (503), never a raw 500.
+  const guarded = storage && guardStorage(storage);
+  const stored = (slug: string) => resolveStored(guarded, slug);
 
   router.post("/api/profiles/:slug/carousels/:id/export", async (req, res) => {
+    let fromStorage = false;
     try {
       const allowPending = (req.body as { allowPending?: boolean } | undefined)?.allowPending === true;
       const found = await stored(req.params.slug);
       if (found) {
-        try {
-          res.status(202).json(toExportJobResponse(await enqueueStoredExport(found, req.params.id, render, { allowPending })));
-        } catch (error) {
-          if (error instanceof ExportHasPendingPiecesError) res.status(409).json({ error: error.message });
-          else handleStoreError(error, res);
-        }
+        fromStorage = true;
+        res.status(202).json(toExportJobResponse(await enqueueStoredExport(found, req.params.id, render, { allowPending })));
         return;
       }
       const store = new ProfileStore(req.params.slug);
@@ -69,7 +65,8 @@ export function exportRouter(storage?: EditorStorage, render: RenderFn = product
         res.status(409).json({ error: error.message });
         return;
       }
-      if (error instanceof StorageFailure) return handleStoreError(error, res);
+      // Stored brands answer their domain errors (404, 403, 400) and outages (503) through the shared mapping.
+      if (fromStorage || error instanceof StorageFailure) return handleStoreError(error, res);
       const status =
         error instanceof ProfileStoreError || error instanceof DocumentStoreError ? 400 : 500;
       res.status(status).json({ error: (error as Error).message });

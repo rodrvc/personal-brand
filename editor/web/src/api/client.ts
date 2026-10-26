@@ -132,7 +132,7 @@ export function putCarousel(
 
 /**
  * Creates a new carousel. Inert — no AI call, no cost, no job id. `title`
- * is optional; the server falls back to the carousel id when omitted.
+ * is required: a missing or blank one is a 400.
  * `templateId: null` is the explicit "sin template" choice — distinct from
  * omitting the field, which the server reads as its default template.
  * `blank: true` (what the editor's own "Nuevo carrusel" button sends) is a
@@ -140,14 +140,17 @@ export function putCarousel(
  * footer, no pagination) plus one blank slide, instead of the historical
  * zero-slide `explicativo` default.
  */
-export function createCarousel(
+export async function createCarousel(
   slug: string,
   body: { title?: string; templateId?: string | null; id?: string; blank?: boolean },
 ): Promise<CreateCarouselResponse> {
-  return request(`/profiles/${slug}/carousels`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  let tag = null as string | null;
+  const created = await request<CreateCarouselResponse>(`/profiles/${slug}/carousels`, { method: "POST", body: JSON.stringify(body) }, (res) => {
+    tag = res.headers.get("ETag");
   });
+  // A stored brand's create answers the new row's version: the first save sends it as `If-Match`.
+  if (tag) lastEtag.set(`${slug}/${created.document.id}`, tag);
+  return created;
 }
 
 /** API/script-only preview mode (`?mode=plan`): returns a plan without creating a document. Not called by editor/web — see routes/compose.ts's comment on why it's kept. */

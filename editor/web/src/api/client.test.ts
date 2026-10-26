@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { ApiError, getCarousel, putCarousel } from "./client";
+import { ApiError, createCarousel, getCarousel, putCarousel } from "./client";
 import type { CarouselDocument } from "./types";
 
 /** The version tag the client keeps per carousel: read from GET, sent as If-Match, renewed by the save, tolerated absent. */
@@ -42,4 +42,10 @@ await getCarousel("folder-brand", "week-one");
 await putCarousel("folder-brand", doc);
 assert.equal(calls.at(-1)!.ifMatch, null, "a folder brand sends no If-Match");
 
-console.log("client: 6 passed");
+reply = () => ({ status: 201, etag: '"1"', body: { document: { id: "fresh-one" } } });
+await createCarousel("stored-brand", { title: "New", blank: true });
+reply = () => ({ status: 200, etag: '"2"', body: doc });
+await putCarousel("stored-brand", { id: "fresh-one" } as CarouselDocument);
+assert.equal(calls.at(-1)!.ifMatch, '"1"', "the first save of a created carousel names the version the create returned");
+
+console.log("client: 7 passed");
