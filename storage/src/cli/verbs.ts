@@ -94,6 +94,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   recipe: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 3] },
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  content: { values: ["file", "title", "channel", "format", "stage", "derived-from", "published-at", "meta", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
@@ -105,19 +106,19 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
   doc: ["get", "put"], guidance: ["list", "get", "put"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
-  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
+  rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], content: ["list", "get", "put", "stage"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
  * other write is identity, so a new verb is guarded until it is listed here.
  */
-const CONTENT_WRITES: Record<string, string[]> = { carousel: ["put", "status"], asset: ["add"], fonts: ["fetch"], run: ["create", "save"] };
+const CONTENT_WRITES: Record<string, string[]> = { carousel: ["put", "status"], content: ["put", "stage"], asset: ["add"], fonts: ["fetch"], run: ["create", "save"] };
 
 /**
  * The brand a verb would change, or null for a read. Fail closed: everything outside READS is a write, and an identity
@@ -143,6 +144,9 @@ export const VERB_USAGE = [
   "  brand rules add <marca> --file <regla.json> | update <marca> <id> --file <cambios.json> --if-version <n> | disable <marca> <id> --if-version <n>",
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
   "  brand carousel status <marca> <carrusel> --status <estado> --if-version <n> [--scheduled-for <fecha>] [--published-at <fecha>]",
+  "  brand content list <marca> [--stage idea|draft|published|archived] [--channel <canal>] [--derived-from <pieza>] | get <marca> <pieza>",
+  "  brand content put <marca> <pieza> --file <cuerpo.md> [--title <texto>] [--channel <canal>] [--format <formato>] [--stage idea|draft|archived] [--derived-from <pieza>] [--meta <json>] [--if-version <n>]   (sin --if-version crea y exige --title; published solo con content stage)",
+  "  brand content stage <marca> <pieza> --stage <etapa> --if-version <n> [--published-at <fecha ISO>]   (published solo desde draft y exige --published-at)",
   "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
   "  brand fonts fetch <marca>   (descarga las fuentes de googleFontsHref de los tokens y las registra como candidatas; reemplaza a system/assets/fetch-fonts.ts)",
   "  brand run list <marca> [--recipe <receta>] | get <marca> <id> | create <marca> <receta> --period-start <AAAA-MM-DD> --period-end <AAAA-MM-DD> --input <ruta> [--storyboard <ruta>]",
@@ -514,6 +518,64 @@ async function carousel(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   return wrote(args, saved, [`Carrusel ${name} guardado (versión ${saved.version}).`]);
 }
 
+const CONTENT_STAGES = ["idea", "draft", "published", "archived"];
+
+/** Flags each `content` subcommand accepts besides `--json`; any other flag is a usage error. */
+const CONTENT_FLAGS: Record<string, string[]> = {
+  list: ["stage", "channel", "derived-from"], get: [],
+  put: ["file", "title", "channel", "format", "stage", "derived-from", "meta", "if-version"], stage: ["stage", "published-at", "if-version"],
+};
+
+/**
+ * `brand content list|get|put|stage`: ideas, drafts and published pieces (`content_items`); the body is Markdown read from `--file`.
+ * `--derived-from` names the parent piece by slug (the repository stores its id). A piece cannot be created as `published`:
+ * it gets there from `draft` with `content stage`, which is what requires `--published-at`.
+ */
+async function content(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+  const v = (k: string) => args.values.get(k);
+  const stage = v("stage");
+  const expected = ifVersion(args);
+  const file = v("file");
+  const given = [...args.values.keys()].filter((k) => k !== "owner-opt-in");
+  if (given.some((k) => !CONTENT_FLAGS[sub].includes(k))) return usage();
+  if (stage !== undefined && !CONTENT_STAGES.includes(stage)) return usage();
+  if (sub === "list" ? name : !name) return usage();
+  if (sub === "put" && (!file || expected === undefined || stage === "published")) return usage();
+  if (sub === "stage" && (!stage || !expected)) return usage();
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  const parentId = async (parent: string) => (await ctx.repos.content.get(brand.id, parent)).id; // unknown slug: not found (exit 4)
+  const slugOf = async (id: string | null) => (id ? (await ctx.repos.content.getById(id)).value.slug : null);
+  if (sub === "list") {
+    const filter = { ...(stage ? { stage: stage as never } : {}), ...(v("channel") ? { channel: v("channel") } : {}), ...(v("derived-from") ? { derivedFrom: await parentId(v("derived-from")!) } : {}) };
+    const slugs = new Map((await ctx.repos.content.list(brand.id)).map((c) => [c.id, c.value.slug]));
+    const items = (await ctx.repos.content.list(brand.id, filter)).map((c) => ({ id: c.id, ...c.value, derivedFrom: c.value.derivedFrom ? slugs.get(c.value.derivedFrom) ?? null : null, version: c.version }));
+    return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map((c) => `${c.slug} v${c.version} ${c.stage}${c.channel ? ` ${c.channel}` : ""}${c.derivedFrom ? ` (de ${c.derivedFrom})` : ""}: ${c.title}`) : ["Sin piezas."]));
+  }
+  const cur = sub === "put" && expected === null ? null : await ctx.repos.content.get(brand.id, name);
+  if (sub === "get") {
+    const c = cur!;
+    const derivedFrom = await slugOf(c.value.derivedFrom);
+    return out(args, { trust: "brand-data", id: c.id, ...c.value, derivedFrom, version: c.version }, trusted([`${c.value.slug} v${c.version} ${c.value.stage} (id ${c.id})${derivedFrom ? ` de ${derivedFrom}` : ""}: ${c.value.title}`, c.value.bodyMd]));
+  }
+  if (sub === "stage") {
+    const done = await ctx.repos.content.setStage(cur!.id, { stage: stage as never, ...(v("published-at") ? { publishedAt: v("published-at") } : {}) }, meta(ctx, expected as number, "status"));
+    return wrote(args, done, [`Pieza ${name} en etapa ${done.value.stage} (versión ${done.version}).`]);
+  }
+  const bodyMd = ctx.read(file!);
+  const metaFile = v("meta");
+  const pieceMeta = metaFile ? jsonObjectFile(ctx, metaFile) : undefined;
+  const fields = { ...(v("channel") ? { channel: v("channel") } : {}), ...(v("format") ? { format: v("format") } : {}), ...(pieceMeta ? { meta: pieceMeta } : {}) };
+  if (cur === null) {
+    if (!v("title")) return usage();
+    const derivedFrom = v("derived-from") ? await parentId(v("derived-from")!) : undefined;
+    const created = await ctx.repos.content.create(brand.id, { slug: name, title: v("title")!, bodyMd, ...fields, ...(stage ? { stage: stage as never } : {}), ...(derivedFrom ? { derivedFrom } : {}) }, meta(ctx, null, "structural"));
+    return wrote(args, created, [`Pieza ${name} creada (id ${created.id}).`]);
+  }
+  if (stage || v("derived-from")) return usage(); // the stage moves only through `content stage`; the parent is fixed at creation
+  const saved = await ctx.repos.content.save(cur.id, { bodyMd, ...(v("title") ? { title: v("title") } : {}), ...fields }, meta(ctx, expected as number));
+  return wrote(args, saved, [`Pieza ${name} guardada (versión ${saved.version}).`]);
+}
+
 /** A JSON object read from a file named on the command line; `ctx.read` resolves the path against the caller's cwd, so a scratch path should be absolute. */
 function jsonObjectFile(ctx: Ctx, path: string): Record<string, unknown> {
   const json = parseJson(ctx.read(path));
@@ -821,6 +883,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "recipe": return recipe(ctx, args, p);
     case "rules": return rules(ctx, args, p);
     case "carousel": return carousel(ctx, args, p);
+    case "content": return content(ctx, args, p);
     case "run": return runs(ctx, args, p);
     case "asset": return asset(ctx, args, p);
     case "export": return exportPull(ctx, args, p);

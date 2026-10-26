@@ -175,9 +175,9 @@ otherwise pass and land inside it). It is part of the script that follows.
 # The REAL paragraph the samples are judged on, already normalized.
 TXT='<first paragraph of the script>'
 
-# VOICE_WORKDIR is required for a brand in this repo. For a standalone commission, set it to
-# the commission's own absolute directory (there is no default: guessing a path is how a cache
-# lands inside a repo).
+# $VOICE_WORKDIR is always required, with no default: guessing a path is how a cache lands
+# inside a repo. For a brand in this repo it is the shared voice-work directory; for a
+# standalone commission, set it to the commission's own absolute directory.
 VOICE_WORKDIR="${VOICE_WORKDIR:-}"
 [ -n "$VOICE_WORKDIR" ] || { echo "refused: set VOICE_WORKDIR to an absolute directory outside any repo (the commission dir for a standalone job)"; exit 1; }
 CACHE="$VOICE_WORKDIR/<slug>/voice-samples"   # or the commission's dir
@@ -187,6 +187,7 @@ REAL="$(cd "$CACHE" && pwd -P)"
 # Refuse a cache inside ANY git checkout, whatever the shell's cwd is: the cache path's own repo,
 # this session's checkout, every worktree, and the main checkout (parent of --git-common-dir).
 # A directory in no repo (a standalone commission dir) passes.
+# `--path-format` needs git >= 2.31: on an older git that source is skipped (the three others still apply).
 { git -C "$REAL" rev-parse --show-toplevel 2>/dev/null
   git rev-parse --show-toplevel 2>/dev/null
   git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p'

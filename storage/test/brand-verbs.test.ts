@@ -119,6 +119,50 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.deepEqual(JSON.parse((await run("recipe", "get", "example-shop", "weekly", "--json")).lines[0]).params, { cards: 3 });
   assert.equal(await code("recipe", "get", "example-shop", "monthly"), 4);
 
+  // content: ideas, drafts and published pieces
+  const body = file("piece.md", "# Fictional piece\n\nBody text.\n");
+  const edited0 = file("piece0.md", "Promoted body.\n");
+  assert.deepEqual(await inner("content", "list", "example-shop"), ["Sin piezas."]);
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", body), 2, "create needs --title");
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", body, "--title", "First", "--stage", "bogus"), 2, "unknown stage");
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", body, "--title", "First", "--stage", "draft", "--channel", "blog"), 0);
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", body, "--title", "Again"), 3, "an existing slug is a conflict");
+  assert.equal(await code("content", "put", "example-shop", "p2", "--file", body, "--title", "Idea", "--stage", "idea", "--channel", "talk"), 0);
+  assert.equal(await code("content", "put", "example-shop", "p3", "--file", body, "--title", "Out", "--stage", "published"), 2, "a piece is never created as published: it gets there with content stage");
+  assert.equal(await code("content", "put", "example-shop", "d1", "--file", body, "--title", "Derived", "--stage", "draft", "--derived-from", "nope"), 4, "an unknown parent slug is not found and creates nothing");
+  assert.equal(await code("content", "put", "example-shop", "d1", "--file", body, "--title", "Derived", "--stage", "draft", "--derived-from", "p1"), 0);
+  const p1Id = JSON.parse((await run("content", "get", "example-shop", "p1", "--json")).lines[0]).id;
+  const d1 = JSON.parse((await run("content", "get", "example-shop", "d1", "--json")).lines[0]);
+  assert.deepEqual([d1.derivedFrom, typeof d1.id, p1Id.length > 0], ["p1", "string", true], "get shows the parent's slug and the piece id");
+  const derived = JSON.parse((await run("content", "list", "example-shop", "--derived-from", "p1", "--json")).lines[0]).items;
+  assert.deepEqual(derived.map((i: { slug: string; derivedFrom: string }) => [i.slug, i.derivedFrom]), [["d1", "p1"]], "list filters by the parent's slug and shows it");
+  assert.equal(await code("content", "list", "example-shop", "--derived-from", "nope"), 4);
+  assert.equal(await code("content", "put", "example-shop", "d1", "--file", body, "--if-version", "1", "--derived-from", "p2"), 2, "the parent is fixed at creation");
+  const metaFile = file("meta.json", '{"link":"https://example.test/p","approved":true}');
+  assert.equal(await code("content", "put", "example-shop", "d1", "--file", body, "--if-version", "1", "--meta", metaFile), 0);
+  assert.deepEqual(JSON.parse((await run("content", "get", "example-shop", "d1", "--json")).lines[0]).meta, { link: "https://example.test/p", approved: true, stage: "draft" }, "meta is stored; get overlays the stage column");
+  assert.equal(await code("content", "put", "example-shop", "d1", "--file", body, "--if-version", "2", "--meta", file("meta-arr.json", "[1]")), 2, "meta must be a JSON object");
+  for (const argv of [["get", "example-shop", "p1", "--title", "x"], ["list", "example-shop", "--file", body], ["stage", "example-shop", "p1", "--stage", "draft", "--if-version", "1", "--channel", "x"], ["put", "example-shop", "p1", "--file", body, "--if-version", "1", "--published-at", "2026-10-01T10:00:00Z"]]) {
+    assert.equal(await code("content", ...argv), 2, `${argv.join(" ")}: an inapplicable flag is a usage error`);
+  }
+  // An idea is promoted by its own row: stage first, then the body with the next version.
+  assert.equal(await code("content", "stage", "example-shop", "p2", "--stage", "draft", "--if-version", "1"), 0);
+  assert.equal(await code("content", "put", "example-shop", "p2", "--file", edited0, "--if-version", "2"), 0);
+  assert.deepEqual(JSON.parse((await run("content", "get", "example-shop", "p2", "--json")).lines[0]).stage, "draft");
+  assert.deepEqual(await inner("content", "list", "example-shop", "--stage", "draft"), ["d1 v2 draft (de p1): Derived", "p1 v1 draft blog: First", "p2 v3 draft talk: Idea"]);
+  assert.deepEqual(JSON.parse((await run("content", "list", "example-shop", "--channel", "talk", "--json")).lines[0]).items.map((i: { slug: string }) => i.slug), ["p2"], "the channel filter excludes the other piece");
+  assert.deepEqual((await inner("content", "get", "example-shop", "p1")).slice(1), ["# Fictional piece", "", "Body text.", ""]);
+  assert.equal(await code("content", "get", "example-shop", "nope"), 4);
+  const edited = file("piece2.md", "Edited.\n");
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", edited, "--if-version", "9"), 3, "a stale version is a conflict");
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", edited, "--if-version", "1", "--stage", "published"), 2, "put never moves the stage");
+  assert.equal(await code("content", "put", "example-shop", "p1", "--file", edited, "--if-version", "1"), 0);
+  assert.equal(JSON.parse((await run("content", "get", "example-shop", "p1", "--json")).lines[0]).bodyMd, "Edited.\n");
+  assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "published", "--if-version", "2"), 2, "published needs --published-at");
+  assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "published", "--if-version", "2", "--published-at", "2026-10-01T10:00:00Z"), 0);
+  assert.equal(await code("content", "stage", "example-shop", "p1", "--stage", "archived"), 2, "stage needs --if-version");
+  assert.equal(await code("content", "frob", "example-shop", "p1"), 2);
+
   // rules list + check: an error finding exits 5, a clean carousel exits 0
   const brand = await repos.brands.getBySlug("example-shop");
   const author = { expectedVersion: null, author: "test", source: "cli" as const, reason: "structural" as const };
@@ -194,6 +238,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   // Decision 11: content writes on a real brand need no opt-in; identity writes do. IDENTITY_KINDS is the one table.
   assert.deepEqual(writeTarget("carousel", ["put", "acme-real", "x"]), { slug: "acme-real", identity: false }, "carousel put is content");
   assert.deepEqual(writeTarget("carousel", ["status", "acme-real", "x"]), { slug: "acme-real", identity: false });
+  assert.deepEqual([writeTarget("content", ["put", "acme-real", "x"]), writeTarget("content", ["stage", "acme-real", "x"]), writeTarget("content", ["get", "acme-real", "x"])], [{ slug: "acme-real", identity: false }, { slug: "acme-real", identity: false }, null], "content writes are content, reads are free");
   assert.deepEqual(writeTarget("asset", ["add", "acme-real", "f.png"]), { slug: "acme-real", identity: false });
   assert.deepEqual([writeTarget("carousel", ["get", "acme-real", "x"]), writeTarget("carousel", ["list", "acme-real"]), writeTarget("asset", ["get", "acme-real", "x"]), writeTarget("asset", ["list", "acme-real"])], [null, null, null, null]);
   assert.deepEqual(writeTarget("carousel", ["frob", "acme-real", "x"]), { slug: "acme-real", identity: true }, "an unlisted subcommand is guarded");
@@ -263,6 +308,8 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const refusedPut = await runB(env, "carousel", "put", "acme-real", "c1", "--file", cJson, "--title", "One");
   assert.deepEqual([refusedPut.exitCode, /aprobación explícita del dueño/.test(refusedPut.lines[0])], [6, true]);
   assert.equal(await code("asset", "add", "acme-real", "logo.png"), 6);
+  const refusedContent = await runB(env, "content", "put", "acme-real", "p1", "--file", cJson, "--title", "One");
+  assert.deepEqual([refusedContent.exitCode, /aprobación explícita del dueño/.test(refusedContent.lines[0]), (await repos.content.list(real.id)).length], [6, true, 0], "content put needs the opt-in before cutover and creates nothing");
   assert.deepEqual(await repos.carousels.list(real.id), [], "a refused write creates nothing");
   assert.equal((await runB(optIn, "carousel", "put", "acme-real", "c1", "--file", cJson, "--title", "One", "--owner-opt-in", "acme-real")).exitCode, 0, "the opt-in allows it before cutover");
   assert.equal((await runB(env, "carousel", "put", "acme-ghost", "c1", "--file", cJson, "--title", "One")).exitCode, 6, "a brand that does not exist is refused (fail closed: the lookup finds nothing)");
@@ -348,7 +395,11 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const run2 = JSON.parse((await w("run", "get", "acme-real", runId, "--json")).lines[0]);
   assert.deepEqual([run2.version, run2.input, run2.storyboard], [runVer + 1, { items: [{ title: "Two" }] }, { cards: [{ id: "cover", narration: "Hello" }] }]);
   // list --recipe: the positive filter keeps only that recipe's runs.
-  assert.equal(JSON.parse((await w("run", "list", "acme-real", "--recipe", "reel-week", "--json")).lines[0]).items.length, 2);
+  assert.equal((await w("run", "create", "acme-real", "other", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput)).exitCode, 0, "a run of another recipe");
+  const recipesOf = async (...extra: string[]) => JSON.parse((await w("run", "list", "acme-real", ...extra, "--json")).lines[0]).items.map((i: { recipe: string }) => i.recipe).sort();
+  assert.deepEqual(await recipesOf("--recipe", "reel-week"), ["reel-week", "reel-week"], "the filter excludes the other recipe's run");
+  assert.deepEqual(await recipesOf("--recipe", "other"), ["other"]);
+  assert.equal((await recipesOf()).length, 3, "without the flag every run is listed");
   // A real refusal before cutover: a brand that is not cut over needs the opt-in for a run write.
   await repos.brands.create({ slug: "acme-fresh", displayName: "Fresh" }, { expectedVersion: null, author: "test", source: "cli", reason: "structural" });
   const fresh = await w("run", "create", "acme-fresh", "reel-week", "--period-start", "2026-11-02", "--period-end", "2026-11-08", "--input", runInput);
