@@ -43,9 +43,10 @@ const isSkippedHandle = (text: string, m: RegExpMatchArray): boolean => {
 };
 
 /** The authority of a url-ish value: what follows an optional scheme or `//`, up to the first `/`, `?` or `#`. `explicit` tells that a scheme or `//` was present. */
+const SCHEME_PREFIX = /^([a-z]+:)?\/\//i;
 const splitHost = (value: string): { explicit: boolean; authority: string } => ({
-  explicit: /^([a-z]+:)?\/\//i.test(value),
-  authority: value.replace(/^([a-z]+:)?\/\//i, "").split(/[/?#]/)[0],
+  explicit: SCHEME_PREFIX.test(value),
+  authority: value.replace(SCHEME_PREFIX, "").split(/[/?#]/)[0],
 });
 
 /**

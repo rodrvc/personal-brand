@@ -38,6 +38,7 @@ From the repo root: `pnpm --filter @personal-brand/storage brand <verb> --json`
 Verbs you use here (all reads): `list`, `show <slug>`, `doc get <slug> <tokens|config|identity|spec|template> [<name>]`,
 `guidance list|get <slug> [<name>]`, `recipe get <slug> <recipe>`, `rules list <slug>`,
 `asset list <slug>`, `carousel list|get <slug> [<id>]`, `check <slug> --carousel <id>`.
+Content pieces (ideas, drafts, published) are read with `content list <slug> [--stage ...]` and `content get <slug> <piece>`; the content agents also write them (see `.claude/agents/`).
 Exit codes: 0 ok, 2 usage, 3 version conflict, 4 not found, 5 rule violation, 6 refused.
 Identity writes (tokens, config, rules, guidance, recipes, templates) are the owner's:
 never set `BRAND_OWNER_OPT_IN` or pass `--owner-opt-in` yourself; ask the owner.
@@ -72,7 +73,7 @@ Run `brand show <slug> --json` and read `cutoverAt`:
   `ls "${BRAND_PROFILES_DIR:-./profiles}"` lists folder brands, `example*` being
   fictional. Inside `<slug>` read `skills/*/SKILL.md` (business skills),
   `recipes/*.yaml`, `brand.json`, `brand-spec.md`, `config.yaml` (+
-  `config.local.yaml`). Never write its identity files from a skill (a flow may write only its own run's input and output, such as a reel's `reels/` folder). Do not run `brand import`
+  `config.local.yaml`). Never write its identity files from a skill (a flow may write only its own run's input and output, such as a reel's `reels/` folder, and a content agent may write that brand's ideas, drafts and published pieces under `ideas/` and `content/`). Do not run `brand import`
   or `brand cutover`: those are the owner's.
 
 A stored copy of a folder brand that is not cut over may be stale: the folder wins.
@@ -85,6 +86,8 @@ A stored copy of a folder brand that is not cut over may be stale: the folder wi
 | Recipes (data source, filters, counts) | `recipe get <slug> <recipe>` | `recipes/*.yaml` |
 | Tokens (colors, fonts, categories, copy) | `doc get <slug> tokens` | `brand.json` |
 | Brand decisions and provenance | `doc get <slug> spec` (and `identity`) | `brand-spec.md` |
+| Identity (voice, pillars, audience) | `doc get <slug> identity` | `profile.md` |
+| Content pieces (ideas, drafts, published) | `content list <slug> [--stage ...]`, `content get <slug> <piece>`; writes with `content put` / `content stage` | `ideas/backlog.md`, `content/drafts/`, `content/published/` under the brand folder |
 | Operational config (hashtags, output paths) | `doc get <slug> config` | `config.yaml` |
 | Engine rules the brand enables | `rules list <slug>` | (in `brand.json`) |
 

@@ -57,11 +57,19 @@ invent its criteria or copy another brand's: say so and offer to define it.
 
 ## Step 1 — Check that the brand can do this
 
-Read `brand show <slug> --json`: `cutoverAt` set means storage only; exit 4 or
-null means a folder brand (read it as `usar-perfil` Step 2 says). Never write its
-identity files (`brand.json`, recipes, config, skills, spec, guidance); the folder
-flow writes only the run's own `reels/` input and storyboard. Exit 1 means stop and ask the owner. Pnpm prefix for every `brand` verb:
-`pnpm --filter @personal-brand/storage brand`.
+Pnpm prefix for every `brand` verb: `pnpm --filter @personal-brand/storage brand`.
+
+Read `brand show <slug> --json` and branch on the result:
+
+- `cutoverAt` set: a stored brand. Storage is its only source (Step 3 below).
+- `cutoverAt` null, or exit 4 (storage does not know the brand): a folder brand.
+  Read it as `usar-perfil` Step 2 says.
+- Exit 1 (for example `DATABASE_URL` is missing): storage cannot be asked. Stop
+  and ask the owner.
+
+Never write a brand's identity files (`brand.json`, recipes, config, skills,
+spec, guidance). A folder brand's flow writes only the run's own `reels/` input
+and storyboard.
 
 | Piece | How to read it (stored brand) |
 |---|---|
@@ -115,7 +123,8 @@ scratch directory **outside the repo**; never write them into the brand's folder
    `--if-version`, and if its output was lost the run may exist anyway, so a
    blind retry makes a duplicate. Before re-creating, run
    `brand run list <slug> --recipe reel-week` and reuse the run whose
-   `periodStart`/`periodEnd` match.
+   `periodStart`/`periodEnd` match. If several runs match the period, stop and
+   ask the owner which one to reuse; never pick one yourself.
    Pass absolute paths to `--input`: they resolve from the caller's directory.
    Both files must hold a JSON **object** (not an array, not YAML).
 2. **Write the storyboard** as JSON (one `cover` card, one `item` card per curated
@@ -135,8 +144,9 @@ scratch directory **outside the repo**; never write them into the brand's folder
 3. **Validate for free:**
    `npx tsx system/ig-reel/storyboard.ts --check <storyboard.json> --items <items.json>`.
    Fix what it names (it always names the card). Then store it:
-   `brand run save <slug> <runId> --storyboard <storyboard.json> --if-version 1`
-   (`brand run get <slug> <runId>` shows the version to pass after later edits).
+   `brand run save <slug> <runId> --storyboard <storyboard.json> --if-version <version>`
+   where `<version>` is the run's current `version` (1 for a run you just created;
+   for a reused run, or after an earlier save, read it with `brand run get <slug> <runId>`).
 4. **`--audio-only`:**
    `npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --run <runId> --audio-only`
    (the ElevenLabs key loads from `<repo>/.env`). It synthesizes one MP3 per card
