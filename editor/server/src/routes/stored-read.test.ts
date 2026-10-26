@@ -73,7 +73,7 @@ const storage = {
   assets: repos.assets,
   carousels: repos.carousels,
   exports: repos.exports,
-  revisions: repos.revisions,
+  revisions: repos.revisions, chat: repos.chat,
   files: objects,
   blobs: (brandId: string) => new BlobCache(objects, brandId, blobDir),
 };
@@ -87,7 +87,7 @@ app.use(profilesRouter(storage));
 app.use(assetsRouter(storage));
 // The folder routers sit behind the guard exactly as in index.ts: for a stored brand none of them may be reached.
 app.use(renderRouter(storage));
-app.use(chatRouter(() => new NonePieceGenerator()));
+app.use(chatRouter(() => new NonePieceGenerator(), undefined, storage));
 app.use(composeRouter(() => new NonePieceGenerator(), storage));
 app.use(exportRouter(storage));
 const failingApp = express();
@@ -235,8 +235,8 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["chat is still 405 for a stored brand (S10b6), whatever the body", async () => {
-    for (const path of ["chat/messages", "chat/proposals/p1/apply"]) {
+  ["chat messages, references and apply are still 405 for a stored brand (until S10b7b), whatever the body", async () => {
+    for (const path of ["chat/messages", "chat/references", "chat/proposals/p1/apply"]) {
       const res = await json(`/${SLUG}/carousels/week-one/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       assert.equal(res.status, 405, path);
     }

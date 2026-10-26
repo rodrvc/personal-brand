@@ -50,10 +50,13 @@ import type { SaveOutcome } from "../stored-write.js";
  */
 const pendingPlans = new Map<string, PendingPlan>();
 
-/** A pending plan is forgotten after this long (never while an apply is running). */
+/** A pending plan is forgotten this long after its last activity: the preview, or the end of its last apply (never while an apply is running). A partial apply therefore keeps its resume for an hour after each retry. */
 const PLAN_TTL_MS = 60 * 60 * 1000;
 let planClock = () => Date.now();
-/** Test hook: replaces the clock the plan TTL reads. */
+/**
+ * Test hook: replaces the clock the plan TTL reads.
+ * @internal
+ */
 export function setPlanClock(clock: () => number): void { planClock = clock; }
 
 /** True while an apply for this plan is running: a re-plan under the same id would replace the plan it is paying for. */
@@ -62,18 +65,20 @@ const planBusy = (key: string): boolean => pendingPlans.get(key)?.inFlight === t
 /** Registers a fresh plan, first forgetting plans older than the TTL (never an in-flight one). Returns undefined when an apply is running for this id. */
 function registerPlan(key: string, plan: CompositionPlan): PendingPlan | undefined {
   if (planBusy(key)) return undefined;
-  for (const [k, p] of pendingPlans) if (!p.inFlight && planClock() - p.createdAt > PLAN_TTL_MS) pendingPlans.delete(k);
-  const pending: PendingPlan = { plan, inFlight: false, createdAt: planClock() };
+  for (const [k, p] of pendingPlans) if (expired(p)) pendingPlans.delete(k);
+  const pending: PendingPlan = { plan, inFlight: false, touchedAt: planClock() };
   pendingPlans.set(key, pending);
   return pending;
 }
+
+const expired = (p: PendingPlan): boolean => !p.inFlight && planClock() - p.touchedAt > PLAN_TTL_MS;
 
 /** Forgets a plan by identity: a re-plan that replaced it meanwhile is left alone. */
 function dropPlan(key: string, pending: PendingPlan): void {
   if (pendingPlans.get(key) === pending) pendingPlans.delete(key);
 }
 /** A plan waiting for `plan/apply`: once an apply has persisted, `resume` holds the document and the token (folder revision / stored row version) the next write must name, so a retry continues from it; `inFlight` refuses a second concurrent apply (two would both pay for the same slots). */
-interface PendingPlan { plan: CompositionPlan; inFlight: boolean; createdAt: number; resume?: { document: CarouselDocument; token: unknown } }
+interface PendingPlan { plan: CompositionPlan; inFlight: boolean; touchedAt: number; resume?: { document: CarouselDocument; token: unknown } }
 
 /** `storage` serves a brand cut over to storage, which so far can only create a blank carousel (S10b3); the rest stays on the folder. */
 export function composeRouter(getGenerator: (slug: string) => PieceGenerator, storage?: EditorStorage): Router {
@@ -198,7 +203,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
       const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
       const store = found ? undefined : new ProfileStore(req.params.slug);
       const key = `${req.params.slug}/${req.params.id}`;
-      const pending = pendingPlans.get(key);
+      let pending = pendingPlans.get(key);
+      if (pending && expired(pending)) { dropPlan(key, pending); pending = undefined; }
       if (!pending) {
         res.status(404).json({ error: `No pending plan for carousel "${req.params.id}" — create one via POST /carousels first.` });
         return;
@@ -235,6 +241,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
         if (outcome.status === 201 || outcome.drop) dropPlan(key, pending);
       } finally {
         pending.inFlight = false;
+        pending.touchedAt = planClock();
       }
       res.status(outcome.status).json(outcome.body);
     } catch (error) {

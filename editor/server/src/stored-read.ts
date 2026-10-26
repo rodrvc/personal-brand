@@ -1,6 +1,6 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { BrandArchivedError, InvalidInputError, NotFoundError, ObjectNotFoundError, PreconditionFailedError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, ObjectNotFoundError, PreconditionFailedError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ChatRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -27,6 +27,8 @@ export interface EditorStorage {
   exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
   /** Snapshots of a carousel (`GET .../versions`). */
   revisions: Pick<RevisionRepository, "listHeads">;
+  /** The insert-only chat log of a carousel. */
+  chat: Pick<ChatRepository, "append" | "list">;
   /** The bucket, for the deliverables (export keys from storage's `keys.ts`); written write-once. */
   files: BlobStore;
   /** The local blob cache of one brand (content-addressed, read-only). */
@@ -84,6 +86,7 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
     carousels: guard(storage.carousels),
     exports: guard(storage.exports),
     revisions: guard(storage.revisions),
+    chat: guard(storage.chat),
     // `putBlob` branches on two answers that are not outages: `put` refusing an existing key, and `head` not seeing a key yet.
     files: guard(storage.files, (error, method) => isDomainError(error) || (method === "put" && error instanceof PreconditionFailedError) || (method === "head" && error instanceof ObjectNotFoundError)),
     blobs: (brandId) => guard(storage.blobs(brandId)),
@@ -194,6 +197,16 @@ export async function storedAssetFile(s: StoredBrand, assetId: string): Promise<
   return { path: await s.storage.blobs(s.brandId).read(a.sha256), mime: a.mime, sha256: a.sha256 };
 }
 
+/** The stored `config` document (the importer stores config.yaml parsed as JSON); null when the brand has none. */
+export async function storedConfig(s: StoredBrand): Promise<unknown> {
+  try {
+    return (await s.storage.documents.get(s.brandId, "config", "", (body) => body)).value;
+  } catch (error) {
+    if (error instanceof NotFoundError) return null;
+    throw error;
+  }
+}
+
 /**
  * Every brand cut over to storage: it is served from there even when a folder of the same name is still on disk.
  * `shadowed` is every cut-over slug, archived ones included, because `resolveStored` serves them and their folder entry
@@ -206,21 +219,16 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 }
 
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
-const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|stats|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
+const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|stats|chat|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The writes a stored brand takes so far (S10b): creating (with its plan preview), saving, exporting, regenerating and plan/apply. Every other write (chat) stays a 405. */
-const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/(export|regenerate|plan\/apply)$/]];
-
-/** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet). */
-const EMPTY_READS: Array<[RegExp, unknown]> = [
-  [/^\/carousels\/[^/]+\/chat$/, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } }],
-];
+/** The writes a stored brand takes so far (S10b): creating (with its plan preview), saving, exporting, regenerating and plan/apply, and discarding a chat proposal. Every other chat write (messages, references, apply) stays a 405 until S10b7b. */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/(export|regenerate|plan\/apply)$/], ["POST", /^\/carousels\/[^/]+\/chat\/proposals\/[^/]+\/discard$/]];
 
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
- * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat answers empty;
+ * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass (chat included);
  * every other route (generation sidecars) is a 501; writes other than
- * the carousel create, save and export are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
+ * the carousel create, save, export, plan/apply, regenerate and chat discard (STORED_WRITES) are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
  * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
 export function storedBrandGuard(storage: EditorStorage | undefined) {
@@ -236,8 +244,6 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
       if (STORED_WRITES.some(([method, re]) => req.method === method && re.test(req.path))) return next();
       if (req.method !== "GET" && req.method !== "HEAD") return void res.status(405).json({ error: messages.storedReadOnly(slug) });
       if (STORED_READS.some((re) => re.test(req.path))) return next();
-      const empty = EMPTY_READS.find(([re]) => re.test(req.path));
-      if (empty) return void res.json(empty[1]);
       res.status(501).json({ error: messages.storedNotYet });
     }, (error: unknown) => {
       // A storage failure is an error, never a reason to serve the folder instead (D12): say so, and log the cause.
