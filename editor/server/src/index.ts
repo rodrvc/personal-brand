@@ -18,6 +18,8 @@ import { NonePieceGenerator } from "./ai/none.js";
 import { OpenAiPieceGenerator } from "./ai/openai.js";
 import type { PieceGenerator } from "./ai/piece-generator.js";
 import { initStorageRuntime, storageSyncMiddleware } from "./storage/runtime.js";
+import { openEditorStorage } from "./stored-open.js";
+import { storedBrandGuard } from "./stored-read.js";
 
 /**
  * Selects the storage backend (issue #99: `fs` default, `s3` opt-in via
@@ -69,12 +71,17 @@ function getGenerator(slug: string): PieceGenerator {
   return apiKey ? new OpenAiPieceGenerator(apiKey, (id) => readAssetFile(new ProfileStore(slug), id)) : new NonePieceGenerator();
 }
 
+// Brands cut over to storage are read through its repositories (S10a); `DATABASE_URL` unset keeps every brand a folder.
+const opened = openEditorStorage();
+console.log(opened ? "Read path: storage for cut-over brands, folders for the rest" : "Read path: folders (DATABASE_URL not set)");
+
 const app = express();
 app.use(express.json({ limit: "40mb" }));
+app.use("/api/profiles/:slug", storedBrandGuard(opened?.storage));
 app.use(storageSyncMiddleware());
 
-app.use(profilesRouter());
-app.use(assetsRouter());
+app.use(profilesRouter(opened?.storage));
+app.use(assetsRouter(opened?.storage));
 app.use(renderRouter());
 app.use(composeRouter(getGenerator));
 app.use(exportRouter());
@@ -105,6 +112,7 @@ const server = app.listen(port, bind, async () => {
 
 async function shutdown(): Promise<void> {
   await closeSharedBrowser();
+  await opened?.close();
   server.close(() => process.exit(0));
 }
 

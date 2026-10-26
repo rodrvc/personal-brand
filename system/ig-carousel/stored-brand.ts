@@ -2,7 +2,7 @@ import { NotFoundError, type BrandDocumentRepository } from "@personal-brand/sto
 
 import { parseBrandTokens, type BrandFeature, type BrandTokens } from "./brand-schema.js";
 import { buildBrandStyle, type BrandStyle } from "./brand-style.js";
-import { resolveLayoutTemplate, type LayoutTemplate } from "./layout-template.js";
+import { resolveLayoutTemplate, summarizeLayoutTemplates, type LayoutTemplate, type LayoutTemplateSummary } from "./layout-template.js";
 
 /** What the stored-brand loaders read: the brand's documents, nothing else. */
 export type BrandDocuments = Pick<BrandDocumentRepository, "get">;
@@ -57,4 +57,9 @@ export async function loadStoredLayoutTemplate(
 ): Promise<LayoutTemplate> {
   const override = await optional(documents, brandId, "template", id);
   return resolveLayoutTemplate(id, override, `the stored template "${id}"`, brand, params);
+}
+
+/** `listLayoutTemplates` for a stored brand: the engine defaults, with the brand's stored `template` documents as overrides (same ids replace, new ids are added). */
+export async function listStoredLayoutTemplates(documents: Pick<BrandDocumentRepository, "list">, brandId: string): Promise<LayoutTemplateSummary[]> {
+  return summarizeLayoutTemplates((await documents.list(brandId, "template")).map((doc) => doc.name));
 }

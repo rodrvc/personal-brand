@@ -6,10 +6,12 @@ import { loadBrand } from "../../../../system/ig-carousel/brand-schema.js";
 import { FREE_TEMPLATE_ID, freeLayoutTemplate, listLayoutTemplates, loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 import { updateEntry } from "../../../../system/assets/index.js";
+import { NotFoundError } from "@personal-brand/storage/contracts";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
 import { invalidateAssetIndex } from "../asset-index-cache.js";
 import {
+  assertValidCarouselId,
   documentExists,
   DocumentStoreError,
   listCarousels,
@@ -21,6 +23,18 @@ import {
   writeDocumentIfRevision,
 } from "../document-store.js";
 import { messages } from "../messages.js";
+import {
+  etagOf,
+  resolveStored,
+  storedBrandTokens,
+  storedCarousel,
+  storedCarouselListing,
+  cutOverSlugs,
+  storedStyle,
+  storedTemplate,
+  storedTemplates,
+  type EditorStorage,
+} from "../stored-read.js";
 import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
 import { buildCardSummary } from "../profile-card.js";
 
@@ -36,6 +50,10 @@ function handleStoreError(error: unknown, res: import("express").Response): void
     res.status(400).json({ error: error.message });
     return;
   }
+  if (error instanceof NotFoundError) {
+    res.status(404).json({ error: error.message });
+    return;
+  }
   const message = (error as Error)?.message ?? String(error);
   if (/ENOENT|no such file/i.test(message)) {
     res.status(404).json({ error: message });
@@ -44,7 +62,11 @@ function handleStoreError(error: unknown, res: import("express").Response): void
   res.status(500).json({ error: message });
 }
 
-export function profilesRouter(): Router {
+/**
+ * `storage` is the stored read path (S10a): a brand cut over to storage is read through its repositories, every other
+ * brand through its folder, exactly as before. Writes stay on the folder until S10b.
+ */
+export function profilesRouter(storage?: EditorStorage): Router {
   const router = Router();
 
   /**
@@ -57,15 +79,21 @@ export function profilesRouter(): Router {
    */
   router.get("/api/profiles", async (_req, res) => {
     try {
-      const profiles = (await listProfilesAsync()).map((entry) => {
-        if (!entry.hasBrand) return entry;
-        try {
-          return { ...entry, card: buildCardSummary(entry.slug) };
-        } catch {
-          return entry;
-        }
-      });
-      res.json({ profiles });
+      // A cut-over brand is served from storage: its folder entry (if any) is replaced, never read for a card.
+      const cut = await cutOverSlugs(storage);
+      const folders = (await listProfilesAsync())
+        .filter((entry) => !cut.includes(entry.slug))
+        .map((entry) => {
+          if (!entry.hasBrand) return entry;
+          try {
+            return { ...entry, card: buildCardSummary(entry.slug) };
+          } catch {
+            return entry;
+          }
+        });
+      // A stored brand has no card yet (it is built from the folder): it is listed like a profile mid-setup.
+      const stored = cut.map((slug) => ({ slug, hasBrand: true }));
+      res.json({ profiles: [...folders, ...stored].sort((a, b) => a.slug.localeCompare(b.slug)) });
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -79,16 +107,25 @@ export function profilesRouter(): Router {
    * degrades to `card: undefined` for a profile with no/broken brand.json,
    * same as the listing does.
    */
-  router.get("/api/profiles/:slug/card", (req, res) => {
+  router.get("/api/profiles/:slug/card", async (req, res) => {
     try {
+      if (await resolveStored(storage, req.params.slug)) {
+        res.json({});
+        return;
+      }
       res.json({ card: buildCardSummary(req.params.slug) });
     } catch (error) {
       handleStoreError(error, res);
     }
   });
 
-  router.get("/api/profiles/:slug/brand", (req, res) => {
+  router.get("/api/profiles/:slug/brand", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json(await storedBrandTokens(stored));
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const brand = loadBrand(store.roots.profileDir);
       res.json(brand);
@@ -116,8 +153,13 @@ export function profilesRouter(): Router {
    * a profile with no style files: an all-empty style with `sources: []` is
    * a valid, expected answer (the UI shows "no hay guía todavía" for that).
    */
-  router.get("/api/profiles/:slug/style", (req, res) => {
+  router.get("/api/profiles/:slug/style", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json(await storedStyle(stored));
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json(loadBrandStyle(store.roots.profileDir));
     } catch (error) {
@@ -134,8 +176,13 @@ export function profilesRouter(): Router {
    * ever reading outside the profiles root (a nonexistent slug still
    * resolves to a syntactically valid path under it).
    */
-  router.get("/api/profiles/:slug/templates", (req, res) => {
+  router.get("/api/profiles/:slug/templates", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json({ templates: await storedTemplates(stored), freeTemplateId: FREE_TEMPLATE_ID });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (!existsSync(store.roots.profileDir)) {
         res.status(404).json({ error: `No profile "${req.params.slug}"` });
@@ -158,8 +205,18 @@ export function profilesRouter(): Router {
    * endpoint as any real template. `GET .../templates` still never lists it:
    * it is a choice the UI offers, not a template the brand owns.
    */
-  router.get("/api/profiles/:slug/template/:id", (req, res) => {
+  router.get("/api/profiles/:slug/template/:id", async (req, res) => {
     try {
+      const paramsRaw = req.query.params;
+      const params =
+        typeof paramsRaw === "string" && paramsRaw.length > 0
+          ? (JSON.parse(paramsRaw) as Record<string, unknown>)
+          : undefined;
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json(await storedTemplate(stored, req.params.id, params));
+        return;
+      }
       // Constructing the store validates the slug (400 on a malformed one)
       // without any I/O, so the sentinel inherits the same check as a real id.
       const store = new ProfileStore(req.params.slug);
@@ -167,11 +224,6 @@ export function profilesRouter(): Router {
         res.json(freeLayoutTemplate());
         return;
       }
-      const paramsRaw = req.query.params;
-      const params =
-        typeof paramsRaw === "string" && paramsRaw.length > 0
-          ? (JSON.parse(paramsRaw) as Record<string, unknown>)
-          : undefined;
       const template = loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params);
       res.json(template);
     } catch (error) {
@@ -183,8 +235,13 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels", (req, res) => {
+  router.get("/api/profiles/:slug/carousels", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json({ carousels: await storedCarouselListing(stored) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json({ carousels: listCarousels(store) });
     } catch (error) {
@@ -192,8 +249,21 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        assertValidCarouselId(req.params.id);
+        const { result, version } = await storedCarousel(stored, req.params.id);
+        if (!result.valid) {
+          res.status(500).json({ error: "Stored document failed validation", details: result.errors });
+          return;
+        }
+        // The version this copy was read at: S10b's save answers 409 unless `If-Match` still names it.
+        res.setHeader("ETag", etagOf(version));
+        res.json(result.document);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (!documentExists(store, req.params.id)) {
         res.status(404).json({ error: `No carousel "${req.params.id}"` });
@@ -305,8 +375,13 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id/versions", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id/versions", async (req, res) => {
     try {
+      // Snapshots are written by the save path (S10b); a stored carousel lists none until then.
+      if (await resolveStored(storage, req.params.slug)) {
+        res.json({ versions: [] });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json({ versions: listVersions(store, req.params.id) });
     } catch (error) {

@@ -111,3 +111,26 @@ export async function getOrCreateThumbnail(
   }
   return thumbnail;
 }
+
+/**
+ * The thumbnail of a stored asset, cached under its sha256 like a folder one is under its id. The original is the blob
+ * the local cache already holds; the cache file is the same disposable temp-dir entry, written the same way.
+ */
+export async function storedThumbnail(slug: string, file: { path: string; sha256: string }, width: number): Promise<Buffer> {
+  const cachePath = thumbCachePath(slug, file.sha256, width);
+  try {
+    return await readFile(cachePath);
+  } catch {
+    // a miss: generate below
+  }
+  const thumbnail = await sharp(file.path).resize({ width, withoutEnlargement: true }).webp({ quality: 72 }).toBuffer();
+  await mkdir(dirname(cachePath), { recursive: true });
+  const tempPath = `${cachePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tempPath, thumbnail);
+    await rename(tempPath, cachePath);
+  } catch {
+    await rm(tempPath, { force: true });
+  }
+  return thumbnail;
+}

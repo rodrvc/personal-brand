@@ -347,9 +347,13 @@ function idsFromJsonDir(dir: string): string[] {
  * always render "no templates" rather than handle an exception.
  */
 export function listLayoutTemplates(profileDir: string): LayoutTemplateSummary[] {
+  return summarizeLayoutTemplates(idsFromJsonDir(join(profileDir, "templates")));
+}
+
+/** `listLayoutTemplates` for a brand whose overrides come from somewhere other than a folder (storage): the engine defaults plus these override ids. */
+export function summarizeLayoutTemplates(overrideIds: string[]): LayoutTemplateSummary[] {
   const engineDir = dirname(fileURLToPath(import.meta.url));
   const defaultIds = idsFromJsonDir(join(engineDir, "layouts"));
-  const overrideIds = idsFromJsonDir(join(profileDir, "templates"));
 
   const byId = new Map<string, LayoutTemplateSummary>();
   for (const id of defaultIds) {

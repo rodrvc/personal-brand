@@ -5,6 +5,8 @@ export const messages = {
     chat: "El chat con IA no está disponible: falta configurar la variable OPENAI_API_KEY.",
   },
   profileWithoutBrand: (slug: string) => `El perfil "${slug}" no tiene brand.json.`,
+  storedReadOnly: (slug: string) => `La marca "${slug}" se lee desde el almacenamiento y por ahora no se puede modificar desde el editor.`,
+  storedNotYet: "Esta función para marcas guardadas llega en el próximo cambio.",
   uploadTooLarge: "El archivo es demasiado grande para subirlo (máximo ~28 MB). Adjunta una versión más liviana.",
   imageToolUnavailable:
     "Este equipo no puede procesar imágenes (convertir HEIC, reducir fotos o preparar el afiche): hoy eso solo funciona en macOS.",
