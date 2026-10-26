@@ -11,10 +11,13 @@ export interface SaveOutcome {
   etag?: string;
 }
 
-/** `If-Match: "<version>"` (a weak prefix is tolerated). `*` and anything else is malformed: a save names the exact version it edited. */
+/**
+ * `If-Match: "<version>"`. Strong comparison only (RFC 9110 13.1.1): a weak `W/"n"`, `*` and anything else is malformed
+ * (400), because a save names the exact version it edited and a weak tag promises no byte identity.
+ */
 export function parseIfMatch(header: string | undefined): number | "missing" | "malformed" {
   if (header === undefined || header.trim() === "") return "missing";
-  const match = /^(?:W\/)?"(\d{1,9})"$/.exec(header.trim());
+  const match = /^"(\d{1,9})"$/.exec(header.trim());
   return match ? Number(match[1]) : "malformed";
 }
 
@@ -31,14 +34,14 @@ async function conflict(s: StoredBrand, id: string): Promise<SaveOutcome> {
  * does not apply: the version is the stale-copy check.
  */
 export async function saveStoredCarousel(s: StoredBrand, id: string, body: unknown, ifMatch: string | undefined, snapshot: boolean): Promise<SaveOutcome> {
+  // Order of refusals: URL id (400), body id (400), archived brand (403), then the header (428/400), then the version (409).
+  // Archived wins over the header and the version: a save to an archived brand is 403 whatever it sends, not a 428/409 the user could never resolve.
   assertValidCarouselId(id);
+  if ((body as { id?: string } | null)?.id !== id) return { status: 400, body: { error: `Body "id" must match the URL's carousel id "${id}"` } };
+  if ((await s.storage.brands.getBySlug(s.slug)).value.status === "archived") return { status: 403, body: { error: messages.storedArchived(s.slug) } };
   const expected = parseIfMatch(ifMatch);
   if (expected === "missing") return { status: 428, body: { error: messages.ifMatchRequired } };
   if (expected === "malformed") return { status: 400, body: { error: messages.ifMatchMalformed } };
-  if ((body as { id?: string } | null)?.id !== id) return { status: 400, body: { error: `Body "id" must match the URL's carousel id "${id}"` } };
-
-  // Archived wins over everything else: a stale copy of an archived brand is 403, not a 409 the user could never resolve.
-  if ((await s.storage.brands.getBySlug(s.slug)).value.status === "archived") return { status: 403, body: { error: messages.storedArchived(s.slug) } };
   const current = await storedCarouselRaw(s, id);
   // Cheap early refusal; the repository re-checks atomically below.
   if (current.version !== expected) return conflict(s, id);

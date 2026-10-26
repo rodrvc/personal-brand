@@ -162,12 +162,15 @@ export function useDocumentEditor(slug: string, initial: CarouselDocument) {
           // `pageshow` re-runs persist if the page comes back from bfcache.
           if (error instanceof DOMException && error.name === "AbortError") return;
           if (unloading) return;
-          if (error instanceof ApiError && error.status === 409) {
+          // 409: another writer won. 428: this tab holds no version tag (a copy that did not come from a read). Either way
+          // the stored copy is reloaded, which also brings the tag the next save needs.
+          if (error instanceof ApiError && (error.status === 409 || error.status === 428)) {
+            const conflict = error.status === 409;
             getCarousel(slug, sent.id)
               .then((fresh) => {
                 if (!alive.current) return;
                 applyRemote(fresh);
-                setSaveError(t("editor.conflictReloaded"));
+                setSaveError(t(conflict ? "editor.conflictReloaded" : "editor.versionMissing"));
               })
               .catch((reloadError: unknown) => setSaveError(String(reloadError)));
             return;

@@ -13,6 +13,9 @@ import {
 } from "../export/export-queue.js";
 import { getSharedBrowser } from "../browser.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { enqueueStoredExport, storedOutputVersions } from "../stored-export.js";
+import { guardStorage, resolveStored, StorageFailure, type EditorStorage } from "../stored-read.js";
+import { handleStoreError } from "./profiles.js";
 
 const productionRender: RenderFn = async (opts) => {
   const browser = await getSharedBrowser();
@@ -37,20 +40,36 @@ function toExportJobResponse(job: ExportJob) {
   };
 }
 
-export function exportRouter(): Router {
+/** `storage` serves a brand cut over to storage (S10b2): its export lands in the bucket. `render` is injectable for tests. */
+export function exportRouter(storage?: EditorStorage, render: RenderFn = productionRender): Router {
   const router = Router();
+  const stored = async (slug: string) => {
+    const found = await resolveStored(storage, slug);
+    return found && { ...found, storage: guardStorage(found.storage) };
+  };
 
   router.post("/api/profiles/:slug/carousels/:id/export", async (req, res) => {
     try {
-      const store = new ProfileStore(req.params.slug);
       const allowPending = (req.body as { allowPending?: boolean } | undefined)?.allowPending === true;
-      const jobId = await enqueueExport(store, req.params.id, productionRender, { allowPending });
+      const found = await stored(req.params.slug);
+      if (found) {
+        try {
+          res.status(202).json(toExportJobResponse(await enqueueStoredExport(found, req.params.id, render, { allowPending })));
+        } catch (error) {
+          if (error instanceof ExportHasPendingPiecesError) res.status(409).json({ error: error.message });
+          else handleStoreError(error, res);
+        }
+        return;
+      }
+      const store = new ProfileStore(req.params.slug);
+      const jobId = await enqueueExport(store, req.params.id, render, { allowPending });
       res.status(202).json(toExportJobResponse(getExportJob(jobId)!));
     } catch (error) {
       if (error instanceof ExportHasPendingPiecesError) {
         res.status(409).json({ error: error.message });
         return;
       }
+      if (error instanceof StorageFailure) return handleStoreError(error, res);
       const status =
         error instanceof ProfileStoreError || error instanceof DocumentStoreError ? 400 : 500;
       res.status(status).json({ error: (error as Error).message });
@@ -66,11 +85,17 @@ export function exportRouter(): Router {
     res.json(toExportJobResponse(job));
   });
 
-  router.get("/api/profiles/:slug/carousels/:id/outputs", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id/outputs", async (req, res) => {
     try {
+      const found = await stored(req.params.slug);
+      if (found) {
+        res.json({ versions: await storedOutputVersions(found, req.params.id) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json({ versions: listOutputVersions(store, req.params.id) });
     } catch (error) {
+      if (error instanceof StorageFailure) return handleStoreError(error, res);
       const status =
         error instanceof ProfileStoreError || error instanceof DocumentStoreError ? 400 : 500;
       res.status(status).json({ error: (error as Error).message });

@@ -58,7 +58,11 @@ function handleStoreError(error: unknown, res: import("express").Response): void
     res.status(404).json({ error: error.message });
     return;
   }
-  if (error instanceof VersionConflictError) return void res.status(409).json({ error: messages.saveConflict, currentVersion: error.currentVersion });
+  if (error instanceof VersionConflictError) {
+    // A conflict that escaped the save route's own handling (the save answers it with the document too): the version, as body and `ETag`.
+    if (error.currentVersion !== null) res.setHeader("ETag", etagOf(error.currentVersion));
+    return void res.status(409).json({ error: messages.saveConflict, currentVersion: error.currentVersion });
+  }
   if (error instanceof InvalidInputError) return void res.status(400).json({ error: error.message });
   if (error instanceof BrandArchivedError) return void res.status(403).json({ error: messages.storedArchivedAny });
   if (error instanceof StorageFailure) {

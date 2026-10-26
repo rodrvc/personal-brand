@@ -1,6 +1,6 @@
 import { resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BrandDocumentRepository, type BrandRepository, type CarouselRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ExportRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -22,8 +22,11 @@ import { messages } from "./messages.js";
 export interface EditorStorage {
   brands: Pick<BrandRepository, "getBySlug" | "list">;
   documents: Pick<BrandDocumentRepository, "get" | "list">;
-  assets: Pick<AssetRepository, "list" | "get">;
-  carousels: Pick<CarouselRepository, "list" | "get" | "save">;
+  assets: Pick<AssetRepository, "list" | "get" | "update">;
+  carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus">;
+  exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
+  /** The bucket, for the deliverables (export keys from storage's `keys.ts`); written write-once. */
+  files: BlobStore;
   /** The local blob cache of one brand (content-addressed, read-only). */
   blobs(brandId: string): Pick<BlobCache, "read">;
 }
@@ -74,6 +77,8 @@ export function guardStorage(storage: EditorStorage): EditorStorage {
     documents: guard(storage.documents),
     assets: guard(storage.assets),
     carousels: guard(storage.carousels),
+    exports: guard(storage.exports),
+    files: guard(storage.files),
     blobs: (brandId) => guard(storage.blobs(brandId)),
   };
 }
@@ -194,22 +199,21 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 }
 
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
-const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
+const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The one write a stored brand takes so far: saving a carousel document (S10b). Every other write stays a 405. */
-const STORED_SAVE = /^\/carousels\/[^/]+$/;
+/** The writes a stored brand takes so far (S10b): saving a carousel document and exporting it. Every other write stays a 405. */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels\/[^/]+\/export$/]];
 
-/** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet, no exports yet). */
+/** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [
   [/^\/carousels\/[^/]+\/chat$/, { records: [], pendingProposalId: null, currency: { code: "USD", rate: 1 } }],
-  [/^\/carousels\/[^/]+\/outputs$/, { versions: [] }],
 ];
 
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
- * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat and outputs answer empty;
- * every other route (stats, export, generation sidecars) is a 501; writes other than
- * the carousel save are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
+ * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat answers empty;
+ * every other route (stats, generation sidecars) is a 501; writes other than
+ * the carousel save and export are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
  * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
 export function storedBrandGuard(storage: EditorStorage | undefined) {
@@ -222,7 +226,7 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
     if (!storage || !slug) return next();
     resolveStored(storage, slug).then((stored) => {
       if (!stored) return next();
-      if (req.method === "PUT" && STORED_SAVE.test(req.path)) return next();
+      if (STORED_WRITES.some(([method, re]) => req.method === method && re.test(req.path))) return next();
       if (req.method !== "GET" && req.method !== "HEAD") return void res.status(405).json({ error: messages.storedReadOnly(slug) });
       if (STORED_READS.some((re) => re.test(req.path))) return next();
       const empty = EMPTY_READS.find(([re]) => re.test(req.path));
@@ -242,12 +246,18 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
  * `/assets/files/<id>` URLs instead, because a browser cannot reach `render.local`.
  */
 export async function storedSlideHtml(s: StoredBrand, doc: CarouselDocument, n: number, preview: boolean): Promise<{ html: string; brand: BrandTokens; template: LayoutTemplate; resolve: AssetResolve }> {
-  const brand = await storedBrandTokens(s);
-  const template = doc.template ? await loadStoredLayoutTemplate(s.storage.documents, s.brandId, doc.template.id, brand, doc.template.params) : freeLayoutTemplate();
-  const base = await buildStoredRenderContext(s.storage.assets, s.brandId);
+  const { brand, template, base, resolve } = await storedRenderParts(s, doc);
   const fileUrl = (assetId: string): string => `/api/profiles/${encodeURIComponent(s.slug)}/assets/files/${assetId}`;
   const ctx: FreeLayoutRenderContext = preview
     ? { ...base, assetUrl: (assetId) => (base.assetUrl(assetId), fileUrl(assetId)), fontFaces: (base.fontFaces ?? []).map((face) => ({ ...face, url: fileUrl(assetIdOfPath(face.url)) })) }
     : base;
-  return { html: renderFreeLayoutSlide(brand, template, doc, n, ctx), brand, template, resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };
+  return { html: renderFreeLayoutSlide(brand, template, doc, n, ctx), brand, template, resolve };
+}
+
+/** What rendering a stored carousel needs, for a slide's HTML and for an export alike: the brand, the document's template, the render context and the asset resolver. */
+export async function storedRenderParts(s: StoredBrand, doc: CarouselDocument) {
+  const brand = await storedBrandTokens(s);
+  const template = doc.template ? await loadStoredLayoutTemplate(s.storage.documents, s.brandId, doc.template.id, brand, doc.template.params) : freeLayoutTemplate();
+  const base = await buildStoredRenderContext(s.storage.assets, s.brandId);
+  return { brand, template, base, resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };
 }

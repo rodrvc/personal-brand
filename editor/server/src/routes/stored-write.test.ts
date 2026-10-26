@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BlobCache, FakeObjectStore } from "@personal-brand/storage/blob";
+import { BrandArchivedError, InvalidInputError, VersionConflictError } from "@personal-brand/storage/contracts";
 import { createMemoryRepositories } from "@personal-brand/storage/memory";
 
 /** The editor's save for a stored brand (S10b), over real HTTP against the routers and the memory repositories. */
@@ -16,6 +17,7 @@ const { default: express } = await import("express");
 const { profilesRouter } = await import("./profiles.js");
 const { renderRouter } = await import("./render.js");
 const { storedBrandGuard } = await import("../stored-read.js");
+type EditorStorage = import("../stored-read.js").EditorStorage;
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "profiles", "example");
 const SLUG = "write-example";
@@ -31,7 +33,7 @@ const slide = (id: string) => ({ id, kind: "cover", background: { mode: "color",
 const document = { schemaVersion: 1, id: "week-one", title: "First title", createdAt: STAMP, updatedAt: STAMP, canvas: { w: 1080, h: 1350 }, prompt: { text: "x", createdAt: STAMP }, slides: [slide("s1")] };
 const carousel = await repos.carousels.create(brand.id, { slug: "week-one", title: "First title", document: { json: document, schemaVersion: 1 } }, meta);
 
-const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
+const storage = { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, files: new FakeObjectStore(), blobs: (brandId: string) => new BlobCache(new FakeObjectStore(), brandId, join(root, ".blobs")) };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
@@ -45,11 +47,25 @@ const put = (body: unknown, ifMatch?: string, path = `/${SLUG}/carousels/week-on
   fetch(`${base}${path}`, { method: "PUT", headers: { ...JSON_HEADERS, ...(ifMatch === undefined ? {} : { "If-Match": ifMatch }) }, body: JSON.stringify(body) });
 const current = async () => (await repos.carousels.get(brand.id, "week-one", (b) => b)).version;
 
+/** A second app over the same rows, with `override` laid over the storage (a wrapped repository, a failing one). */
+async function withApp(override: Partial<EditorStorage>, run: (url: string) => Promise<void>): Promise<void> {
+  const extra = express();
+  extra.use(express.json());
+  extra.use(profilesRouter({ ...storage, ...override }));
+  const extraServer = extra.listen(0);
+  await new Promise<void>((resolve) => extraServer.once("listening", resolve));
+  try {
+    await run(`http://127.0.0.1:${(extraServer.address() as AddressInfo).port}/api/profiles/${SLUG}`);
+  } finally {
+    extraServer.close();
+  }
+}
+
 const tests: Array<[string, () => Promise<void>]> = [
   ["a save without If-Match is 428 and a malformed one is 400, and nothing is written", async () => {
     const before = await current();
     assert.equal((await put(document)).status, 428);
-    for (const bad of ["*", "3", '"x"', '"1","2"']) assert.equal((await put(document, bad)).status, 400, bad);
+    for (const bad of ["*", "3", '"x"', '"1","2"', `W/"${before}"`]) assert.equal((await put(document, bad)).status, 400, bad);
     assert.equal((await fetch(`${base}/${SLUG}/brand`, { method: "PUT", headers: JSON_HEADERS, body: "{}" })).status, 405);
     assert.equal(await current(), before);
   }],
@@ -105,24 +121,43 @@ const tests: Array<[string, () => Promise<void>]> = [
       if (!raced) await ((raced = true), repos.carousels.save(id, { title: "Competitor", document: { json: { ...document, title: "Competitor" }, schemaVersion: 1 } }, m));
       return repos.carousels.save(id, input, m);
     };
-    const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), list: repos.carousels.list.bind(repos.carousels), save } };
-    const raceApp = express();
-    raceApp.use(express.json());
-    raceApp.use(profilesRouter(racing));
-    const raceServer = raceApp.listen(0);
-    await new Promise<void>((resolve) => raceServer.once("listening", resolve));
-    try {
+    const racing = { get: repos.carousels.get.bind(repos.carousels), list: repos.carousels.list.bind(repos.carousels), save, setStatus: repos.carousels.setStatus.bind(repos.carousels) };
+    await withApp({ carousels: racing }, async (url) => {
       const version = await current();
-      const res = await fetch(`http://127.0.0.1:${(raceServer.address() as AddressInfo).port}/api/profiles/${SLUG}/carousels/week-one`, { method: "PUT", headers: { ...JSON_HEADERS, "If-Match": `"${version}"` }, body: JSON.stringify({ ...document, title: "Loser" }) });
+      const res = await fetch(`${url}/carousels/week-one`, { method: "PUT", headers: { ...JSON_HEADERS, "If-Match": `"${version}"` }, body: JSON.stringify({ ...document, title: "Loser" }) });
       assert.ok(raced);
       assert.equal(res.status, 409);
       const body = (await res.json()) as { currentVersion: number; document: { title: string } };
       assert.equal(body.currentVersion, version + 1);
       assert.equal(body.document.title, "Competitor");
       assert.equal(await current(), version + 1);
-    } finally {
-      raceServer.close();
-    }
+    });
+  }],
+  ["repository-side refusals map like the pre-checks: BrandArchivedError is 403, InvalidInputError is 400, a bare conflict is 409 with its ETag", async () => {
+    const failing = (error: Error) => ({ get: repos.carousels.get.bind(repos.carousels), list: repos.carousels.list.bind(repos.carousels), save: async () => { throw error; }, setStatus: repos.carousels.setStatus.bind(repos.carousels) });
+    const attempt = async (url: string) => fetch(`${url}/carousels/week-one`, { method: "PUT", headers: { ...JSON_HEADERS, "If-Match": `"${await current()}"` }, body: JSON.stringify(document) });
+    await withApp({ carousels: failing(new BrandArchivedError("write-example")) }, async (url) => {
+      const res = await attempt(url);
+      assert.equal(res.status, 403);
+      assert.match(((await res.json()) as { error: string }).error, /archivada/);
+    });
+    await withApp({ carousels: failing(new InvalidInputError("title is too long")) }, async (url) => {
+      const res = await attempt(url);
+      assert.equal(res.status, 400);
+      assert.match(((await res.json()) as { error: string }).error, /title is too long/);
+    });
+    // A conflict that reaches the generic handler (outside the save route) still names the version, as body and ETag.
+    await withApp({ carousels: { ...failing(new VersionConflictError(7)), get: async () => { throw new VersionConflictError(7); } } }, async (url) => {
+      const res = await fetch(`${url}/carousels/week-one`);
+      assert.equal(res.status, 409);
+      assert.equal(res.headers.get("etag"), '"7"');
+      assert.equal(((await res.json()) as { currentVersion: number }).currentVersion, 7);
+    });
+  }],
+  ["a PUT through an encoded slug takes the same stored path and creates no folder", async () => {
+    const res = await put({ ...document, title: "Encoded" }, `"${await current()}"`, "/write%2Dexample/carousels/week-one");
+    assert.equal(res.status, 200);
+    assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["an invalid document is 400, a body id that differs is 400, a bad URL id is 400, an unknown carousel is 404", async () => {
     const version = `"${await current()}"`;
@@ -136,6 +171,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const real = repos.documents;
     const corrupt = { ...storage, documents: { ...real, get: async () => { throw new SyntaxError("Unexpected token in stored tokens"); } } };
     const corruptApp = express();
+    corruptApp.use(express.json());
     corruptApp.use(profilesRouter(corrupt));
     const corruptServer = corruptApp.listen(0);
     await new Promise<void>((resolve) => corruptServer.once("listening", resolve));
@@ -148,6 +184,9 @@ const tests: Array<[string, () => Promise<void>]> = [
         assert.equal(res.status, 503, path);
         assert.doesNotMatch(JSON.stringify(await res.json()), /Unexpected token/);
       }
+      const saved = await fetch(`${url}/carousels/week-one`, { method: "PUT", headers: { ...JSON_HEADERS, "If-Match": `"${await current()}"` }, body: JSON.stringify(document) });
+      assert.equal(saved.status, 503, "save");
+      assert.doesNotMatch(JSON.stringify(await saved.json()), /Unexpected token/);
     } finally {
       console.error = log;
       corruptServer.close();
@@ -166,6 +205,7 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal(res.status, 403);
       assert.match(((await res.json()) as { error: string }).error, /archivada/);
     }
+    assert.equal((await put(document, undefined, "/old-write/carousels/week-one")).status, 403, "no header is 403, not 428: archived is checked first");
     assert.equal((await repos.carousels.get(old.id, "week-one", (b) => b)).version, row.version);
     assert.equal((await repos.revisions.list("carousel", row.id)).length, revisions);
   }],
