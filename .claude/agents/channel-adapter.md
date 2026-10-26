@@ -32,7 +32,7 @@ Resolve the brand with the `usar-perfil` skill. The `brand` verbs below run as `
 ## Output
 A new draft per derivative:
 `brand content put <slug> <YYYY-MM-DD-slug>-<format> --file <abs/body.md> --title <title> --stage draft --channel <channel> --format <format> --derived-from <source-piece>`
-(write the body to a scratch file outside the repo first, and pass its absolute path; add `--if-version <n>` only to edit a draft that already exists). `--derived-from` takes the source piece's slug (the CLI resolves it; an unknown slug exits 4) and is how the derivative references its source; it cannot be changed later. A folder brand gets the same draft under its `content/drafts/`, with `derived_from: <source-slug>` in the metadata.
+(write the body to a scratch file outside the repo first, and pass its absolute path). `--stage` and `--derived-from` only apply on create. To edit a derivative that already exists, run `put <slug> --file <abs/body.md> --if-version <n>` without them (the stage and the parent are fixed). `--derived-from` takes the source piece's slug (the CLI resolves it; an unknown slug exits 4) and is how the derivative references its source; it cannot be changed later. A folder brand gets the same draft under its `content/drafts/`, with `derived_from: <source-slug>` in the metadata.
 
 ## Rules
 - keep the original thesis intact; the angle can be emphasized differently, never contradicted

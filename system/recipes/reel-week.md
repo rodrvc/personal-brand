@@ -10,7 +10,7 @@ Este archivo no nombra ninguna marca, ciudad, dominio, taxonomía ni criterio
 editorial. Todo eso es dato del perfil.
 
 Patrón: **Template Method**, igual que `weekly-roundup.md`. El esqueleto es
-invariante; los hooks son los campos de `<perfil>/recipes/reel-week.yaml`.
+invariante; los hooks son los campos de `<carpeta de la marca>/recipes/reel-week.yaml`.
 
 **Comparte fuente y curaduría con `weekly-roundup`, y difiere en el render.**
 Las etapas 1-5 son deliberadamente las mismas: un perfil que ya publica un
@@ -57,7 +57,7 @@ Ver "Paso 0" de la skill orquestadora. Anuncia el perfil resuelto y por qué
 
 ### 2. Cargar y validar el recipe del perfil
 
-Lee `<perfil>/recipes/reel-week.yaml`.
+Lee `<carpeta de la marca>/recipes/reel-week.yaml`.
 
 **Falla en load, no en ejecución.** Valida antes de cualquier request:
 
@@ -182,7 +182,7 @@ Reglas del motor:
 
 Escribe el JSON del input (`ReelInput`) donde lo lee el motor, según de dónde se sirva la marca:
 
-- **Marca en carpeta:** el archivo exacto es `<perfil>/reels/week-input.json`, el que lee `render-reel-week.ts --date`. Cada período lo sobrescribe; una copia en otro directorio no la ve el render, y el archivo viejo que quede ahí se renderiza como si fuera el actual.
+- **Marca en carpeta:** el archivo exacto es `<carpeta de la marca>/reels/week-input.json`, el que lee `render-reel-week.ts --date`. Cada período lo sobrescribe; una copia en otro directorio no la ve el render, y el archivo viejo que quede ahí se renderiza como si fuera el actual.
 - **Marca en storage:** no hay archivo; el input es una corrida (`brand run create`, paso 3 de `generar-reel-semana`) y el render recibe `--run <runId>`.
 
 Mismo linaje que el input del carrusel: la geografía (`city`, `region`) y
@@ -220,7 +220,7 @@ de la tarjeta de ítem.
 
 Opcional, y **la única forma de narrar sin desfase**. Si el reel lleva voz,
 esta etapa reemplaza al guion único de `--voice`: se escribe
-`<perfil>/reels/<fecha>/storyboard.yaml` (la fecha es el lunes del período,
+`<carpeta de la marca>/reels/<fecha>/storyboard.yaml` (la fecha es el lunes del período,
 la que imprime la etapa 3) con una tarjeta por escena y la narración de cada
 una. Contrato completo en `system/ig-reel/README.md` → "Storyboard: audio
 primero"; ejemplo ficticio en ese README.
@@ -240,8 +240,8 @@ Reglas del motor, falla en load nombrando la tarjeta:
 Validar sin red ni key, y leer la tabla id / visual / palabras:
 
 ```
-npx tsx system/ig-reel/storyboard.ts --check <perfil>/reels/<fecha>/storyboard.yaml \
-                                     --items <perfil>/reels/week-input.json
+npx tsx system/ig-reel/storyboard.ts --check <carpeta de la marca>/reels/<fecha>/storyboard.yaml \
+                                     --items <carpeta de la marca>/reels/week-input.json
 ```
 
 Después, **escuchar antes de renderizar** (en una corrida de storage no hay MP3 en disco: la tabla impresa es la revisión):
@@ -252,7 +252,7 @@ npx tsx system/ig-reel/<render.script>.ts --profile <slug> --date <fecha> --audi
 
 Sintetiza un MP3 por tarjeta (caché por contenido: editar una tarjeta
 re-sintetiza solo esa), mide cada uno, escribe
-`<perfil>/reels/<fecha>/timeline.json` e imprime la timeline derivada (voz vs
+`<carpeta de la marca>/reels/<fecha>/timeline.json` e imprime la timeline derivada (voz vs
 escena, inicio de cada tarjeta, total). Si una tarjeta suena mal, se corrige
 la narración y se repite; nada se renderiza hasta que el audio convence.
 

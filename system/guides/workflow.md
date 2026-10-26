@@ -13,8 +13,8 @@ repo):
 ```text
 Idea                      brand content put <slug> <piece> --file <abs/body.md> --title <t> --stage idea
   ↓
-Draft (promote the idea)  brand content stage <slug> <piece> --stage draft --if-version <n>
-                          brand content put <slug> <piece> --file <abs/body.md> --if-version <n+1>
+Draft (promote the idea)  brand content stage <slug> <piece> --stage draft --if-version <v>
+                          brand content put <slug> <piece> --file <abs/body.md> --if-version <w>  (<w> = version printed by the stage)
   ↓
 Review + owner approval   brand content get <slug> <piece>
   ↓

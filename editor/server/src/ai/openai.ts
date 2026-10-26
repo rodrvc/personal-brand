@@ -27,7 +27,7 @@ const MAX_EDIT_INPUTS = 16;
 
 /**
  * The system instruction sent with every `draftCopy` call. Two hard rules,
- * both learned the hard way per `app/ESTADO.md`: never truncate a word to
+ * both learned the hard way (retired desktop app notes, in git history): never truncate a word to
  * fit the character budget (finish the thought shorter instead), and stay
  * strictly inside `limits` — never omit either since a slot that's too long
  * breaks layout in a way this editor cannot silently fix later.
