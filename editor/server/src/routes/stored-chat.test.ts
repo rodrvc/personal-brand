@@ -33,14 +33,14 @@ await repos.chat.append(created.id, { id: "msg-2", at: STAMP, role: "assistant",
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
-app.use(chatRouter(() => { throw new Error("no generator in these tests"); }, undefined, storage));
+app.use(chatRouter(() => { throw new Error("no generator in these tests"); }, { storage }));
 const failing = express();
 failing.use("/api/profiles/:slug", storedBrandGuard({ ...storage, chat: { ...storage.chat, list: async () => { throw new Error("connection refused"); } } }));
-failing.use(chatRouter(() => { throw new Error("no generator"); }, undefined, { ...storage, chat: { ...storage.chat, list: async () => { throw new Error("connection refused"); } } }));
+failing.use(chatRouter(() => { throw new Error("no generator"); }, { storage: { ...storage, chat: { ...storage.chat, list: async () => { throw new Error("connection refused"); } } } }));
 const appendFails = { ...storage, chat: { ...storage.chat, append: async () => { throw new Error("connection refused"); } } };
 const failingAppend = express();
 failingAppend.use("/api/profiles/:slug", storedBrandGuard(appendFails));
-failingAppend.use(chatRouter(() => { throw new Error("no generator"); }, undefined, appendFails));
+failingAppend.use(chatRouter(() => { throw new Error("no generator"); }, { storage: appendFails }));
 const servers = [app, failing, failingAppend].map((a) => a.listen(0, "127.0.0.1"));
 await Promise.all(servers.map((srv) => new Promise<void>((resolve) => srv.once("listening", resolve))));
 const [base, failingBase, failingAppendBase] = servers.map((srv) => `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/profiles`);

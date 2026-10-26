@@ -209,8 +209,7 @@ export class OpenAiPieceGenerator implements PieceGenerator {
       n: "1",
       ...(cutout ? { background: "transparent", output_format: "png" } : {}),
     };
-    const references = (spec.referenceAssetIds ?? [])
-      .map((id) => ({ id, file: this.resolveAsset(id) }))
+    const references = (await Promise.all((spec.referenceAssetIds ?? []).map(async (id) => ({ id, file: await this.resolveAsset(id) }))))
       .filter((r) => r.file && this.acceptsReference(spec.kind, r.file.mime))
       .slice(0, MAX_EDIT_INPUTS);
 

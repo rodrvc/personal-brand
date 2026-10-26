@@ -164,6 +164,9 @@ export async function storedCarouselListing(s: StoredBrand): Promise<CarouselLis
 
 const EXTENSION: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "font/woff2": "woff2", "font/woff": "woff", "font/ttf": "ttf", "font/otf": "otf" };
 
+/** The virtual `assets/<assetId>.<ext>` a stored asset is known by (it has no file): the path the client builds URLs from. */
+export const storedAssetPath = (assetId: string, mime: string): string => `assets/${assetId}${EXTENSION[mime] ? `.${EXTENSION[mime]}` : ""}`;
+
 /** The id of the asset a `files`/`thumbs` URL names: the first dot-separated part of its last segment (`<assetId>.<ext>`). */
 export const assetIdOfPath = (relUnderAssets: string): string => (relUnderAssets.split("/").pop() ?? "").split(".")[0]!;
 
@@ -175,7 +178,7 @@ export async function storedAssetEntries(s: StoredBrand) {
   const [rows, usage] = await Promise.all([s.storage.assets.list(s.brandId), computeUsageFrom(storageUsageSource(s.storage.carousels, s.brandId))]);
   return rows.map(({ value: a }) => ({
     id: a.assetId,
-    path: `assets/${a.assetId}${EXTENSION[a.mime] ? `.${EXTENSION[a.mime]}` : ""}`,
+    path: storedAssetPath(a.assetId, a.mime),
     kind: a.kind,
     mime: a.mime,
     ...(a.width ? { w: a.width } : {}),
@@ -221,14 +224,14 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
 const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|stats|chat|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The writes a stored brand takes so far (S10b): creating (with its plan preview), saving, exporting, regenerating and plan/apply, and discarding a chat proposal. Every other chat write (messages, references, apply) stays a 405 until S10b7b. */
-const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/(export|regenerate|plan\/apply)$/], ["POST", /^\/carousels\/[^/]+\/chat\/proposals\/[^/]+\/discard$/]];
+/** The writes a stored brand takes (S10b): creating (with its plan preview), saving, exporting, regenerating and plan/apply, and the chat's writes (a message, a reference, applying and discarding a proposal). */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/(export|regenerate|plan\/apply)$/], ["POST", /^\/carousels\/[^/]+\/chat\/(messages|references)$/], ["POST", /^\/carousels\/[^/]+\/chat\/proposals\/[^/]+\/(apply|discard)$/]];
 
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
  * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass (chat included);
  * every other route (generation sidecars) is a 501; writes other than
- * the carousel create, save, export, plan/apply, regenerate and chat discard (STORED_WRITES) are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
+ * the ones in STORED_WRITES are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
  * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
 export function storedBrandGuard(storage: EditorStorage | undefined) {

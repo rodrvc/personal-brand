@@ -1,11 +1,13 @@
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { wrapDocument, type FontFace } from "../../../system/ig-carousel/document.js";
 import type { AssetResolve } from "../../../system/ig-carousel/render-batch.js";
+import { buildStoredRenderContext, storedAssetResolver } from "../../../system/ig-carousel/stored-render-context.js";
 
 import { getSharedBrowser } from "./browser.js";
 import type { ProfileStore } from "./profile-store.js";
 import { buildExportRenderContext } from "./render-context.js";
 import { loadStoredSlide } from "./stored-load.js";
+import type { StoredBrand } from "./stored-read.js";
 
 /** One line of text to rasterise, in a CSS font family, size in pixels, weight and a #rrggbb colour. */
 export interface TextRun {
@@ -39,15 +41,21 @@ export function folderRasterFonts(store: ProfileStore, brand: BrandTokens): Rast
   return { fontFaces: buildExportRenderContext(store, brand, { mode: "color", colorKey: brand.roles.surface }).fontFaces ?? [] };
 }
 
+/** A stored brand's fonts: its non-hidden font assets as `@font-face` rules, served through the blob cache (a font with no family is refused, as in a render). */
+export async function storedRasterFonts(s: StoredBrand): Promise<RasterFonts> {
+  const context = await buildStoredRenderContext(s.storage.assets, s.brandId);
+  return { fontFaces: context.fontFaces ?? [], resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };
+}
+
 /**
  * Rasterises with the same warm Chromium and the same fonts that render the slides, so a text drawn into an image reads
- * like the editable texts around it. Brand-agnostic: a folder or a stored brand differ only in `fonts`
+ * like the editable texts around it. `fonts` is a `RasterFonts` or a thunk (sync or async, called on each raster, so loading them is deferred and failures surface there). Brand-agnostic: a folder or a stored brand differ only in `fonts`
  * (this module stays editor/server code, its only consumer being the chat; S10b7a moved it off `ProfileStore`).
  */
-export function chromiumRasteriser(brand: BrandTokens, fonts: RasterFonts | (() => RasterFonts)): Rasterise {
+export function chromiumRasteriser(brand: BrandTokens, fonts: RasterFonts | (() => RasterFonts | Promise<RasterFonts>)): Rasterise {
   return async (runs) => {
     if (runs.length === 0) return [];
-    const { fontFaces, resolve } = typeof fonts === "function" ? fonts() : fonts;
+    const { fontFaces, resolve } = typeof fonts === "function" ? await fonts() : fonts;
     const spans = runs.map(
       (run, i) =>
         `<div><span id="run-${i}" style="font-family: ${cssValue(run.family)}; font-size: ${run.size}px; font-weight: ${run.weight}; color: ${cssValue(run.color)}">${escapeHtml(run.text)}</span></div>`,

@@ -25,8 +25,10 @@ try {
   assert.equal(folder.length === 2 && folder.every(isPng), true, "a folder brand rasterises with no resolver");
   const served = await chromiumRasteriser(brand, { fontFaces: [], resolve: async () => { throw new Error("nothing is requested"); } })([run]);
   assert.equal(isPng(served[0]!), true, "a stored brand with no font to fetch needs no asset");
-  const refused = chromiumRasteriser(brand, { fontFaces: [{ family: "Stored Face", url: "http://render.local/assets/0123456789abcdef" }], resolve: async () => { throw new Error("blob gone"); } });
-  await assert.rejects(refused([{ ...run, family: "'Stored Face'" }]), /render\.local|blob gone|refused|resolver/i, "a font the resolver cannot serve fails the raster");
+  const asked: string[] = [];
+  const refused = chromiumRasteriser(brand, async () => ({ fontFaces: [{ family: "Stored Face", url: "http://render.local/assets/0123456789abcdef" }], resolve: async (id) => { asked.push(id); throw new Error("blob gone"); } }));
+  await assert.rejects(refused([{ ...run, family: "'Stored Face'" }]), /The slide asked for assets it cannot have: http:\/\/render\.local\/assets\/0123456789abcdef \(resolver failed: blob gone\)/, "a font the resolver cannot serve fails the raster with the resolver's own refusal");
+  assert.equal(asked.includes("0123456789abcdef"), true, "the font went through the resolver (a thunk may be async)");
   console.log("text-raster: ok");
 } finally {
   await (await getSharedBrowser()).close();
