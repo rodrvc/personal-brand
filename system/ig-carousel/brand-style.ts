@@ -149,6 +149,16 @@ function readToneFromConfig(raw: string): { style: string[]; avoid: string[] } {
   return { style: readList("style"), avoid: readList("avoid") };
 }
 
+/** The raw material of a brand style, wherever it was read from; every field is optional. */
+export interface BrandStyleInputs {
+  brandSpec?: string;
+  profileMd?: string;
+  /** `tone.style` / `tone.avoid` of the operational config. */
+  tone?: { style: string[]; avoid: string[] };
+  /** The parsed tokens document; anything that is not an object is ignored. */
+  brandJson?: unknown;
+}
+
 /**
  * Loads a profile's optional brand-style context. Reads whatever of
  * `brand-spec.md`, `profile.md`, `config.yaml` exist; a profile with none of
@@ -156,6 +166,27 @@ function readToneFromConfig(raw: string): { style: string[]; avoid: string[] } {
  * never an error — callers should treat that as "no guide yet", not a bug.
  */
 export function loadBrandStyle(profileDir: string): BrandStyle {
+  const configYaml = readFileIfExists(join(profileDir, "config.yaml"));
+  const brandJsonRaw = readFileIfExists(join(profileDir, "brand.json"));
+  let brandJson: unknown;
+  try {
+    brandJson = brandJsonRaw === undefined ? undefined : JSON.parse(brandJsonRaw);
+  } catch {
+    // brand.json exists but failed to parse — `loadBrand` (brand-schema.ts)
+    // is the authority that would surface that error to a render call;
+    // this style loader is best-effort context for a prompt, so it just
+    // omits the palette rather than throwing.
+  }
+  return buildBrandStyle({
+    brandSpec: readFileIfExists(join(profileDir, "brand-spec.md")),
+    profileMd: readFileIfExists(join(profileDir, "profile.md")),
+    tone: configYaml === undefined ? undefined : readToneFromConfig(configYaml),
+    brandJson,
+  });
+}
+
+/** The same style from already-read inputs: what a stored brand's documents (and a folder's files) both feed. */
+export function buildBrandStyle(inputs: BrandStyleInputs): BrandStyle {
   const sources: string[] = [];
   const style: BrandStyle = {
     palette: [],
@@ -165,7 +196,7 @@ export function loadBrandStyle(profileDir: string): BrandStyle {
     sources,
   };
 
-  const brandSpec = readFileIfExists(join(profileDir, "brand-spec.md"));
+  const { brandSpec, profileMd } = inputs;
   if (brandSpec !== undefined) {
     let used = false;
     const imageDirection = extractSection(brandSpec, IMAGE_DIRECTION_HEADING);
@@ -191,7 +222,6 @@ export function loadBrandStyle(profileDir: string): BrandStyle {
     if (used) sources.push("brand-spec.md");
   }
 
-  const profileMd = readFileIfExists(join(profileDir, "profile.md"));
   if (profileMd !== undefined) {
     let used = false;
     if (!style.positioning) {
@@ -211,42 +241,32 @@ export function loadBrandStyle(profileDir: string): BrandStyle {
     if (used) sources.push("profile.md");
   }
 
-  const configYaml = readFileIfExists(join(profileDir, "config.yaml"));
-  if (configYaml !== undefined) {
-    const tone = readToneFromConfig(configYaml);
-    if (tone.style.length > 0 || tone.avoid.length > 0) {
-      style.tone = tone;
-      sources.push("config.yaml");
-    }
+  const tone = inputs.tone;
+  if (tone && (tone.style.length > 0 || tone.avoid.length > 0)) {
+    style.tone = tone;
+    sources.push("config.yaml");
   }
 
-  const brandJsonRaw = readFileIfExists(join(profileDir, "brand.json"));
-  if (brandJsonRaw !== undefined) {
-    try {
-      const brandJson = JSON.parse(brandJsonRaw) as {
-        colors?: Record<string, string>;
-        roles?: Record<string, string>;
-        fonts?: { logo?: string; body?: string; handwritten?: string };
-      };
-      const colorToRole = new Map<string, string>();
-      for (const [role, colorKey] of Object.entries(brandJson.roles ?? {})) {
-        colorToRole.set(colorKey, role);
-      }
-      const palette = Object.entries(brandJson.colors ?? {}).map(([key, hex]) => ({
-        key,
-        hex,
-        role: colorToRole.get(key),
-      }));
-      if (palette.length > 0) {
-        style.palette = palette;
-        style.fonts = brandJson.fonts ?? {};
-        sources.push("brand.json");
-      }
-    } catch {
-      // brand.json exists but failed to parse — `loadBrand` (brand-schema.ts)
-      // is the authority that would surface that error to a render call;
-      // this style loader is best-effort context for a prompt, so it just
-      // omits the palette rather than throwing.
+  const tokens = inputs.brandJson;
+  if (tokens && typeof tokens === "object" && !Array.isArray(tokens)) {
+    const brandJson = tokens as {
+      colors?: Record<string, string>;
+      roles?: Record<string, string>;
+      fonts?: { logo?: string; body?: string; handwritten?: string };
+    };
+    const colorToRole = new Map<string, string>();
+    for (const [role, colorKey] of Object.entries(brandJson.roles ?? {})) {
+      colorToRole.set(colorKey, role);
+    }
+    const palette = Object.entries(brandJson.colors ?? {}).map(([key, hex]) => ({
+      key,
+      hex,
+      role: colorToRole.get(key),
+    }));
+    if (palette.length > 0) {
+      style.palette = palette;
+      style.fonts = brandJson.fonts ?? {};
+      sources.push("brand.json");
     }
   }
 
