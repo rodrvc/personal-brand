@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// `./import` is exported for tests of system/ only: render code must never import brands.
 import { importBrand } from "@personal-brand/storage/import";
+import { NotFoundError } from "@personal-brand/storage/contracts";
 import { createMemoryRepositories } from "@personal-brand/storage/memory";
 
 import { featuresOf, loadBrand } from "./brand-schema.js";
 import { loadBrandStyle } from "./brand-style.js";
+import { loadLayoutTemplate } from "./layout-template.js";
 import { renderSlides } from "./render-batch.js";
-import { resolveRenderSource } from "./render-source.js";
-import { loadStoredBrandStyle } from "./stored-brand.js";
+import { engineFixtureBinding, openRenderSource, resolveRenderSource } from "./render-source.js";
+import { loadStoredBrandStyle, loadStoredLayoutTemplate } from "./stored-brand.js";
 import { renderListFormat } from "./templates/list-format.js";
 import type { CarouselInput, Slide } from "./types.js";
 import { verifyOrThrow } from "./verify-slides.js";
@@ -47,10 +50,11 @@ async function withRoot<T>(copy: boolean, fn: (root: string) => Promise<T>): Pro
 }
 
 /** The example brand as the importer stores it (documents, parsed config, recipes), then optionally cut over. */
-async function storedExample(opts: { cutover?: boolean } = {}) {
+async function storedExample(opts: { cutover?: boolean; template?: unknown } = {}) {
   const repos = createMemoryRepositories();
   await importBrand(repos, { from: EXAMPLE, dryRun: false, author: "test", env: {} });
   const brand = await repos.brands.getBySlug(SLUG);
+  if (opts.template) await repos.documents.put(brand.id, "template", "explicativo", { json: opts.template, schemaVersion: 1 }, meta);
   if (opts.cutover !== false) await repos.brands.markCutover(brand.id, { ...meta, expectedVersion: brand.version });
   return { repos, brandId: brand.id };
 }
@@ -98,6 +102,21 @@ const tests: Array<[string, () => Promise<void>]> = [
     await repos.documents.put(brand.id, "tokens", "", { json: { colors: {} }, schemaVersion: 1 }, meta);
     await assert.rejects(source.loadBrand(), /Invalid brand\.json in storage:example: roles must be an object/);
   }],
+  ["a stored template merges onto the engine default exactly as a folder override does", async () => {
+    const override = { zones: { footer: { height: 140 } } };
+    const { repos, brandId } = await storedExample({ template: override });
+    const brand = loadBrand(EXAMPLE);
+    const dir = mkdtempSync(join(tmpdir(), "render-source-tpl-"));
+    try {
+      mkdirSync(join(dir, "templates"));
+      writeFileSync(join(dir, "templates", "explicativo.json"), JSON.stringify(override));
+      const params = { zones: { margins: { top: 10 } } };
+      assert.deepEqual(await loadStoredLayoutTemplate(repos.documents, brandId, "explicativo", brand, params), loadLayoutTemplate(dir, "explicativo", brand, params));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    await assert.rejects(loadStoredLayoutTemplate(repos.documents, brandId, "no-such-template", brand), /No layout template found for id "no-such-template"/);
+  }],
   ["a stored brand applies its rules, and needs --input and --out", async () => {
     const { repos, brandId } = await storedExample();
     await repos.rules.create(brandId, { kind: "forbidden_terms", params: { terms: ["bargain"], fields: ["title"], slides: "all" }, severity: "error", appliesTo: ["carousel"], message: "no bargains" }, meta);
@@ -115,35 +134,64 @@ const tests: Array<[string, () => Promise<void>]> = [
     await assert.rejects(verify(source, "reel-week", [slide({ image: "https://evil.example.net/a.jpg" })], ["images.example.com"]));
     await assert.rejects(verify(source, "weekly-roundup", [slide()], ["images.example.com"]), /no recipe at the stored recipe "weekly-roundup"/);
   }],
-  ["the example brand renders from storage with no profiles folder, to the same PNGs as its folder", async () => {
+  ["the example brand renders from storage with no profiles folder: same HTML as its folder, and a PNG", async () => {
     const { repos } = await storedExample();
     const input = readJson(join(EXAMPLE, "carousels", "week-input.json")) as CarouselInput;
     const out = mkdtempSync(join(tmpdir(), "render-source-out-"));
     const opts = { headerLabel: "Week", city: input.city, region: input.region };
-    const quiet = async (run: () => Promise<unknown>) => {
-      const log = console.log;
-      console.log = () => {};
-      try {
-        await run();
-      } finally {
-        console.log = log;
-      }
-    };
+    const features = featuresOf([renderListFormat], "dates");
+    const log = console.log;
     try {
-      const features = featuresOf([renderListFormat], "dates");
-      const kept = await withRoot(false, async () => {
+      await withRoot(false, async () => {
         const source = await resolveRenderSource(SLUG, repos);
         assert.equal(source.kind, "storage");
-        const slides = await verify(source, "weekly-roundup", input.slides, []);
-        await quiet(() => source.loadBrand(features).then((brand) => renderSlides({ items: [slides.slice(0, 2)], toHtml: (group) => renderListFormat(brand, group, opts), outputDir: join(out, "storage") })));
-        return slides;
+        const slides = (await verify(source, "weekly-roundup", input.slides, [])).slice(0, 2);
+        const brand = await source.loadBrand(features);
+        // The example uses system fonts and carries no images: the HTML is the whole input, so no network is involved.
+        assert.equal(renderListFormat(brand, slides, opts), renderListFormat(loadBrand(EXAMPLE, features), slides, opts));
+        console.log = () => {};
+        await renderSlides({ items: [slides], toHtml: (group) => renderListFormat(brand, group, opts), outputDir: out });
       });
-      await quiet(() => renderSlides({ items: [kept.slice(0, 2)], toHtml: (group) => renderListFormat(loadBrand(EXAMPLE, features), group, opts), outputDir: join(out, "folder") }));
-      assert.ok(existsSync(join(out, "storage", "slide-1.png")));
-      assert.deepEqual(readFileSync(join(out, "storage", "slide-1.png")), readFileSync(join(out, "folder", "slide-1.png")));
+      assert.ok(existsSync(join(out, "slide-1.png")));
     } finally {
+      console.log = log;
       rmSync(out, { recursive: true, force: true });
     }
+  }],
+  ["render.ts on a stored brand: its content rules are not applied to the engine fixture, its image policy still is", async () => {
+    const { repos, brandId } = await storedExample();
+    await repos.rules.create(brandId, { kind: "forbidden_terms", params: { terms: ["bargain"], fields: ["title"], slides: "all" }, severity: "error", appliesTo: ["carousel"], message: "no bargains" }, meta);
+    const source = await resolveRenderSource(SLUG, repos);
+    const binding = await source.verifyBinding("layout-comparison");
+    const fixture = join(__dirname, "example-input.json");
+    const run = (slides: Slide[], hosts: string[] | undefined, b: typeof binding) =>
+      verifyOrThrow({ slides, input: { ...(hosts ? { sourceImageHosts: hosts } : {}), slides }, inputPath: fixture, selfDeclaredProvenance: true, ...b, onWarning: () => {} });
+    const bargain = [slide({ title: "Big bargain", image: "https://img.example.com/a.jpg" })];
+    assert.throws(() => run(bargain, ["img.example.com"], binding), /no bargains/);
+    assert.equal(run(bargain, ["img.example.com"], engineFixtureBinding(binding)).length, 1);
+    // No declared hosts in the fixture: the stored policy (no recipe "layout-comparison") refuses the image.
+    assert.throws(() => run(bargain, undefined, engineFixtureBinding(binding)), /no recipe at the stored recipe "layout-comparison"/);
+  }],
+  ["openRenderSource never connects without DATABASE_URL, and closes the connection when resolving fails", async () => {
+    await withRoot(true, async () => {
+      let opened = 0;
+      let ended = 0;
+      const open = (getBySlug: () => Promise<never>) => ({
+        connect: () => (opened++, { end: async () => void ended++ }),
+        repos: () => ({ ...createMemoryRepositories(), brands: { getBySlug } }),
+      });
+      const down = open(async () => { throw new Error("connection refused"); });
+      assert.equal((await openRenderSource(SLUG, {}, down)).source.kind, "folder");
+      assert.equal(opened, 0);
+      await assert.rejects(openRenderSource(SLUG, { DATABASE_URL: "postgres://x" }, down), /connection refused/);
+      assert.deepEqual([opened, ended], [1, 1]);
+      const missing = open(async () => { throw new NotFoundError("brand"); });
+      const { source, close } = await openRenderSource(SLUG, { DATABASE_URL: "postgres://x" }, missing);
+      assert.equal(source.kind, "folder");
+      assert.equal(ended, 1);
+      await close();
+      assert.equal(ended, 2);
+    });
   }],
 ];
 

@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { resolveBrandSource } from "@personal-brand/storage";
 import { NotFoundError, type BrandDocumentRepository, type BrandRepository, type BrandRuleRepository, type RecipeRepository } from "@personal-brand/storage/contracts";
-import { connect, createPgRepositories } from "@personal-brand/storage/pg";
+import { connect, createPgRepositories, type Sql } from "@personal-brand/storage/pg";
 
 import { classify, type RecipeImagePolicy } from "./recipe.js";
 import { loadBrand, type BrandFeature, type BrandTokens } from "./brand-schema.js";
@@ -102,6 +102,14 @@ function storageSource(repos: RenderRepos, brandId: string, slug: string): Rende
 }
 
 /**
+ * The verify options for an engine-owned fixture (`render.ts`'s layout comparison): the brand's image policy still
+ * applies, but its content rules do not, since the fixture is not brand content.
+ */
+export function engineFixtureBinding(binding: VerifyBinding): VerifyBinding {
+  return binding.policy ? { policy: { ...binding.policy, rules: [] } } : binding;
+}
+
+/**
  * Picks the source with `resolveBrandSource`, the one switch (D12). With no repositories (and no `DATABASE_URL`) every
  * brand is a folder, which is exactly how the scripts behaved before storage. A brand storage has never heard of is a folder too.
  */
@@ -123,11 +131,21 @@ export async function resolveRenderSource(slug: string, repos?: RenderRepos): Pr
  * For the scripts: opens Postgres when `DATABASE_URL` is set, resolves the source, and hands back what to close.
  * Without `DATABASE_URL` it never touches storage.
  */
-export async function openRenderSource(slug: string, env: NodeJS.ProcessEnv = process.env): Promise<{ source: RenderSource; close(): Promise<void> }> {
+interface OpenStorage<S extends { end(): Promise<void> }> {
+  connect(env: NodeJS.ProcessEnv): S;
+  repos(sql: S): RenderRepos;
+}
+
+export async function openRenderSource<S extends { end(): Promise<void> } = Sql>(
+  slug: string,
+  env: NodeJS.ProcessEnv = process.env,
+  // A seam for tests: the connection and the repositories built on it. The default is Postgres.
+  open: OpenStorage<S> = { connect, repos: createPgRepositories } as unknown as OpenStorage<S>,
+): Promise<{ source: RenderSource; close(): Promise<void> }> {
   if (!env.DATABASE_URL) return { source: await resolveRenderSource(slug), close: async () => {} };
-  const sql = connect(env);
+  const sql = open.connect(env);
   try {
-    return { source: await resolveRenderSource(slug, createPgRepositories(sql)), close: () => sql.end() };
+    return { source: await resolveRenderSource(slug, open.repos(sql)), close: () => sql.end() };
   } catch (error) {
     await sql.end();
     throw error;
