@@ -62,6 +62,8 @@ docs/PLAN-skills-agnosticas.md
 # scripts/brand-denylist.txt y manual_terms() en el validador). Nunca trackeado:
 # publicar un denylist es publicar la lista de lo que se quiso ocultar.
 scripts/brand-denylist.local.txt
+# Generated from storage by `brand denylist --write` (same reason: it lists what to hide).
+scripts/brand-denylist.generated.txt*
 
 # Borradores de contenido de una persona real (briefs con audiencia, objetivo,
 # CTA y posicionamiento). docs/public-repo-rules.md los prohíbe explícitamente:
