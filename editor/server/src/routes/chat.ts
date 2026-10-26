@@ -1,17 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import type { BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import type { CarouselDocument } from "../../../../system/ig-carousel/carousel-document.js";
 
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { detectImage } from "../../../../system/assets/index.js";
-import { loadIndexCached } from "../asset-index-cache.js";
-import { folderPlannerSource, generateForSlot, storeImage } from "../compose/planner.js";
+import { generateForSlot } from "../compose/planner.js";
 import { addFreeAssetObject } from "../../../../system/ig-carousel/free-objects.js";
 import { applyAction, ChatActionError, isFreePlacement, visualSlot, type ChatAction, CHAT_ACTION_TYPES, modelActionSchema, resolveAction } from "../chat/chat-actions.js";
 import { buildChatContext, chatInput, chatInstructions, type PosterRoute } from "../chat/chat-context.js";
-import { appendChatRecord, newChatId, pendingProposal, readChatLog, type ChatProposal, type ChatRecord } from "../chat/chat-log.js";
-import { folderChatSource, storedChatSource, type ChatSource } from "../chat/chat-source.js";
+import { newChatId, pendingProposal, type ChatProposal, type ChatRecord } from "../chat/chat-log.js";
+import { folderChatWorkspace, storedChatWorkspace, type ChatWorkspace } from "../chat/chat-workspace.js";
 import {
   anchorLines,
   classifyLines,
@@ -37,9 +37,8 @@ import {
 import { referenceBackground } from "../chat/reference-background.js";
 import { colourReader, edgeColor, eraseBoxes, findPicture, ImageToolUnavailableError, inkReader, remap, toPng } from "../image-tools.js";
 import { readTextLines, type TextLine } from "../text-boxes.js";
-import { chromiumRasteriser, folderRasterFonts, type Rasterise } from "../text-raster.js";
-import { ChatReferenceError, loadReferenceImages, normalizeReference, readAssetFile, saveReference, type ChatReference } from "../chat/chat-references.js";
-import { documentExists, readDocumentRevision, readValidatedDocument, snapshotDocument, validateAgainstProfile, writeDocumentThroughRevision } from "../document-store.js";
+import { chromiumRasteriser, type Rasterise } from "../text-raster.js";
+import { ChatReferenceError, loadReferenceImages, normalizeReference, type ChatReference } from "../chat/chat-references.js";
 import { ProfileStore } from "../profile-store.js";
 import { attachGeneratedAsset } from "./compose.js";
 import { messages } from "../messages.js";
@@ -88,9 +87,9 @@ const LEGACY_POSTER_ROUTE: PosterRoute = "editable";
  * The layout reference's proportion, read before the model is asked; for an editable poster also its measured text
  * lines and framed picture. A poster made as one image needs no OCR and no frame.
  */
-function readLayout(store: ProfileStore, references: ChatReference[], wordmark: string, route: PosterRoute): LayoutRead {
+async function readLayout(ws: ChatWorkspace, references: ChatReference[], wordmark: string, route: PosterRoute): Promise<LayoutRead> {
   const layout = references.find((r) => r.role === "layout");
-  const file = layout ? readAssetFile(store, layout.id) : undefined;
+  const file = layout ? await ws.readAsset(layout.id) : undefined;
   if (!file) return {};
   const size = detectImage(file.bytes, "reference");
   if (route === "image") return size.w && size.h ? { aspect: size.w / size.h } : {};
@@ -253,31 +252,26 @@ function proposalReferences(log: ChatRecord[], proposalId: string): ChatReferenc
   return message?.role === "user" ? (message.references ?? []) : [];
 }
 
-function notPlaced(store: ProfileStore, doc: CarouselDocument, results: EventResults): { slide?: number; image: string } | undefined {
+async function notPlaced(ws: ChatWorkspace, doc: CarouselDocument, results: EventResults): Promise<{ slide?: number; image: string } | undefined> {
   for (const r of results) {
     for (const slideId of r.slideIds) {
       const absent = (r.assetIds ?? []).find((id) => !isPlaced(doc, slideId, [id]));
       if (absent) {
         const n = doc.slides.findIndex((s) => s.id === slideId) + 1;
-        return { slide: n || undefined, image: assetName(store, absent) };
+        return { slide: n || undefined, image: await ws.assetName(absent) };
       }
     }
   }
   return undefined;
 }
 
-function assetName(store: ProfileStore, assetId: string): string {
-  const entry = loadIndexCached(store.roots.profileDir).entries.find((e) => e.id === assetId);
-  return entry?.path.split("/").pop() ?? assetId;
-}
-
 type GenerationRequest = Omit<Parameters<typeof generateForSlot>[2], "canvas" | "carouselId">;
 
 type PlacedTexts = Map<string, PlacedText[]>;
 
-function generationFor(store: ProfileStore, action: ChatAction, canvas: CarouselDocument["canvas"], placed: PlacedTexts): GenerationRequest | undefined {
+async function generationFor(ws: ChatWorkspace, action: ChatAction, canvas: CarouselDocument["canvas"], placed: PlacedTexts): Promise<GenerationRequest | undefined> {
   if (action.type === "compose_from_reference") {
-    const layout = action.referenceIds?.[0] ? readAssetFile(store, action.referenceIds[0]) : undefined;
+    const layout = action.referenceIds?.[0] ? await ws.readAsset(action.referenceIds[0]) : undefined;
     const pad = layout ? whereImageToolRuns(() => edgeColor(layout.bytes)) : undefined;
     const aspect = action.layoutAspect ?? canvas.w / canvas.h;
     const texts = measureTexts(action.texts, undefined).map((t) => ({ ...t, box: toSlide(t.box, aspect, canvas) }));
@@ -310,8 +304,8 @@ function generationFor(store: ProfileStore, action: ChatAction, canvas: Carousel
  * A poster made as one image: the layout reference (first, letterboxed to the slide) and the event (second) go to the
  * image provider with every event datum stated. The result is cut back to the slide's proportion, never stretched.
  */
-function posterImageFor(store: ProfileStore, action: Extract<ChatAction, { type: "compose_from_reference" }>, canvas: CarouselDocument["canvas"], locale: string): GenerationRequest {
-  const layout = action.referenceIds?.[0] ? readAssetFile(store, action.referenceIds[0]) : undefined;
+async function posterImageFor(ws: ChatWorkspace, action: Extract<ChatAction, { type: "compose_from_reference" }>, canvas: CarouselDocument["canvas"], locale: string): Promise<GenerationRequest> {
+  const layout = action.referenceIds?.[0] ? await ws.readAsset(action.referenceIds[0]) : undefined;
   const pad = layout ? whereImageToolRuns(() => edgeColor(layout.bytes)) : undefined;
   return {
     prompt: posterPrompt({ texts: action.texts, request: action.request ?? "", contentAttached: (action.referenceIds?.length ?? 0) > 1, locale }),
@@ -354,7 +348,7 @@ interface Composition {
  * new texts, and the event's picture framed.
  */
 async function composeFromLayout(
-  store: ProfileStore,
+  ws: ChatWorkspace,
   action: Extract<ChatAction, { type: "compose_from_reference" }>,
   canvas: CarouselDocument["canvas"],
   brand: ReturnType<typeof buildChatContext>["brand"],
@@ -362,13 +356,12 @@ async function composeFromLayout(
   rasterise: Rasterise,
 ): Promise<Composition> {
   const [layoutId, contentId] = action.referenceIds ?? [];
-  const layout = layoutId ? readAssetFile(store, layoutId) : undefined;
+  const layout = layoutId ? await ws.readAsset(layoutId) : undefined;
   if (!layout) throw new ChatActionError(messages.proposal.needsLayoutReference);
   const aspect = action.layoutAspect ?? canvas.w / canvas.h;
   const onSlide = measureTexts(action.texts, undefined).map((t) => ({ ...t, box: toSlide(t.box, aspect, canvas) }));
   const built = await referenceBackground(layout.bytes, onSlide, aspect, canvas, brand, rasterise);
-  const entry = storeImage(
-    store,
+  const entry = await ws.planner.storeImage(
     { buffer: built.image, mime: "image/png", model: "layout-reference", costCents: 0, usedReferenceIds: [layoutId!] },
     { prompt: "Layout reference with its texts erased", kind: "background", carouselId, slot: "reference" },
   );
@@ -383,31 +376,21 @@ async function composeFromLayout(
 type EventResults = Extract<ChatRecord, { role: "event" }>["results"];
 
 async function runProposal(
-  store: ProfileStore,
-  carouselId: string,
+  ws: ChatWorkspace,
   proposal: ChatProposal,
   generator: PieceGenerator,
   references: ChatReference[],
   rasterise: Rasterise,
 ): Promise<void> {
   try {
-    await runProposalBody(store, carouselId, proposal, generator, references, rasterise);
+    await runProposalBody(ws, proposal, generator, references, rasterise);
   } finally {
-    // Uploads whatever this proposal wrote to the mirror (generated
-    // assets, the updated carousel document) — a no-op in `fs` mode. Like
-    // export's job completion, this runs well after the HTTP request that
-    // queued it already finished, so the per-request sync-up middleware
-    // never sees these writes.
-    const { syncUpNow } = await import("../storage/runtime.js");
-    await syncUpNow(store.slug).catch((error) => {
-      console.error(`Chat proposal ${proposal.id}: could not sync its output to the bucket:`, error);
-    });
+    await ws.settle?.();
   }
 }
 
 async function runProposalBody(
-  store: ProfileStore,
-  carouselId: string,
+  ws: ChatWorkspace,
   proposal: ChatProposal,
   generator: PieceGenerator,
   references: ChatReference[],
@@ -416,7 +399,7 @@ async function runProposalBody(
   const results: EventResults = [];
   const spent = () => results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
   const fail = (error: unknown) =>
-    appendChatRecord(store, carouselId, {
+    ws.append({
       role: "event",
       kind: "failed",
       proposalId: proposal.id,
@@ -428,41 +411,35 @@ async function runProposalBody(
     const generated = new Map<string, string>();
     const placed: PlacedTexts = new Map();
     const composed = new Map<string, Composition>();
-    const canvas = readValidatedDocument(store, carouselId).canvas;
-    const brand = buildChatContext(store, carouselId).brand;
+    const { doc: { canvas, id: carouselId }, brand } = (await ws.open()).ctx;
     for (const action of proposal.actions) {
       if (action.type === "compose_from_reference" && (action.posterRoute ?? LEGACY_POSTER_ROUTE) === "image") {
-        const entry = await generateForSlot(folderPlannerSource(store), generator, { ...posterImageFor(store, action, canvas, brand.locale), canvas, carouselId });
+        const entry = await generateForSlot(ws.planner, generator, { ...(await posterImageFor(ws, action, canvas, brand.locale)), canvas, carouselId });
         generated.set(action.id, entry.id);
         placed.set(action.id, []);
-        results.push({ actionId: action.id, slideIds: [], assetIds: [entry.id], costCents: await folderPlannerSource(store).costCents(entry.id) });
+        results.push({ actionId: action.id, slideIds: [], assetIds: [entry.id], costCents: await ws.planner.costCents(entry.id) });
         continue;
       }
       if (action.type === "compose_from_reference" && posterBackground() === "reference") {
-        const composition = await composeFromLayout(store, action, canvas, brand, carouselId, rasterise);
+        const composition = await composeFromLayout(ws, action, canvas, brand, carouselId, rasterise);
         composed.set(action.id, composition);
         generated.set(action.id, composition.backgroundId);
         placed.set(action.id, composition.texts);
         results.push({ actionId: action.id, slideIds: [], assetIds: [composition.backgroundId], costCents: 0 });
         continue;
       }
-      const spec = generationFor(store, action, canvas, placed);
+      const spec = await generationFor(ws, action, canvas, placed);
       if (!spec) continue;
-      const entry = await generateForSlot(folderPlannerSource(store), generator, { ...spec, canvas, carouselId });
+      const entry = await generateForSlot(ws.planner, generator, { ...spec, canvas, carouselId });
       generated.set(action.id, entry.id);
       const slideIds = "slideId" in action && action.slideId ? [action.slideId] : [];
-      results.push({ actionId: action.id, slideIds, assetIds: [entry.id], costCents: await folderPlannerSource(store).costCents(entry.id) });
+      results.push({ actionId: action.id, slideIds, assetIds: [entry.id], costCents: await ws.planner.costCents(entry.id) });
     }
 
-    const ctx = withReferences(buildChatContext(store, carouselId), references);
+    const { ctx: current, base } = await ws.open();
+    const ctx = withReferences(current, references);
     let document = ctx.doc;
-    // Carried into the final `writeDocumentThroughRevision` call below,
-    // instead of letting it re-read "current" right before writing — the
-    // whole generation loop that follows can take a while (image
-    // generation, composition), and re-reading at write time would silently
-    // pick up a bucket write that landed during it, overwriting it with no
-    // conflict ever detected.
-    const baseRevision = (await readDocumentRevision(store, carouselId))?.revision ?? null;
+    // `base` (folder revision, stored row version) is carried into the final write: re-reading "current" there would overwrite a write that landed since, undetected.
     for (const action of proposal.actions) {
       if (action.type === "generate_visual") {
         const assetId = generated.get(action.id)!;
@@ -495,22 +472,21 @@ async function runProposalBody(
       document = applied.document;
       results.push({ actionId: action.id, slideIds: applied.slideIds });
     }
-    const validation = validateAgainstProfile(store, document);
+    const validation = await ws.validate(document);
     if (!validation.valid) {
       const [first] = validation.errors;
       throw new ChatActionError(messages.proposal.invalidResult(first!.path, first!.message));
     }
-    const before = notPlaced(store, validation.document, results);
+    const before = await notPlaced(ws, validation.document, results);
     if (before) throw new Error(messages.proposal.imageNotPlaced(before.slide, before.image));
-    const documentVersion = snapshotDocument(store, carouselId);
-    await writeDocumentThroughRevision(store, validation.document, { expectedRevision: baseRevision });
-    const after = notPlaced(store, readValidatedDocument(store, carouselId), results);
+    const documentVersion = await ws.writeDocument(validation.document, base);
+    const after = await notPlaced(ws, (await ws.open()).ctx.doc, results);
     if (after) throw new Error(messages.proposal.imageRemovedMeanwhile(after.slide, after.image));
-    await appendChatRecord(store, carouselId, {
+    await ws.append({
       role: "event",
       kind: "done",
       proposalId: proposal.id,
-      documentVersion,
+      ...(documentVersion ? { documentVersion } : {}),
       costCents: spent(),
       results,
     });
@@ -531,25 +507,22 @@ function awaitedMessage(history: ChatRecord[]): { text: string; references: Chat
   return message?.role === "user" && message.references?.length ? { text: message.text, references: message.references, asksFor: answer.asksFor } : undefined;
 }
 
-/** `storage` serves a brand cut over to storage: its log, currency and discard go through the chat repository (S10b7a); messages, references and apply are still folder-only (the guard answers 405). */
-export function chatRouter(
-  getGenerator: (slug: string) => PieceGenerator,
-  rasteriserFor: (store: ProfileStore, brand: ReturnType<typeof buildChatContext>["brand"]) => Rasterise = (store, brand) => chromiumRasteriser(brand, () => folderRasterFonts(store, brand)),
-  storage?: EditorStorage,
-): Router {
+export interface ChatRouterOptions {
+  rasteriserFor?: (ws: ChatWorkspace, brand: BrandTokens) => Rasterise;
+  storage?: EditorStorage;
+}
+
+/** The chat of a folder or a stored brand, one code path: the log, messages (a model turn that proposes), reference uploads, and applying or discarding a proposal. */
+export function chatRouter(getGenerator: (slug: string) => PieceGenerator, options: ChatRouterOptions = {}): Router {
+  const { storage, rasteriserFor = (ws, brand) => chromiumRasteriser(brand, ws.fonts(brand)) } = options;
   const router = Router();
 
-  function open(slug: string, id: string): ProfileStore | undefined {
-    const store = new ProfileStore(slug);
-    return documentExists(store, id) ? store : undefined;
-  }
-
-  /** The carousel's chat, folder or stored (one code path from here on); a 404 is already answered when this returns undefined. */
-  async function chatOf(req: { params: Record<string, string> }, res: import("express").Response): Promise<ChatSource | undefined> {
+  /** The carousel's workspace, folder or stored; a 404 is already answered when this returns undefined. */
+  async function chatOf(req: { params: Record<string, string> }, res: import("express").Response): Promise<ChatWorkspace | undefined> {
     const stored = await resolveStored(storage && guardStorage(storage), req.params.slug!);
-    const source = stored ? await storedChatSource(stored, req.params.id!) : folderChatSource(new ProfileStore(req.params.slug!), req.params.id!);
-    if (!source) res.status(404).json({ error: `No carousel "${req.params.id}"` });
-    return source;
+    const ws = stored ? await storedChatWorkspace(stored, req.params.id!) : folderChatWorkspace(new ProfileStore(req.params.slug!), req.params.id!);
+    if (!ws) res.status(404).json({ error: `No carousel "${req.params.id}"` });
+    return ws;
   }
 
   router.get(BASE, async (req, res) => {
@@ -575,26 +548,27 @@ export function chatRouter(
       if (typeof text !== "string" || text.trim() === "" || !Array.isArray(attached) || !attached.every(wellFormed)) {
         return void res.status(400).json({ error: 'Body must be { "text": string, "references"?: [{ id, name }] }' });
       }
-      const store = open(req.params.slug, req.params.id);
-      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
+      const ws = await chatOf(req, res);
+      if (!ws) return;
+      await ws.assertWritable?.();
 
-      const history = readChatLog(store, req.params.id);
+      const history = await ws.read();
       const awaited = attached.length > 0 ? undefined : awaitedMessage(history);
       const references = attached.length > 0 ? attached : (awaited?.references ?? []);
       // The answer to a question completes the message that asked for the poster: the provider hears both.
       const request = awaited ? `${awaited.text}\n${text}` : text;
       const route = posterRoute();
-      const ctx = withReferences(buildChatContext(store, req.params.id), references);
+      const ctx = withReferences((await ws.open()).ctx, references);
       const generator = getGenerator(req.params.slug);
-      const images = loadReferenceImages(store, references.map((r) => r.id));
-      const layoutRead = readLayout(store, references, ctx.brand.copy.wordmark, route);
+      const images = await loadReferenceImages((id) => ws.readAsset(id), references.map((r) => r.id));
+      const layoutRead = await readLayout(ws, references, ctx.brand.copy.wordmark, route);
       const completion = await generator.completeJson({
         instructions: chatInstructions(route),
         input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" })), numberedLines(layoutRead.lines, layoutRead.kinds)),
         images,
         tier: references.some((r) => r.role === "layout") ? "vision" : "fast",
       });
-      const user = await appendChatRecord(store, req.params.id, {
+      const user = await ws.append({
         role: "user",
         text,
         ...(references.length > 0 ? { references } : {}),
@@ -611,7 +585,7 @@ export function chatRouter(
         [...history.flatMap((r) => (r.role === "user" && r.text !== "" ? [r.text] : [])), text],
         awaited?.asksFor ?? [],
       );
-      const assistant = await appendChatRecord(store, req.params.id, {
+      const assistant = await ws.append({
         role: "assistant",
         text: "rejected" in outcome ? [outcome.text, outcome.rejected].filter(Boolean).join("\n\n") : outcome.text,
         costCents: completion.costCents,
@@ -633,18 +607,18 @@ export function chatRouter(
     }
   });
 
-  router.post(`${BASE}/references`, (req, res) => {
+  router.post(`${BASE}/references`, async (req, res) => {
     try {
       const { name, mime, dataBase64 } = (req.body ?? {}) as { name?: unknown; mime?: unknown; dataBase64?: unknown };
       if (typeof name !== "string" || typeof mime !== "string" || typeof dataBase64 !== "string") {
         return void res.status(400).json({ error: 'Body must be { "name", "mime", "dataBase64" }' });
       }
-      const store = open(req.params.slug, req.params.id);
-      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
+      const ws = await chatOf(req, res);
+      if (!ws) return;
+      await ws.assertWritable?.();
       const normalized = normalizeReference(Buffer.from(dataBase64, "base64"), mime);
-      const id = saveReference(store, normalized.mime, normalized.bytes);
-      const entry = loadIndexCached(store.roots.profileDir).entries.find((e) => e.id === id);
-      res.json({ reference: { id, name, mime: normalized.mime, w: entry?.w, h: entry?.h } });
+      const saved = await ws.saveReference(normalized.mime, normalized.bytes);
+      res.json({ reference: { id: saved.id, name, mime: normalized.mime, w: saved.w, h: saved.h } });
     } catch (error) {
       if (error instanceof ChatReferenceError) return void res.status(400).json({ error: error.message });
       handleStoreError(error, res);
@@ -653,17 +627,17 @@ export function chatRouter(
 
   router.post(`${BASE}/proposals/:proposalId/apply`, async (req, res) => {
     try {
-      const store = open(req.params.slug, req.params.id);
-      if (!store) return void res.status(404).json({ error: `No carousel "${req.params.id}"` });
-      const log = readChatLog(store, req.params.id);
+      const ws = await chatOf(req, res);
+      if (!ws) return;
+      const log = await ws.read();
       const proposal = pendingProposal(log);
       if (proposal?.id !== req.params.proposalId) {
         return void res.status(409).json({ error: messages.proposal.notPending });
       }
       const references = proposalReferences(log, proposal.id);
-      const ctx = withReferences(buildChatContext(store, req.params.id), references);
+      const ctx = withReferences((await ws.open()).ctx, references);
       proposal.actions.forEach((action) => resolveAction(ctx, action));
-      const started = await appendChatRecord(store, req.params.id, {
+      const started = await ws.append({
         role: "event",
         kind: "started",
         proposalId: proposal.id,
@@ -671,7 +645,7 @@ export function chatRouter(
         results: [],
       });
       res.status(202).json({ records: [started] });
-      runProposal(store, req.params.id, proposal, getGenerator(req.params.slug), references, rasteriserFor(store, ctx.brand)).catch((error: unknown) =>
+      runProposal(ws, proposal, getGenerator(req.params.slug), references, rasteriserFor(ws, ctx.brand)).catch((error: unknown) =>
         console.error(`Chat proposal ${proposal.id} could not record its outcome:`, error),
       );
     } catch (error) {
@@ -684,6 +658,7 @@ export function chatRouter(
     try {
       const chat = await chatOf(req, res);
       if (!chat) return;
+      // Read, then append: not atomic (the folder's neither), so two concurrent discards can both append a resolving record, which is harmless.
       if (pendingProposal(await chat.read())?.id !== req.params.proposalId) {
         return void res.status(409).json({ error: messages.proposal.notPending });
       }

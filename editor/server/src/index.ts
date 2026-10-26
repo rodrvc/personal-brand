@@ -7,7 +7,7 @@ loadRepoRootEnv();
 
 import { checkChromiumAvailable, closeSharedBrowser } from "./browser.js";
 import { listProfilesAsync, ProfileStore } from "./profile-store.js";
-import { readAssetFile } from "./chat/chat-references.js";
+import { readAssetFile, readStoredAsset } from "./chat/chat-references.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { assetsRouter } from "./routes/assets.js";
 import { renderRouter } from "./routes/render.js";
@@ -19,7 +19,7 @@ import { OpenAiPieceGenerator } from "./ai/openai.js";
 import type { PieceGenerator } from "./ai/piece-generator.js";
 import { initStorageRuntime, storageSyncMiddleware } from "./storage/runtime.js";
 import { openEditorStorage } from "./stored-open.js";
-import { storedBrandGuard } from "./stored-read.js";
+import { guardStorage, resolveStored, storedBrandGuard } from "./stored-read.js";
 import { runShutdown } from "./shutdown.js";
 
 /**
@@ -69,7 +69,11 @@ function getGenerator(slug: string): PieceGenerator {
   // One instance is enough today (no per-profile provider config exists),
   // but routes ask by slug so a future per-brand override has a seam to
   // land in without changing every call site.
-  return apiKey ? new OpenAiPieceGenerator(apiKey, (id) => readAssetFile(new ProfileStore(slug), id)) : new NonePieceGenerator();
+  return apiKey ? new OpenAiPieceGenerator(apiKey, async (id) => {
+    // Reference images come from storage for a cut-over brand, else from its folder (which must not be created for a stored one).
+    const stored = await resolveStored(opened?.storage && guardStorage(opened.storage), slug);
+    return stored ? readStoredAsset(stored, id) : readAssetFile(new ProfileStore(slug), id);
+  }) : new NonePieceGenerator();
 }
 
 // Brands cut over to storage are read through its repositories (S10a); `DATABASE_URL` unset keeps every brand a folder.
@@ -86,7 +90,7 @@ app.use(assetsRouter(opened?.storage));
 app.use(renderRouter(opened?.storage));
 app.use(composeRouter(getGenerator, opened?.storage));
 app.use(exportRouter(opened?.storage));
-app.use(chatRouter(getGenerator, undefined, opened?.storage));
+app.use(chatRouter(getGenerator, { storage: opened?.storage }));
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });

@@ -35,7 +35,7 @@ export function folderChatSource(store: ProfileStore, carouselId: string): ChatS
   };
 }
 
-/** The stored `config` document's `currency` (the importer stores `config.yaml` parsed as JSON), with the folder's rule made stricter: a code of 3 letters and a finite positive rate, else USD (the folder's parser accepts no more, but would let `Infinity` through). */
+/** The stored `config` document's `currency` (the importer stores `config.yaml` parsed as JSON), stricter than the folder's: a code of exactly 3 letters (the folder's regex has no end anchor, so it accepts a longer code) and a finite positive rate, else USD. */
 function currencyOf(config: unknown): ChatCurrency {
   const raw = (config as { currency?: { code?: unknown; rate?: unknown } } | null)?.currency;
   const rate = Number(raw?.rate);

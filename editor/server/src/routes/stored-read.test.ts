@@ -87,7 +87,7 @@ app.use(profilesRouter(storage));
 app.use(assetsRouter(storage));
 // The folder routers sit behind the guard exactly as in index.ts: for a stored brand none of them may be reached.
 app.use(renderRouter(storage));
-app.use(chatRouter(() => new NonePieceGenerator(), undefined, storage));
+app.use(chatRouter(() => new NonePieceGenerator(), { storage }));
 app.use(composeRouter(() => new NonePieceGenerator(), storage));
 app.use(exportRouter(storage));
 const failingApp = express();
@@ -235,11 +235,9 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
-  ["chat messages, references and apply are still 405 for a stored brand (until S10b7b), whatever the body", async () => {
-    for (const path of ["chat/messages", "chat/references", "chat/proposals/p1/apply"]) {
-      const res = await json(`/${SLUG}/carousels/week-one/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-      assert.equal(res.status, 405, path);
-    }
+  ["chat messages, references and apply pass the guard for a stored brand (a bad body is 400, a proposal that is not pending 409; stored-chat-apply.test.ts has them working)", async () => {
+    const sent = (path: string) => json(`/${SLUG}/carousels/week-one/chat/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.deepEqual([(await sent("messages")).status, (await sent("references")).status, (await sent("proposals/p1/apply")).status], [400, 400, 409]);
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["regenerate for a stored brand serves the final-prompt preview without a model call or a write; generating needs a generator (503 without one, nothing written)", async () => {

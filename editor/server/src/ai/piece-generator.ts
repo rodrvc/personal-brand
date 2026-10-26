@@ -85,7 +85,7 @@ export interface GeneratedImage {
   usedReferenceIds: string[];
 }
 
-export type AssetFileResolver = (assetId: string) => { bytes: Buffer; mime: string } | undefined;
+export type AssetFileResolver = (assetId: string) => { bytes: Buffer; mime: string } | undefined | Promise<{ bytes: Buffer; mime: string } | undefined>;
 
 export interface JsonCompletionRequest {
   instructions: string;

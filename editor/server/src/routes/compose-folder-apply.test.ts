@@ -66,6 +66,7 @@ try {
   assert.equal(calls.images, images, "nothing generated");
   assert.equal((await post("/carousels/appeared/plan/apply", {})).status, 404);
 
+  assert.equal(pieces >= 2, true, "the resume scenario needs at least two generated slots");
   await plan("resumed");
   const before = calls.images;
   calls.failOnImage = before + 2;
@@ -75,7 +76,6 @@ try {
   assert.equal(partial.body.planDropped, false);
   const retried = await post("/carousels/resumed/plan/apply", {});
   assert.equal(retried.status, 201, JSON.stringify(retried.body));
-  assert.equal(pieces >= 2, true);
   assert.equal(calls.images - before, pieces + 1, "two attempts at the second slot, the first slot generated once");
 
   await plan("raced");
