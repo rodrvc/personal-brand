@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 import { featuresOf } from "./brand-schema.js";
-import { openRenderSource, type RenderSource } from "./render-source.js";
+import { engineFixtureBinding, openRenderSource, type RenderSource } from "./render-source.js";
 import { chunkSlides, renderDocuments, renderSlides } from "./render-batch.js";
 import { renderDecorativeFrame } from "./templates/decorative-frame.js";
 import { renderFullBleed } from "./templates/full-bleed.js";
@@ -107,7 +107,7 @@ async function renderVariants(source: RenderSource): Promise<void> {
     slides: allSlides,
     input,
     inputPath: INPUT_PATH,
-    ...(binding.policy ? { policy: { ...binding.policy, rules: [] } } : binding),
+    ...engineFixtureBinding(binding),
     // The fixture ships with the engine and is reviewed in the diff, so its
     // own `sourceImageHosts` is the authority — there is no profile recipe.
     selfDeclaredProvenance: true,

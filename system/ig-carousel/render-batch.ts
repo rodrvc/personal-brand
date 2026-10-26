@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 
 import type { BrandTokens } from "./brand-schema.js";
 import { validateDocument, type CarouselDocument } from "./carousel-document.js";
@@ -8,6 +8,65 @@ import { CANVAS_HEIGHT, CANVAS_WIDTH } from "./document.js";
 import type { LayoutTemplate } from "./layout-template.js";
 import { renderFreeLayoutSlide, type FreeLayoutRenderContext } from "./templates/free-layout.js";
 import type { SlideTemplate, VerifiedSlide } from "./types.js";
+
+/** The origin a stored brand's slides are served from; assets live under `/assets/<assetId>`. */
+export const RENDER_ORIGIN = "http://render.local";
+
+/** A stored asset ready to serve: the local file holding its bytes, and its content type. */
+export interface ResolvedAsset {
+  path: string;
+  contentType: string;
+}
+
+/** Looks an asset up by id; `undefined` for an id the brand does not have. */
+export type AssetResolve = (assetId: string) => Promise<ResolvedAsset | undefined>;
+
+/**
+ * Loads a slide from `RENDER_ORIGIN` so its `/assets/<assetId>` URLs are fulfilled in-process from `resolve`
+ * (asset row -> sha256 -> blob cache), with no mirror on disk. Anything else on that origin is aborted: a slide
+ * cannot reach a file or an endpoint the resolver did not hand out. Other origins (remote images the rules allow)
+ * load as usual. Replaces any routing a previous call left on the page.
+ *
+ * A request the resolver failed or refused FAILS the render: a slide must never be screenshotted without its image or
+ * font. Requests that settle after the page is "idle" (fonts load lazily) are caught too: the returned `check()`
+ * throws if any request was refused so far, and the batch calls it right before the screenshot.
+ *
+ * Routing is by hostname (any port, any scheme): only plain `http://render.local/assets/<assetId>` can be served.
+ */
+export async function loadWithResolver(page: Page, html: string, resolve: AssetResolve): Promise<() => void> {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  const refused: string[] = [];
+  await page.route((url) => url.hostname === new URL(RENDER_ORIGIN).hostname, async (route) => {
+    const url = new URL(route.request().url());
+    const isOrigin = url.protocol === "http:" && url.port === "";
+    if (isOrigin && url.pathname === "/") {
+      await route.fulfill({ body: html, contentType: "text/html; charset=utf-8" });
+      return;
+    }
+    const id = isOrigin ? /^\/assets\/([0-9a-f]+)$/.exec(url.pathname)?.[1] : undefined;
+    let asset: ResolvedAsset | undefined;
+    let problem = id ? "no such asset" : "not an asset URL";
+    if (id) {
+      try {
+        asset = await resolve(id);
+      } catch (error) {
+        problem = `resolver failed: ${(error as Error).message}`;
+      }
+    }
+    if (asset) {
+      await route.fulfill({ path: asset.path, contentType: asset.contentType });
+    } else {
+      refused.push(`${url.pathname} (${problem})`);
+      await route.abort();
+    }
+  });
+  const check = (): void => {
+    if (refused.length > 0) throw new Error(`The slide asked for assets it cannot have: ${refused.join(", ")}`);
+  };
+  await page.goto(`${RENDER_ORIGIN}/`, { waitUntil: "networkidle" });
+  check();
+  return check;
+}
 
 interface RenderBatchOptions<T> {
   items: T[];
@@ -25,6 +84,8 @@ interface RenderBatchOptions<T> {
   // a multi-pass caller (render.ts) launch Chromium once and share it across
   // calls instead of paying the launch cost twice.
   browser?: Browser;
+  // Serve `/assets/<assetId>` from storage (see `loadWithResolver`). Absent: `setContent`, as before.
+  resolve?: AssetResolve;
 }
 
 const defaultFilename = (_item: unknown, index: number) => `slide-${index + 1}.png`;
@@ -54,13 +115,15 @@ async function renderBatchInternal<T>(opts: RenderBatchOptions<T>): Promise<stri
     const paths: string[] = [];
     for (const [index, item] of items.entries()) {
       const html = toHtml(item, index);
-      await page.setContent(html, { waitUntil: "networkidle" });
+      const check = opts.resolve ? await loadWithResolver(page, html, opts.resolve) : () => {};
+      if (!opts.resolve) await page.setContent(html, { waitUntil: "networkidle" });
       // "networkidle" only guarantees the font files finished downloading,
       // not that Chromium has finished parsing/swapping them in — without
       // this, screenshots can be taken mid-swap and show fallback glyphs
       // (e.g. a script face rendering as a generic serif) despite the font
       // having loaded successfully over the network.
       await page.evaluate(() => document.fonts.ready);
+      check(); // fonts and late images settle after "idle"; a refused request must not reach the screenshot
 
       const name = filename(item, index);
       const outputPath = join(outputDir, name);
@@ -170,6 +233,8 @@ export interface RenderCarouselDocumentOptions {
   assetExists: (assetId: string) => boolean;
   /** Reuse an existing browser instead of launching a new one — same contract as `RenderBatchOptions.browser`. */
   browser?: Browser;
+  /** Serves the context's `assetUrl`s (and font URLs) from storage; see `buildStoredRenderContext`. */
+  resolve?: AssetResolve;
 }
 
 /**
@@ -212,5 +277,6 @@ export async function renderCarouselDocument(
     filename,
     manifest: true,
     browser: opts.browser,
+    resolve: opts.resolve,
   });
 }

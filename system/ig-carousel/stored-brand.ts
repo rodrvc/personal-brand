@@ -2,6 +2,7 @@ import { NotFoundError, type BrandDocumentRepository } from "@personal-brand/sto
 
 import { parseBrandTokens, type BrandFeature, type BrandTokens } from "./brand-schema.js";
 import { buildBrandStyle, type BrandStyle } from "./brand-style.js";
+import { resolveLayoutTemplate, type LayoutTemplate } from "./layout-template.js";
 
 /** What the stored-brand loaders read: the brand's documents, nothing else. */
 export type BrandDocuments = Pick<BrandDocumentRepository, "get">;
@@ -44,4 +45,16 @@ export async function loadStoredBrandStyle(documents: BrandDocuments, brandId: s
     tone: tone ? { style: strings(tone.style), avoid: strings(tone.avoid) } : undefined,
     brandJson: tokens,
   });
+}
+
+/** `loadLayoutTemplate` for a stored brand: the engine default, merged with the brand's stored `template` document of that id (if any). */
+export async function loadStoredLayoutTemplate(
+  documents: BrandDocuments,
+  brandId: string,
+  id: string,
+  brand: BrandTokens,
+  params?: Record<string, unknown>,
+): Promise<LayoutTemplate> {
+  const override = await optional(documents, brandId, "template", id);
+  return resolveLayoutTemplate(id, override, `the stored template "${id}"`, brand, params);
 }

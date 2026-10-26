@@ -201,9 +201,33 @@ export function loadLayoutTemplate(
   brand: BrandTokens,
   params?: Record<string, unknown>,
 ): LayoutTemplate {
+  const overridePath = join(profileDir, "templates", `${id}.json`);
+  let override: unknown;
+  if (existsSync(overridePath)) {
+    try {
+      override = JSON.parse(readFileSync(overridePath, "utf-8"));
+    } catch (error) {
+      throw new LayoutTemplateError(`Invalid JSON in template override at ${overridePath}: ${(error as Error).message}`);
+    }
+  }
+  return resolveLayoutTemplate(id, override, overridePath, brand, params);
+}
+
+/**
+ * The resolution `loadLayoutTemplate` performs once the brand's override (if any) is in hand: engine default, then
+ * the override, then per-carousel params, validated as a whole. `override` is `undefined` when the brand has none;
+ * `overrideLabel` names where it came from in errors (a file path, or the stored template).
+ */
+export function resolveLayoutTemplate(
+  id: string,
+  override: unknown,
+  overrideLabel: string,
+  brand: BrandTokens,
+  params?: Record<string, unknown>,
+): LayoutTemplate {
   const engineDir = dirname(fileURLToPath(import.meta.url));
   const defaultPath = join(engineDir, "layouts", `${id}.json`);
-  const overridePath = join(profileDir, "templates", `${id}.json`);
+  const hasOverride = override !== undefined;
 
   let defaultRaw: unknown;
   let hasDefault = true;
@@ -216,14 +240,12 @@ export function loadLayoutTemplate(
     // No engine default for this id. That is not automatically an error:
     // `listLayoutTemplates` deliberately lists ids a brand declares on its
     // own, with no engine counterpart, and a picker that offers them must
-    // be able to load them. Refusing here made every brand-only template
-    // unloadable — listed, then a raw error on selection. A brand-only
-    // template simply has nothing to merge onto, so it stands alone; it
-    // still parses against the full schema and is still cross-validated
-    // against the brand below, so "standalone" buys it no leniency.
-    if (!existsSync(overridePath)) {
+    // be able to load them. A brand-only template simply has nothing to
+    // merge onto, so it stands alone; it still parses against the full
+    // schema and is still cross-validated against the brand below.
+    if (!hasOverride) {
       throw new LayoutTemplateError(
-        `No layout template found for id "${id}": no engine default at ${defaultPath} and no profile override at ${overridePath}`,
+        `No layout template found for id "${id}": no engine default at ${defaultPath} and no profile override at ${overrideLabel}`,
       );
     }
     hasDefault = false;
@@ -231,14 +253,8 @@ export function loadLayoutTemplate(
   }
 
   let resolved = defaultRaw;
-  if (existsSync(overridePath)) {
-    let overrideRaw: unknown;
-    try {
-      overrideRaw = JSON.parse(readFileSync(overridePath, "utf-8"));
-    } catch (error) {
-      throw new LayoutTemplateError(`Invalid JSON in template override at ${overridePath}: ${(error as Error).message}`);
-    }
-    resolved = hasDefault ? deepMerge(defaultRaw, overrideRaw) : overrideRaw;
+  if (hasOverride) {
+    resolved = hasDefault ? deepMerge(defaultRaw, override) : override;
   }
 
   if (params && Object.keys(params).length > 0) {
@@ -249,8 +265,8 @@ export function loadLayoutTemplate(
   if (!result.success) {
     const [issue] = result.error.issues;
     throw new LayoutTemplateError(
-      `Invalid layout template "${id}" (resolved from ${hasDefault ? defaultPath : overridePath}${
-        hasDefault && existsSync(overridePath) ? ` + ${overridePath}` : ""
+      `Invalid layout template "${id}" (resolved from ${hasDefault ? defaultPath : overrideLabel}${
+        hasDefault && hasOverride ? ` + ${overrideLabel}` : ""
       }${params && Object.keys(params).length > 0 ? " + carousel template.params" : ""}): ${zodPath(
         issue.path,
       )} — ${issue.message}`,
