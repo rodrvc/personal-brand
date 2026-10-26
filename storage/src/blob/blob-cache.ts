@@ -20,6 +20,9 @@ async function sha256OfFile(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** The store returned bytes that do not hash to the key they were asked for. */
+export class BlobHashMismatchError extends Error {}
+
 /**
  * Read-only, disposable local copy of content-addressed blobs
  * (`<dir>/sha256/<hh>/<sha256>`). It only ever reads from the store, never
@@ -72,7 +75,7 @@ export class BlobCache {
       // pipeline closes both ends on any error, so no descriptor leaks and no uncaught write error.
       await pipeline(stream, hashing, createWriteStream(temp));
       const actual = hash.digest("hex");
-      if (actual !== sha256) throw new Error(`Blob hash mismatch for ${sha256}: store returned ${actual}`);
+      if (actual !== sha256) throw new BlobHashMismatchError(`Blob hash mismatch for ${sha256}: store returned ${actual}`);
       await chmod(temp, 0o444);
       await rename(temp, path); // atomic; concurrent fills write identical bytes
     } finally {

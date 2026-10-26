@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BlobCache, FakeObjectStore } from "@personal-brand/storage/blob";
+import { BlobCache, FakeObjectStore, putAt, putBlob } from "@personal-brand/storage/blob";
+import { InvalidInputError, reelExportKey } from "@personal-brand/storage/contracts";
 import { createMemoryRepositories } from "@personal-brand/storage/memory";
 
 import { clipRangesFor } from "./assemble.js";
@@ -11,16 +12,18 @@ import {
   clipInputsHash,
   createRunScratch,
   exportStoredReel,
+  findStoredLogoFont,
   loadStoredReelRecipe,
   loadStoredReelRun,
   recordStoredClip,
   recordStoredTimeline,
   timelineInputsHash,
+  stageStoredAsset,
   stageStoredClips,
   synthesiseStoredCards,
   type ReelStorage,
 } from "./stored-reel.js";
-import { buildTimeline, validateStoryboard } from "./storyboard.js";
+import { buildTimeline, narrationCacheKey, validateStoryboard } from "./storyboard.js";
 
 // Fictional data only; memory storage, a fake object store and a stub synthesiser: no network, no profile dir.
 const meta = { expectedVersion: null, author: "test", source: "system" as const, reason: "save" as const };
@@ -58,6 +61,7 @@ async function setup() {
   const storage: ReelStorage = {
     brandId: brand.id,
     recipes: repos.recipes,
+    assets: repos.assets,
     runs: repos.runs,
     artifacts: repos.runArtifacts,
     tts: repos.tts,
@@ -125,6 +129,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     const audio = storyboard.cards.map((card) => ({ id: card.id, seconds: 3, source: "mute" as const }));
     const ranges = clipRangesFor(buildTimeline(storyboard, audio).scenes, storyboard.cards.map((c) => c.id));
     const work = tempDir();
+    const hashOf = (range: (typeof ranges)[number]): string => clipInputsHash("props", range);
     const render = async (range: (typeof ranges)[number], content: string) => {
       const file = join(work, `${range.cardId}.mp4`);
       writeFileSync(file, content);
@@ -139,7 +144,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     // Nothing from the render dir is needed to assemble: the stage reads the cache only.
     rmSync(work, { recursive: true, force: true });
     const clips = createRunScratch(tempDir(), "clips");
-    assert.deepEqual(await stageStoredClips(storage, run.id, ranges, clips.dir), ["intro", "first", "second", "outro"]);
+    assert.deepEqual(await stageStoredClips(storage, run.id, ranges, clips.dir, hashOf), ["intro", "first", "second", "outro"]);
     assert.equal(readFileSync(join(clips.dir, "1-first.mp4"), "utf8"), "v2:first");
     assert.equal(readFileSync(join(clips.dir, "0-intro.mp4"), "utf8"), "v1:intro");
     await recordStoredTimeline(storage, run.id, "{}", timelineInputsHash(storyboard, audio));
@@ -156,7 +161,7 @@ const tests: Array<[string, () => Promise<void>]> = [
     for (const range of ranges) await recordStoredClip(storage, run.id, range, file, "h");
     const [a, b] = [createRunScratch(parent, run.id), createRunScratch(parent, run.id)];
     assert.notEqual(a.dir, b.dir);
-    await Promise.all([stageStoredClips(storage, run.id, ranges, a.dir), stageStoredClips(storage, run.id, ranges, b.dir)]);
+    await Promise.all([stageStoredClips(storage, run.id, ranges, a.dir, () => "h"), stageStoredClips(storage, run.id, ranges, b.dir, () => "h")]);
     const sha = (await storage.artifacts.current(run.id, { kind: "clip" }))[0]!.sha256;
     a.remove();
     assert.equal(existsSync(a.dir), false);
@@ -165,7 +170,93 @@ const tests: Array<[string, () => Promise<void>]> = [
     assert.deepEqual(readdirSync(parent), [b.dir.slice(parent.length + 1)], "the shared parent keeps only the other run's dir");
     b.remove();
     assert.equal(statSync(parent).isDirectory(), true);
-    await assert.rejects(() => stageStoredClips(storage, run.id, ranges, b.dir).then(() => stageStoredClips(storage, run.id, ranges, b.dir)), /EEXIST/, "staging never overwrites a file");
+    await assert.rejects(() => stageStoredClips(storage, run.id, ranges, b.dir, () => "h").then(() => stageStoredClips(storage, run.id, ranges, b.dir, () => "h")), /EEXIST/, "staging never overwrites a file");
+  }],
+  ["assets: an image and the logo font are laid in with their type's extension; an unknown, hidden or unusable asset is not", async () => {
+    const { storage, repos, brand } = await setup();
+    const register = async (bytes: string, kind: "photo" | "font", mime: string) => {
+      const blob = await putBlob(storage.store, brand.id, Buffer.from(bytes), mime);
+      return repos.assets.register(brand.id, { sha256: blob.sha256, kind, mime, bytes: bytes.length, origin: "manual", status: "approved", tags: [], ...(kind === "font" ? { family: "Example Sans" } : {}) }, meta);
+    };
+    const image = await register("png-bytes", "photo", "image/png");
+    const [fontB, fontA] = [await register("woff2-b", "font", "font/woff2"), await register("woff2-a", "font", "font/woff2")];
+    const odd = await register("<svg/>", "photo", "image/svg+xml");
+    const dir = tempDir();
+    assert.deepEqual(await stageStoredAsset(storage, image.value.assetId, dir, "item1"), { name: "item1.png", mime: "image/png" });
+    assert.equal(readFileSync(join(dir, "item1.png"), "utf8"), "png-bytes");
+    assert.equal(await findStoredLogoFont(storage), [fontA, fontB].map((f) => f.value.assetId).sort()[0], "the logo font is the lowest id, not the first listed");
+    assert.equal(await stageStoredAsset(storage, "0123456789abcdef", dir, "none"), null);
+    await assert.rejects(() => stageStoredAsset(storage, odd.value.assetId, dir, "svg"), /cannot use/);
+    await repos.assets.update(brand.id, image.value.assetId, { status: "hidden" }, { ...meta, expectedVersion: image.version });
+    assert.equal(await stageStoredAsset(storage, image.value.assetId, dir, "hidden"), null);
+    assert.equal(existsSync(join(dir, "hidden.png")), false);
+  }],
+  ["narration: a retry in the same dir reuses what is there, and a take whose blob is gone is synthesised again", async () => {
+    const { storage, run, repos } = await setup();
+    const storyboard = validateStoryboard(STORYBOARD, "stored", 2);
+    const dir = join(tempDir(), "audio");
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, dir, stubSynth());
+    const again = stubSynth();
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, dir, again);
+    assert.equal(again.calls.length, 0, "a retry in the same dir neither synthesises nor fails on the files already there");
+    // A sidecar left by another narration is not "already here": the card is laid again from the cache over a fresh file.
+    writeFileSync(join(dir, "first.json"), JSON.stringify({ hash: "stale", seconds: 9 }));
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, dir, stubSynth());
+    assert.equal((JSON.parse(readFileSync(join(dir, "first.json"), "utf8")) as { hash: string }).hash, narrationCacheKey(storyboard.cards[1]!.narration, VOICE));
+    const laidDir = join(tempDir(), "audio");
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, laidDir, stubSynth());
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, laidDir, stubSynth());
+    // A take that points at a blob nobody has: that card alone is synthesised again, and its new take becomes current.
+    const outro = storyboard.cards[3]!;
+    const hash = narrationCacheKey(outro.narration, VOICE);
+    const lost = await repos.tts.record(storage.brandId, hash, { sha256: "cd" + "0".repeat(62), seconds: 1, voice: {} });
+    const healed = stubSynth();
+    const fresh = async (text: string, out: string) => healed.synth(`${text} (take 2)`, out); // a real provider returns new bytes
+    const messages: string[] = [];
+    await synthesiseStoredCards(storage, run.id, storyboard, VOICE, join(tempDir(), "audio"), { synth: fresh, probe: healed.probe, report: (m) => messages.push(m) });
+    assert.deepEqual(healed.calls, [`${outro.narration} (take 2)`]);
+    assert.ok(messages.some((m) => /stored take unusable/.test(m)));
+    assert.notEqual((await repos.tts.get(storage.brandId, hash)).sha256, lost.sha256);
+  }],
+  ["clips: a clip rendered from other inputs is refused at staging, an imported one is left to the duration check", async () => {
+    const { storage, run } = await setup();
+    const storyboard = validateStoryboard(STORYBOARD, "stored", 2);
+    const audio = storyboard.cards.map((card) => ({ id: card.id, seconds: 3, source: "mute" as const }));
+    const ranges = clipRangesFor(buildTimeline(storyboard, audio).scenes, storyboard.cards.map((c) => c.id));
+    const file = join(tempDir(), "c.mp4");
+    writeFileSync(file, "clip");
+    for (const range of ranges) await recordStoredClip(storage, run.id, range, file, clipInputsHash("old props", range));
+    await assert.rejects(() => stageStoredClips(storage, run.id, ranges, join(tempDir(), "clips"), (range) => clipInputsHash("new props", range)), /Re-render it with --card intro/);
+    const other = await setup();
+    for (const range of ranges) await recordStoredClip(other.storage, other.run.id, range, file, "import:sha256:abc");
+    assert.equal((await stageStoredClips(other.storage, other.run.id, ranges, join(tempDir(), "clips"), () => "x")).length, 4);
+  }],
+  ["export: collisions, identical bytes, give-up and head mismatch", async () => {
+    const { storage, store } = await setup();
+    const runId = "11111111-1111-4111-8111-111111111111";
+    const dir = tempDir();
+    const file = join(dir, "r.mp4");
+    writeFileSync(file, "mine");
+    // A list that cannot see what is there makes every attempt start at v001, as a concurrent render would.
+    const blind = (extra: Record<string, unknown> = {}): typeof store =>
+      new Proxy(store, {
+        get: (target, key) => {
+          if (key === "list") return async () => [];
+          if (typeof key === "string" && key in extra) return extra[key];
+          const value = (target as any)[key];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    const exporter = { ...storage, store: blind() };
+    await putAt(store, reelExportKey(storage.brandId, runId, 1), Buffer.from("theirs"));
+    assert.equal((await exportStoredReel(exporter, runId, file)).versionNo, 2, "different bytes at v001: it moves to the next free version");
+    assert.equal((await exportStoredReel(exporter, runId, file)).versionNo, 2, "identical bytes already at v002 resolve to v002");
+    for (let v = 3; v <= 9; v++) await putAt(store, reelExportKey(storage.brandId, runId, v), Buffer.from(`theirs-${v}`));
+    const other = join(dir, "o.mp4");
+    writeFileSync(other, "another render");
+    await assert.rejects(() => exportStoredReel(exporter, runId, other), InvalidInputError, "it gives up after the bounded attempts");
+    const lying = { ...storage, store: blind({ head: async () => ({ etag: "e", size: 1, metadata: {} }) }) };
+    await assert.rejects(() => exportStoredReel(lying, "22222222-2222-4222-8222-222222222222", file), /did not verify/);
   }],
   ["export: each render takes the next version, concurrent renders never share one, and the object is verified", async () => {
     const { storage, run, store } = await setup();

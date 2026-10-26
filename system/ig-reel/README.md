@@ -379,6 +379,26 @@ npx tsx system/ig-reel/render-reel-week.ts --profile <slug> --date <date> --asse
 
 ---
 
+## A brand served from storage: `--run`
+
+A brand that `resolveBrandSource` says is in storage (D12) is rendered with `--run <runId>` instead of a profile folder:
+the `reel-week` recipe, the input and the storyboard come from storage (`recipe_runs`), narration is looked up in
+`tts_cache` before it is synthesised, and each clip is a blob recorded as a `clip` artifact of the run. Re-rendering a card
+(`--card <id>`) appends a new clip and keeps the old one; `--assemble` stages the current clips from the blob cache, so it
+needs no output folder. Scratch (the Remotion staging dir and the audio/clip/render dir) is unique per run and removed
+afterwards, so two renders never touch each other's files. The final MP4 is written once to
+`exports/reels/<runId>/v<NNN>/reel.mp4` (the next free number) and verified; `--out <dir>` also copies it there.
+Needs `DATABASE_URL` and `S3_*`. Folder brands are unchanged. An item `image` that is an asset id is staged from the asset library.
+
+A failed stored render keeps its work dir and prints the path: a temp dir `reel-<runId>-...` holding the audio, clips,
+renders and the run's own Remotion public dir (`public/`, passed to Remotion with `--public-dir`, so it never mixes with
+another run or with `remotion/public/`). Remove it by hand when you are done; the engine never sweeps it. Narration takes
+finished before a *failure* are already stored (`tts_cache`). A hard interrupt (Ctrl-C, a killed process) skips that: the
+complete takes (`<card>.mp3` with its `<card>.json`) stay in `reel-<runId>-.../audio-cache/`. Re-running the same narration
+synthesises them again; copy them from there first if the provider charge matters. A stored run needs a storyboard in the
+run, and `--voice`, `--storyboard` and `--date` are refused for it. A clip is refused at `--assemble` when it was rendered from other props or frames than the
+current storyboard and timeline: re-render it with `--card <id>`.
+
 ## What ends up in the output folder
 
 When the render finishes, all artifacts are organized in

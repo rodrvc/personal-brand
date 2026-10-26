@@ -22,12 +22,14 @@ import { createHash } from "node:crypto";
 import { constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { putAt, putBlob, type BlobCache } from "@personal-brand/storage/blob";
+import { BlobHashMismatchError, putAt, putBlob, type BlobCache } from "@personal-brand/storage/blob";
 import {
   InvalidInputError,
   NotFoundError,
+  ObjectNotFoundError,
   reelExportKey,
   reelExportPrefix,
+  type AssetRepository,
   type BlobStore,
   type RecipeRepository,
   type RecipeRunRepository,
@@ -48,6 +50,7 @@ export const REEL_RECIPE = "reel-week";
 export interface ReelStorage {
   brandId: string;
   recipes: Pick<RecipeRepository, "get">;
+  assets: Pick<AssetRepository, "get" | "list">;
   runs: Pick<RecipeRunRepository, "get" | "list">;
   artifacts: RunArtifactRepository;
   tts: TtsCacheRepository;
@@ -79,6 +82,7 @@ export interface StoredReelRun {
 
 /** A run of this brand's `reel-week` recipe: its input (without the importer's bookkeeping) and storyboard. */
 export async function loadStoredReelRun(storage: ReelStorage, runId: string): Promise<StoredReelRun> {
+  // `get` returns no brand, so membership comes from the brand's own list (the repository does not paginate it).
   const heads = await storage.runs.list(storage.brandId, { recipe: REEL_RECIPE });
   if (!heads.some((head) => head.id === runId)) throw new Error(`Run ${runId} is not a "${REEL_RECIPE}" run of this brand.`);
   const run = (await storage.runs.get(runId, (body) => body as Record<string, unknown>)).value;
@@ -108,6 +112,16 @@ function materialize(source: string, dest: string): void {
   }
 }
 
+/** The measured length in a card's sidecar, when the sidecar is for exactly this narration hash; otherwise undefined. */
+function sidecarSeconds(sidecarPath: string, hash: string): number | undefined {
+  try {
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as { hash?: unknown; seconds?: unknown };
+    return sidecar.hash === hash && typeof sidecar.seconds === "number" && Number.isFinite(sidecar.seconds) ? sidecar.seconds : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Per-card narration for a stored run. A card whose narration hash has a `tts_cache` take is laid into `audioDir` from
  * the blob cache (no API call); the rest are synthesised by the unchanged `synthesiseCards` into that same dir, then
@@ -125,7 +139,13 @@ export async function synthesiseStoredCards(
   const laid = new Map<string, string>(); // card id -> sha256 of a take laid from the cache (already stored)
   for (const card of storyboard.cards) {
     if (card.words === 0) continue;
+    const [mp3, sidecarPath] = [join(audioDir, `${card.id}.mp3`), join(audioDir, `${card.id}.json`)];
+    // A retry in the same dir: the card is already here for this very narration (laid before, or synthesised before the failure). Keep it.
     const hash = narrationCacheKey(card.narration, voice);
+    if (existsSync(mp3) && sidecarSeconds(sidecarPath, hash) !== undefined) continue;
+    // Files of another narration in this scratch dir (a stale retry): drop the links so nothing writes through a staged cache file.
+    rmSync(mp3, { force: true });
+    rmSync(sidecarPath, { force: true });
     let take;
     try {
       take = await storage.tts.get(storage.brandId, hash);
@@ -133,8 +153,17 @@ export async function synthesiseStoredCards(
       if (error instanceof NotFoundError) continue;
       throw error;
     }
-    materialize(await storage.cache.read(take.sha256), join(audioDir, `${card.id}.mp3`));
-    writeFileSync(join(audioDir, `${card.id}.json`), JSON.stringify({ hash, seconds: take.seconds }), { flag: "wx" });
+    let cached: string;
+    try {
+      cached = await storage.cache.read(take.sha256);
+    } catch (error) {
+      // A take whose blob is gone or corrupt is a miss: the card is synthesised again and its new take becomes current.
+      if (!(error instanceof ObjectNotFoundError) && !(error instanceof BlobHashMismatchError)) throw error;
+      options.report?.(`  ${card.id}: stored take unusable (${(error as Error).message}); synthesising again`);
+      continue;
+    }
+    materialize(cached, mp3);
+    writeFileSync(sidecarPath, JSON.stringify({ hash, seconds: take.seconds }), { flag: "wx" });
     laid.set(card.id, take.sha256);
   }
   // Every complete take (an mp3 with its matching sidecar, written only after synthesis and measuring) is stored, also when a
@@ -144,14 +173,8 @@ export async function synthesiseStoredCards(
       const [mp3, sidecarPath] = [join(audioDir, `${card.id}.mp3`), join(audioDir, `${card.id}.json`)];
       if (card.words === 0 || !existsSync(mp3) || !existsSync(sidecarPath)) continue;
       const hash = narrationCacheKey(card.narration, voice);
-      let seconds: unknown;
-      try {
-        const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as { hash?: unknown; seconds?: unknown };
-        seconds = sidecar.hash === hash ? sidecar.seconds : undefined;
-      } catch {
-        seconds = undefined;
-      }
-      if (typeof seconds !== "number" || !Number.isFinite(seconds)) continue;
+      const seconds = sidecarSeconds(sidecarPath, hash);
+      if (seconds === undefined) continue;
       let sha256 = laid.get(card.id);
       if (!sha256) {
         sha256 = (await putBlob(storage.store, storage.brandId, readFileSync(mp3), "audio/mpeg")).sha256;
@@ -186,13 +209,18 @@ export async function recordStoredClip(storage: ReelStorage, runId: string, rang
  * Lays the run's current clips into `clipsDir` under the names the engine uses, from the blob cache. Returns the card ids
  * staged: a card with no clip is left for `validateClipsForAssembly` to name, as for a folder.
  */
-export async function stageStoredClips(storage: ReelStorage, runId: string, ranges: readonly ClipRange[], clipsDir: string): Promise<string[]> {
+export async function stageStoredClips(storage: ReelStorage, runId: string, ranges: readonly ClipRange[], clipsDir: string, expectedHash: (range: ClipRange) => string): Promise<string[]> {
   mkdirSync(clipsDir, { recursive: true });
   const current = await storage.artifacts.current(runId, { kind: "clip" });
   const staged: string[] = [];
   for (const range of ranges) {
     const clip = current.find((a) => a.cardIndex === range.index && a.cardId === range.cardId);
     if (!clip) continue;
+    // A clip rendered from other props or frames (the storyboard or timeline changed) is stale. An imported clip has no known
+    // render inputs (`import:` prefix) and is left to the duration check at assembly.
+    if (!clip.inputsHash.startsWith("import:") && clip.inputsHash !== expectedHash(range)) {
+      throw new Error(`The stored clip of card "${range.cardId}" was rendered from other inputs than the current storyboard and timeline. Re-render it with --card ${range.cardId}.`);
+    }
     materialize(await storage.cache.read(clip.sha256), join(clipsDir, clipFileForRange(range, ranges.length)));
     staged.push(range.cardId);
   }
@@ -235,4 +263,32 @@ export async function exportStoredReel(storage: ReelStorage, runId: string, file
       if (!(error instanceof InvalidInputError) || attempt >= MAX_EXPORT_ATTEMPTS) throw error;
     }
   }
+}
+
+const ASSET_EXTENSIONS: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "font/woff2": ".woff2" };
+
+/**
+ * An asset of the brand (an item image or the logo font) laid into `dir` as `<baseName><extension of its type>` from the blob
+ * cache. Null when the brand has no such visible asset; a type a reel cannot use is an error.
+ */
+export async function stageStoredAsset(storage: ReelStorage, assetId: string, dir: string, baseName: string): Promise<{ name: string; mime: string } | null> {
+  let asset;
+  try {
+    asset = (await storage.assets.get(storage.brandId, assetId)).value;
+  } catch (error) {
+    if (error instanceof NotFoundError) return null;
+    throw error;
+  }
+  if (asset.status === "hidden") return null;
+  const extension = ASSET_EXTENSIONS[asset.mime];
+  if (!extension) throw new Error(`Asset ${assetId} is ${asset.mime}, which a reel cannot use (png, jpeg, webp, woff2).`);
+  const name = `${baseName}${extension}`;
+  materialize(await storage.cache.read(asset.sha256), join(dir, name));
+  return { name, mime: asset.mime };
+}
+
+/** The visible `woff2` font asset of the brand with the lowest id, for the logo (deterministic); undefined when it has none. */
+export async function findStoredLogoFont(storage: ReelStorage): Promise<string | undefined> {
+  const fonts = await storage.assets.list(storage.brandId, { kind: "font" });
+  return fonts.filter((row) => row.value.status !== "hidden" && row.value.mime === "font/woff2").map((row) => row.value.assetId).sort()[0];
 }
