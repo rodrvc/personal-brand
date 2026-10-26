@@ -12,6 +12,7 @@ export const messages = {
   saveConflict: "Alguien más cambió este carrusel mientras lo editabas. No se guardó nada: revisa la versión actual antes de volver a guardar.",
   storedArchivedAny: "Esta marca está archivada y no admite cambios.",
   storedArchived: (slug: string) => `La marca "${slug}" está archivada y no admite cambios.`,
+  carouselExists: (id: string) => `Ya existe un carrusel "${id}".`,
   storedNotYet: "Esta función para marcas guardadas llega en el próximo cambio.",
   uploadTooLarge: "El archivo es demasiado grande para subirlo (máximo ~28 MB). Adjunta una versión más liviana.",
   imageToolUnavailable:

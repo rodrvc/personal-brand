@@ -19,7 +19,7 @@ export function openEditorStorage(env: NodeJS.ProcessEnv = process.env): { stora
   const sql = connect(env);
   const repos = createPgRepositories(sql);
   return {
-    storage: { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, files: store, blobs: (brandId) => new BlobCache(store, brandId) },
+    storage: { brands: repos.brands, documents: repos.documents, assets: repos.assets, carousels: repos.carousels, exports: repos.exports, revisions: repos.revisions, files: store, blobs: (brandId) => new BlobCache(store, brandId) },
     close: () => sql.end(),
   };
 }

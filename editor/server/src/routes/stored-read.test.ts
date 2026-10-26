@@ -72,12 +72,13 @@ const storage = {
   assets: repos.assets,
   carousels: repos.carousels,
   exports: repos.exports,
+  revisions: repos.revisions,
   files: objects,
   blobs: (brandId: string) => new BlobCache(objects, brandId, blobDir),
 };
 // A storage whose reads fail, and one whose carousel listing names a head that is gone by the time it is read.
 const failing = { ...storage, brands: { getBySlug: async () => { throw new Error("connection refused"); }, list: async () => { throw new Error("connection refused"); } } };
-const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), save: repos.carousels.save.bind(repos.carousels), setStatus: repos.carousels.setStatus.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
+const racing = { ...storage, carousels: { get: repos.carousels.get.bind(repos.carousels), save: repos.carousels.save.bind(repos.carousels), setStatus: repos.carousels.setStatus.bind(repos.carousels), create: repos.carousels.create.bind(repos.carousels), list: async (id: string) => { const heads = await repos.carousels.list(id); return [...heads, ...heads.map((h) => ({ ...h, value: { ...h.value, slug: "vanished" } }))]; } } };
 const app = express();
 app.use(express.json());
 app.use("/api/profiles/:slug", storedBrandGuard(storage));
@@ -86,7 +87,7 @@ app.use(assetsRouter(storage));
 // The folder routers sit behind the guard exactly as in index.ts: for a stored brand none of them may be reached.
 app.use(renderRouter(storage));
 app.use(chatRouter(() => new NonePieceGenerator()));
-app.use(composeRouter(() => new NonePieceGenerator()));
+app.use(composeRouter(() => new NonePieceGenerator(), storage));
 app.use(exportRouter(storage));
 const failingApp = express();
 failingApp.use("/api/profiles/:slug", storedBrandGuard(failing));
@@ -224,6 +225,13 @@ const tests: Array<[string, () => Promise<void>]> = [
     const encoded = SLUG.replace("-", "%2D");
     assert.equal((await json(`/${encoded}/carousels/week-one/stats`)).status, 501);
     assert.equal((await json(`/${encoded}/carousels/week-one`, { method: "DELETE" })).status, 405);
+    assert.equal(existsSync(join(root, "profiles", SLUG)), false);
+  }],
+  ["chat, plan/apply and regenerate are still 405 for a stored brand (S10b4), whatever the body", async () => {
+    for (const path of ["chat/messages", "plan/apply", "regenerate"]) {
+      const res = await json(`/${SLUG}/carousels/week-one/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      assert.equal(res.status, 405, path);
+    }
     assert.equal(existsSync(join(root, "profiles", SLUG)), false);
   }],
   ["an invalid template params JSON is a 400, and the free template does not need it", async () => {

@@ -84,7 +84,7 @@ app.use(storageSyncMiddleware());
 app.use(profilesRouter(opened?.storage));
 app.use(assetsRouter(opened?.storage));
 app.use(renderRouter(opened?.storage));
-app.use(composeRouter(getGenerator));
+app.use(composeRouter(getGenerator, opened?.storage));
 app.use(exportRouter(opened?.storage));
 app.use(chatRouter(getGenerator));
 

@@ -8,7 +8,7 @@ import { BrandArchivedError, carouselExportKey, InvalidInputError, VersionConfli
 
 import type { CarouselDocument } from "../../../system/ig-carousel/carousel-document.js";
 import { collectAssetIds, hasUnfinishedPieces, queueExportJob, ExportHasPendingPiecesError, type ExportJob, type RenderFn } from "./export/export-queue.js";
-import { storedCarouselRaw, storedRenderParts, validateStored, type StoredBrand } from "./stored-read.js";
+import { storedCarouselRaw, storedRenderParts, validateStored, type EditorStorage, type StoredBrand } from "./stored-read.js";
 
 /**
  * Queues the export of a stored carousel. The same contract as the folder's: refused (`ExportHasPendingPiecesError`)
@@ -36,6 +36,7 @@ async function runStoredExport(s: StoredBrand, doc: CarouselDocument, rowId: str
   // Scratch first, reservation inside the try: whatever fails after a version is reserved marks that row failed.
   const scratch = mkdtempSync(join(tmpdir(), "editor-stored-export-"));
   let reserved: Awaited<ReturnType<typeof s.storage.exports.reserveNextVersion>> | undefined;
+  let completed = false;
   try {
     reserved = await s.storage.exports.reserveNextVersion(rowId, carouselVersion);
     const { brand, template, base, resolve } = await storedRenderParts(s, doc);
@@ -60,32 +61,58 @@ async function runStoredExport(s: StoredBrand, doc: CarouselDocument, rowId: str
     };
     await putAt(s.storage.files, carouselExportKey(s.brandId, rowId, reserved.versionNo, "manifest.json"), Buffer.from(JSON.stringify(manifest, null, 2)), "application/json");
     await s.storage.exports.complete(reserved.id, manifest);
+    completed = true;
     // The export is complete from here: a failure in the steps below still reports its version.
     job.version = reserved.versionNo;
 
-    // Pieces the export used leave `candidate` for `approved` (carousel-export: "Status and library after export").
-    const used = new Set(collectAssetIds(doc));
-    for (const { value, version } of library.filter((row) => used.has(row.value.assetId) && row.value.status === "candidate")) {
-      await s.storage.assets.update(s.brandId, value.assetId, { status: "approved" }, { expectedVersion: version, author: "editor", source: "editor", reason: "save" });
-    }
-    // Draft -> exported only if nothing saved the carousel meanwhile (a conflict fails the job; the export itself is complete).
-    if (doc.status === "draft") {
-      try {
-        await s.storage.carousels.setStatus(rowId, { status: "exported" }, { expectedVersion: carouselVersion, author: "editor", source: "editor", reason: "status" });
-      } catch (error) {
-        // An export queued behind another one of the same draft finds it already flipped: that is not a failure.
-        if (!(error instanceof VersionConflictError) || (await storedCarouselRaw(s, doc.id)).document.status === "draft") throw error;
-      }
-    }
+    await approveUsedAssets(s, doc, library);
+    await markExported(s, doc, rowId, carouselVersion);
     job.status = "done";
   } catch (error) {
-    job.status = "error";
-    job.error = (error as Error).message;
-    if (reserved) await s.storage.exports.fail(reserved.id).catch(() => {});
+    // `queueExportJob` records the job's error; this only closes the reserved row, and never one that already completed.
+    if (reserved && !completed) {
+      await s.storage.exports.fail(reserved.id).catch((failure) => console.error(`Marking export ${reserved!.id} failed did not stick:`, failure));
+    }
     throw error;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+type Library = Awaited<ReturnType<EditorStorage["assets"]["list"]>>;
+
+/**
+ * Pieces the export used leave `candidate` for `approved` (carousel-export: "Status and library after export"). The
+ * versions come from the library listing taken before the render, so a row changed meanwhile (a pin, a rename) is
+ * re-read and retried once; one that is no longer a candidate is left alone. Audited as a status change by `editor:export`.
+ */
+async function approveUsedAssets(s: StoredBrand, doc: CarouselDocument, library: Library): Promise<void> {
+  const used = new Set(collectAssetIds(doc));
+  for (const { value, version } of library.filter((row) => used.has(row.value.assetId) && row.value.status === "candidate")) {
+    const approve = (expectedVersion: number) => s.storage.assets.update(s.brandId, value.assetId, { status: "approved" }, { expectedVersion, author: "editor:export", source: "editor", reason: "status" });
+    try {
+      await approve(version);
+    } catch (error) {
+      if (!(error instanceof VersionConflictError)) throw error;
+      const fresh = await s.storage.assets.get(s.brandId, value.assetId);
+      if (fresh.value.status === "candidate") await approve(fresh.version);
+    }
+  }
+}
+
+/** Draft -> exported only if nothing saved the carousel meanwhile: a lost race fails the job (the export itself is complete). */
+async function markExported(s: StoredBrand, doc: CarouselDocument, rowId: string, carouselVersion: number): Promise<void> {
+  if (doc.status !== "draft") return;
+  try {
+    await s.storage.carousels.setStatus(rowId, { status: "exported" }, { expectedVersion: carouselVersion, author: "editor", source: "editor", reason: "status" });
+  } catch (error) {
+    if (!(await exportedMeanwhile(s, doc.id, error))) throw error;
+  }
+}
+
+/** An export queued behind another one of the same draft finds it already flipped (a conflict, status no longer draft): not a failure. */
+async function exportedMeanwhile(s: StoredBrand, id: string, error: unknown): Promise<boolean> {
+  return error instanceof VersionConflictError && (await storedCarouselRaw(s, id)).document.status !== "draft";
 }
 
 /** The finished exports of a stored carousel, oldest first, in the shape `GET .../outputs` has for a folder. */
