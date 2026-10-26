@@ -26,7 +26,7 @@ export interface EditorStorage {
   carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus" | "create">;
   exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
   /** Snapshots of a carousel (`GET .../versions`). */
-  revisions: Pick<RevisionRepository, "list">;
+  revisions: Pick<RevisionRepository, "listHeads">;
   /** The bucket, for the deliverables (export keys from storage's `keys.ts`); written write-once. */
   files: BlobStore;
   /** The local blob cache of one brand (content-addressed, read-only). */
@@ -205,10 +205,10 @@ export async function cutOverSlugs(storage: EditorStorage | undefined): Promise<
 }
 
 /** What a stored brand answers on the read routes that have a stored branch. Anything else is answered by the guard below. */
-const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
+const STORED_READS = [/^\/(card|brand|style|templates)$/, /^\/template\/[^/]+$/, /^\/carousels(\/[^/]+(\/versions)?)?$/, /^\/carousels\/[^/]+\/(outputs|stats|export\/[^/]+)$/, /^\/assets(\/(files|thumbs)\/.+)?$/, /^\/carousels\/[^/]+\/slides\/[^/]+\/(html|png|contrast)$/];
 
-/** The writes a stored brand takes so far (S10b): creating, saving and exporting a carousel. Every other write (chat, plan/apply, regenerate) stays a 405. */
-const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/export$/]];
+/** The writes a stored brand takes so far (S10b): creating, saving and exporting a carousel, and the regenerate preview. Every other write (chat, plan/apply) stays a 405. */
+const STORED_WRITES: Array<[string, RegExp]> = [["PUT", /^\/carousels\/[^/]+$/], ["POST", /^\/carousels$/], ["POST", /^\/carousels\/[^/]+\/export$/], ["POST", /^\/carousels\/[^/]+\/regenerate$/]];
 
 /** Read routes the web client calls on every carousel open: an empty answer it already handles (no chat yet). */
 const EMPTY_READS: Array<[RegExp, unknown]> = [
@@ -218,7 +218,7 @@ const EMPTY_READS: Array<[RegExp, unknown]> = [
 /**
  * The one gate for a brand served from storage, mounted as `app.use("/api/profiles/:slug", ...)` ahead of every router
  * (Express decodes `:slug`, so `%2D` cannot dodge it). Reads with a stored branch pass; chat answers empty;
- * every other route (stats, generation sidecars) is a 501; writes other than
+ * every other route (generation sidecars) is a 501; writes other than
  * the carousel create, save and export are a 405, because they would land in a folder nobody reads. No route below this point ever builds a
  * `ProfileStore` for a stored brand, which would create an empty `profiles/<slug>` folder.
  */
@@ -276,8 +276,7 @@ export async function storedRenderParts(s: StoredBrand, doc: CarouselDocument) {
  */
 export async function storedVersions(s: StoredBrand, id: string): Promise<string[]> {
   const { rowId } = await storedCarouselRaw(s, id);
-  return (await s.storage.revisions.list("carousel", rowId))
-    .filter((revision) => revision.reason === "snapshot" || revision.reason === "structural")
+  return (await s.storage.revisions.listHeads("carousel", rowId, ["snapshot", "structural"]))
     .map((revision) => revision.createdAt.replace(/[:.]/g, "-"))
     .sort()
     .reverse();

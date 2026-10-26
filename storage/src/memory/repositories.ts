@@ -174,6 +174,10 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     async list(entityType: RevisionEntity, entityId) {
       return structuredClone(log.filter((r) => r.entityType === entityType && r.entityId === entityId));
     },
+    async listHeads(entityType, entityId, reasons) {
+      return log.filter((r) => r.entityType === entityType && r.entityId === entityId && (!reasons || reasons.includes(r.reason)))
+        .map(({ body: _body, bodyText: _bodyText, ...head }) => structuredClone(head));
+    },
     async get(entityType, entityId, version) {
       const found = log.find((r) => r.entityType === entityType && r.entityId === entityId && r.version === version);
       if (!found) throw new NotFoundError(`revision ${entityType}/${entityId}@${version}`);

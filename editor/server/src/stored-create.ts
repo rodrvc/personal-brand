@@ -25,7 +25,9 @@ export async function createStoredCarousel(s: StoredBrand, body: CreateBody, pre
   if (preview || body.prompt !== undefined) return { status: 501, body: { error: messages.storedNotYet } };
   const blank = body.blank === true;
   if (blank && body.templateId !== undefined) return { status: 400, body: { error: `"blank" and "templateId" cannot be sent together` } };
-  if (!body.title || !body.title.trim()) return { status: 400, body: { error: "title is required" } };
+  if (typeof body.title !== "string" || !body.title.trim()) return { status: 400, body: { error: "title is required" } };
+  if (body.templateId !== undefined && body.templateId !== null && typeof body.templateId !== "string") return { status: 400, body: { error: `"templateId" must be a string or null` } };
+  if (body.id !== undefined && typeof body.id !== "string") return { status: 400, body: { error: `"id" must be a string` } };
   const id = body.id ?? `carousel-${Date.now()}`;
   assertValidCarouselId(id);
   if ((await s.storage.brands.getBySlug(s.slug)).value.status === "archived") throw new BrandArchivedError(s.slug);

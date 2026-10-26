@@ -1,3 +1,4 @@
+import { NotFoundError } from "@personal-brand/storage/contracts";
 import { Router } from "express";
 
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
@@ -32,7 +33,8 @@ import { estimateImageCostCents, IMAGE_MODEL } from "../ai/pricing.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
 import { handleStoreError } from "./store-errors.js";
 import { createStoredCarousel } from "../stored-create.js";
-import { guardStorage, isStoredError, resolveStored, type EditorStorage } from "../stored-read.js";
+import { messages } from "../messages.js";
+import { guardStorage, isStoredError, resolveStored, storedCarousel, storedCarouselRaw, storedStyle, type EditorStorage, type StoredBrand } from "../stored-read.js";
 
 /**
  * Pending plans held in memory between a *preview* POST `/carousels`
@@ -151,7 +153,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
         return;
       }
 
-      if (!body.title || !body.title.trim()) {
+      if (typeof body.title !== "string" || !body.title.trim()) {
         res.status(400).json({ error: "title is required" });
         return;
       }
@@ -270,6 +272,21 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
    */
   router.post("/api/profiles/:slug/carousels/:id/regenerate", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        // Only the "Ver prompt final" preview is served from storage (it calls no model and writes nothing); the generating regenerate needs the planner on storage (S10b5).
+        const body = (req.body ?? {}) as { target?: { slideId?: string; objectId?: string }; prompt?: string; preview?: boolean };
+        if (req.query.dryRun !== "true" && body.preview !== true) return void res.status(501).json({ error: messages.storedNotYet });
+        const { result } = await storedCarousel(found, req.params.id);
+        if (!result.valid) return void res.status(400).json({ error: "Invalid document", details: result.errors });
+        const { slideId, objectId } = body.target ?? {};
+        if (typeof slideId !== "string" || !slideId) return void res.status(400).json({ error: `"target.slideId" is required` });
+        const slide = result.document.slides.find((s) => s.id === slideId);
+        if (!slide) return void res.status(404).json({ error: `No slide "${slideId}"` });
+        if (typeof objectId !== "string" || !objectId) return void res.status(400).json({ error: `Preview is only meaningful for an image target (objectId).` });
+        res.json({ prompt: finalImagePrompt(result.document, slide, objectId, typeof body.prompt === "string" ? body.prompt : undefined, await storedStyle(found)) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       // Carries this read's revision into the final write below, instead of
       // that write re-reading "current" — the regeneration call in between
@@ -296,23 +313,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
 
       const isDryRun = req.query.dryRun === "true" || body.preview === true;
       if (isDryRun) {
-        const slide = doc.slides[slideIndex]!;
-        const style = loadBrandStyle(store.roots.profileDir);
-        if (target.objectId === "background" || target.objectId) {
-          const slotName =
-            target.objectId === "background"
-              ? `background for ${slide.kind}`
-              : slide.objects.find((o) => o.id === target.objectId)?.slot ?? target.objectId!;
-          const suggestion = body.prompt?.trim() || suggestionForSlot(doc.prompt.text, slotName, style, doc.title);
-          const brand = generateImageBrandContext(style);
-          const clauses = [
-            suggestion,
-            brand.imageDirection,
-            brand.styleKeywords.length > 0 ? `Style: ${brand.styleKeywords.join(", ")}.` : undefined,
-            brand.paletteWords ? `Use ${brand.paletteWords}.` : undefined,
-            brand.logoRules,
-          ].filter(Boolean);
-          res.json({ prompt: clauses.join("\n\n") });
+        if (target.objectId) {
+          res.json({ prompt: finalImagePrompt(doc, doc.slides[slideIndex]!, target.objectId, body.prompt, loadBrandStyle(store.roots.profileDir)) });
           return;
         }
         res.status(400).json({ error: `Preview is only meaningful for an image target (objectId).` });
@@ -348,8 +350,15 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator, st
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id/stats", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id/stats", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        const { result } = await storedCarousel(found, req.params.id);
+        if (!result.valid) return void res.status(400).json({ error: "Invalid document", details: result.errors });
+        res.json({ carouselId: req.params.id, libraryRatio: libraryRatio(result.document), history: await storedLibraryHistory(found, req.params.id) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const doc = readValidatedDocument(store, req.params.id);
       const ratio = libraryRatio(doc);
@@ -614,6 +623,34 @@ function previousCarouselsLibraryRatio(
     const header = readCarouselHeader(store, entry.name);
     if (!header) continue;
     out.push({ carouselId: header.id, updatedAt: header.updatedAt, libraryRatio: libraryRatioRaw(header) });
+  }
+  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** The prompt the provider would receive for one image piece: the planner's suggestion (or the user's override) plus the brand's image direction. Shared by the folder and stored previews. */
+function finalImagePrompt(doc: CarouselDocument, slide: CarouselDocument["slides"][number], objectId: string, override: string | undefined, style: NonNullable<Parameters<typeof suggestionForSlot>[2]>): string {
+  const slotName = objectId === "background" ? `background for ${slide.kind}` : slide.objects.find((o) => o.id === objectId)?.slot ?? objectId;
+  const brand = generateImageBrandContext(style);
+  return [
+    override?.trim() || suggestionForSlot(doc.prompt.text, slotName, style, doc.title),
+    brand.imageDirection,
+    brand.styleKeywords.length > 0 ? `Style: ${brand.styleKeywords.join(", ")}.` : undefined,
+    brand.paletteWords ? `Use ${brand.paletteWords}.` : undefined,
+    brand.logoRules,
+  ].filter(Boolean).join("\n\n");
+}
+
+/** `previousCarouselsLibraryRatio` for a stored brand: the other carousels' ratio from their raw documents, newest first (one that vanished meanwhile is skipped). */
+async function storedLibraryHistory(s: StoredBrand, currentCarouselId: string): Promise<Array<{ carouselId: string; updatedAt: string; libraryRatio: number }>> {
+  const out: Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> = [];
+  for (const head of await s.storage.carousels.list(s.brandId)) {
+    if (head.value.slug === currentCarouselId) continue;
+    try {
+      const { document, updatedAt } = await storedCarouselRaw(s, head.value.slug);
+      out.push({ carouselId: head.value.slug, updatedAt: typeof document.updatedAt === "string" ? document.updatedAt : updatedAt, libraryRatio: libraryRatioRaw(document) });
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

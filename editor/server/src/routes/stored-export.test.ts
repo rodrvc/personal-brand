@@ -63,8 +63,8 @@ const brokenApp = express();
 brokenApp.use(express.json());
 brokenApp.use("/api/profiles/:slug", storedBrandGuard(broken));
 brokenApp.use(exportRouter(broken, render as never));
-const brokenServer = brokenApp.listen(0);
-const server = app.listen(0);
+const brokenServer = brokenApp.listen(0, "127.0.0.1");
+const server = app.listen(0, "127.0.0.1");
 await Promise.all([server, brokenServer].map((srv) => new Promise<void>((resolve) => srv.once("listening", resolve))));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/profiles/export-example/carousels`;
 

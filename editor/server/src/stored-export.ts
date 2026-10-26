@@ -8,6 +8,7 @@ import { BrandArchivedError, carouselExportKey, InvalidInputError, VersionConfli
 
 import type { CarouselDocument } from "../../../system/ig-carousel/carousel-document.js";
 import { collectAssetIds, hasUnfinishedPieces, queueExportJob, ExportHasPendingPiecesError, type ExportJob, type RenderFn } from "./export/export-queue.js";
+import { approveCandidates } from "./stored-assets.js";
 import { storedCarouselRaw, storedRenderParts, validateStored, type EditorStorage, type StoredBrand } from "./stored-read.js";
 
 /**
@@ -87,17 +88,7 @@ type Library = Awaited<ReturnType<EditorStorage["assets"]["list"]>>;
  * re-read and retried once; one that is no longer a candidate is left alone. Audited as a status change by `editor:export`.
  */
 async function approveUsedAssets(s: StoredBrand, doc: CarouselDocument, library: Library): Promise<void> {
-  const used = new Set(collectAssetIds(doc));
-  for (const { value, version } of library.filter((row) => used.has(row.value.assetId) && row.value.status === "candidate")) {
-    const approve = (expectedVersion: number) => s.storage.assets.update(s.brandId, value.assetId, { status: "approved" }, { expectedVersion, author: "editor:export", source: "editor", reason: "status" });
-    try {
-      await approve(version);
-    } catch (error) {
-      if (!(error instanceof VersionConflictError)) throw error;
-      const fresh = await s.storage.assets.get(s.brandId, value.assetId);
-      if (fresh.value.status === "candidate") await approve(fresh.version);
-    }
-  }
+  await approveCandidates(s, new Set(collectAssetIds(doc)), "editor:export", library);
 }
 
 /** Draft -> exported only if nothing saved the carousel meanwhile: a lost race fails the job (the export itself is complete). */
