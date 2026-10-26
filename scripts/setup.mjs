@@ -126,7 +126,7 @@ function printBoundary() {
   console.log(`
 The engine / brand boundary
 ---------------------------
-  system/, .claude/, app/ and core/ are the GENERIC ENGINE. They must
+  system/, .claude/ and core/ are the GENERIC ENGINE. They must
   never contain a real brand's literals — no name, city, domain, @handle or
   hashtag, not even in a comment or an example. Generic layers write those as
   <brand>, <city>, <slug>, profiles/<slug>/.

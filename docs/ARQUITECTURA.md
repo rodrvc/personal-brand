@@ -8,8 +8,9 @@ No es una app de afiches. Es una **plataforma propia de contenido**: crear,
 gestionar y hacer seguimiento de lo que se publica en redes. Publicaciones,
 videos, guiones, y con el tiempo métricas.
 
-La app de escritorio (`app/`) es **un módulo** de esa plataforma, el primero
-que existe. No es el producto entero.
+El editor de carruseles (`editor/`) es **un módulo** de esa plataforma. No es
+el producto entero. (La app de escritorio original, `app/`, se retiró el
+2026-10-26 y vive en el historial de git.)
 
 > Es nuestra isla: tiene que funcionar en nuestro ecosistema y nuestros
 > agentes tienen que saber usarla sin fricción.
@@ -30,7 +31,6 @@ que existe. No es el producto entero.
 ┌─ módulos ──────────────────────────────────────────┐
 │  .claude/agents/   agentes de contenido (existe)   │
 │  editor/           editor de carruseles (existe)   │
-│  app/              editor de afiches (deprecado)   │
 │  ...               videos, guiones, métricas       │
 └────────────────────────────────────────────────────┘
 ```
@@ -82,7 +82,7 @@ El `.gitignore` ya lo hace: solo se versiona `profiles/example/`.
 grep -rE '#[0-9A-Fa-f]{6}' system/
 
 # Nombres propios en el código de los módulos
-grep -rniE '<marca real>|<ciudad>|<persona>' app/ core/ system/
+grep -rniE '<marca real>|<ciudad>|<persona>' core/ system/
 ```
 
 `profiles/example/` es la excepción: existe para clonarlo. Sus valores son
@@ -92,7 +92,7 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
 
 > Si alguien clona este repo, no debe poder deducir para qué marca se
 > construyó. Y una segunda marca debe funcionar sin tocar una línea de
-> `system/`, `core/` ni `app/`.
+> `system/` ni `core/`.
 
 ## Fronteras: quién puede tocar qué
 
@@ -100,10 +100,9 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
 |---|---|---|
 | `system/` | **nadie en runtime** — se edita a mano | todos |
 | `profiles/<m>/config.yaml` | a mano | todos |
-| `profiles/<m>/brand.yaml` | la app | todos |
-| `profiles/<m>/content/**` | app y agentes | todos |
-| `core/` | a mano (paquete pnpm `@personal-brand/core`) | app, editor, y cualquier módulo JS |
-| `app/**` | solo la app | — |
+| `profiles/<m>/brand.yaml` | formato heredado (lo escribía la app retirada) | todos |
+| `profiles/<m>/content/**` | agentes (CLI `brand content`) | todos |
+| `core/` | a mano (paquete pnpm `@personal-brand/core`) | editor, y cualquier módulo JS |
 | `editor/**` | solo el editor | — |
 | `profiles/<m>/carousels/`, `assets/`, `templates/` override | el editor, vía `ProfileStore` | todos |
 | `outputs.base_dir` resuelto | el editor (export) | todos |
@@ -116,39 +115,13 @@ deliberadamente genéricos ("Nombre Apellido", "Ciudad, País").
 2. Ningún módulo escribe dentro de otro módulo.
 3. `system/` no contiene literales de marca. Verificable:
    `grep -rE '#[0-9A-Fa-f]{6}' system/` debe salir vacío.
-4. La app solo puede escribir dentro de `profiles/`. Implementado en
-   `resolver_dentro()` de `app/src-tauri/src/main.rs` con dos cercos: no
-   salir de la raíz del repo, y no salir de `profiles/`. Cubierto por
-   tests: `cd app/src-tauri && cargo test`.
-
-   Una revisión encontró que la primera versión solo confinaba a la raíz,
-   así que `system/templates/x.md` pasaba. De ahí los tests: la garantía
-   estaba escrita aquí antes de existir en el código.
-5. El editor (`editor/`) solo puede escribir dentro de `profiles/<m>/` y
+4. El editor (`editor/`) solo puede escribir dentro de `profiles/<m>/` y
    dentro del `outputs.base_dir` resuelto de esa marca (que puede vivir
    fuera del repo). Implementado en `ProfileStore`
    (`editor/server/src/profile-store.ts`): dos raíces permitidas, rechaza
    rutas con `..`, absolutas, o cuyo `realpath` (siguiendo symlinks) caiga
-   fuera de ambas — el mismo patrón que `resolver_dentro()` en la app de
-   escritorio, pero con dos raíces en vez de una. Cubierto por tests
+   fuera de ambas. Cubierto por tests
    (`editor/server/src/profile-store.test.ts`).
-
-## Estado de aislamiento — verificado 2026-08-08
-
-La app **no puede** escribir fuera de `profiles/`: lo impide
-`resolver_dentro()` y lo comprueban 6 tests en Rust. Solo escribe:
-
-- `profiles/<m>/brand.yaml`
-- `profiles/<m>/content/**/*.md`
-- mover un `.md` de `drafts/` a `published/` (y solo desde `drafts/`)
-
-El sistema de markdown y los 7 agentes funcionan igual con la app instalada
-o sin ella. **Se puede subir el módulo incompleto sin romper nada.**
-
-Nota de estado: hoy la interfaz **todavía no llama** a los comandos de
-perfiles — `listar_perfiles`, `guardar_brand`, `listar_piezas`,
-`guardar_pieza` y `marcar_publicado` existen y están probados, pero nadie
-los invoca. La app trabaja en memoria. Conectarlos es lo siguiente.
 
 ## Cómo añadir un módulo nuevo
 
@@ -158,7 +131,7 @@ Cuando toque videos, guiones o métricas:
 2. Lee de `profiles/<marca>/` y escribe ahí. **Nada de base de datos
    propia ni formato paralelo.**
 3. Lógica compartida a `core/`; lo específico se queda en el módulo.
-4. Un `ESTADO.md` propio, con el mismo formato que `app/ESTADO.md`:
+4. Un `ESTADO.md` propio, con el mismo formato que `editor/ESTADO.md`:
    qué hace, decisiones con su porqué, qué falta, trampas conocidas.
 5. Nada de importar código de otro módulo. Si dos necesitan lo mismo,
    va a `core/`.
@@ -185,7 +158,7 @@ herramientas como `listar_marcas`, `leer_marca`, `crear_pieza`,
 |---|---|---|
 | Agentes de contenido | funcionando | `.claude/agents/README.md` |
 | Editor de carruseles | usable localmente | `editor/ESTADO.md` |
-| Editor de afiches (app/) | deprecado, no se borra | `app/ESTADO.md` |
+| Editor de afiches (app/) | retirado el 2026-10-26 | historial de git |
 | Videos | no existe | — |
 | Guiones | template en `system/templates/script-short.md` | — |
 | Métricas / seguimiento | no existe | — |
@@ -243,10 +216,3 @@ el estado sin abrir cada archivo a mano. Ver
 `openspec/changes/editor-carruseles/` como ejemplo: `proposal.md` (por qué y
 qué cambia), `design.md` (decisiones con alternativas descartadas) y
 `tasks.md` (checklist de implementación).
-
-## Para publicar el módulo de afiches tal como está
-
-Se puede. Está aislado y no rompe nada.
-
-Lo que le falta para ser **usable** está en `app/ESTADO.md`. Lo más urgente:
-no guarda el perfil — cambias colores, cierras, se pierden.

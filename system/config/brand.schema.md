@@ -488,7 +488,7 @@ no tiene ninguna pieza `logo`, el llamador cae a `copy.wordmark` — el mismo
 comportamiento que el motor de reel ya tiene hoy. Esto evita las dos salidas
 malas descritas arriba: no se duplica el dato en `brand.json` ni el motor
 headless lee `brand.yaml`. `brand.yaml` queda **deprecado junto con `app/`**
-(ver `app/ESTADO.md`): su bloque `logo{}` no tiene proyección a `brand.json`
+(retirada el 2026-10-26; vive en el historial de git): su bloque `logo{}` no tiene proyección a `brand.json`
 ni la tendrá — la ruta hacia adelante es la biblioteca de assets, no ese
 archivo.
 

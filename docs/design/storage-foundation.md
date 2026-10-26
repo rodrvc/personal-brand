@@ -55,7 +55,7 @@ carousel document format or the editor UI; provisioning infrastructure (§12).
 | Render | preview: `page.route("http://editor.local/**")`; export: filesystem paths | two asset paths for the same slide |
 | Reel | `system/ig-reel/render-reel-week.ts`, `storyboard.ts` | reuses `clipsDir`/`rendersDir` across runs (assemble-only, re-render one card); TTS mp3 + sidecars cached by `narrationCacheKey`; one shared `remotion/public/staging/` wiped per run |
 | Agents and skills | `.claude/agents/*.md` (8 agents + README), `.claude/skills/{usar-perfil,generar-carrusel-semana,generar-reel-semana,carousel-designer,narrated-slide-video}` | read/write `profiles/<slug>/` paths |
-| Desktop app | `app/` (deprecated) | writes `brand.yaml` and `content/**` into the folder |
+| Desktop app | `app/` (retired 2026-10-26; in git history) | wrote `brand.yaml` and `content/**` into the folder |
 | Commit gate | `scripts/validate_commit_guardian.py` | derives the brand denylist from profile folders on disk (S11a adds the terms generated from storage; folder derivation stays until S12) |
 
 **The three-copies problem:** repo folder (skills edit it, never reaches the
@@ -515,8 +515,8 @@ list`; load with `brand guidance`, `brand rules list`, `brand recipe get`,
 --if-version`. Agents whose job is ideas/drafts/published markdown depend on
 §14 Q5.
 
-**`app/`** (deprecated; writes `brand.yaml` and `content/**`, though its UI
-never calls those commands): **retire formally**, no migration (§14 decision 10).
+**`app/`** (retired 2026-10-26; it wrote `brand.yaml` and `content/**`, though its UI
+never called those commands): **retire formally**, no migration (§14 decision 10).
 
 ## 9. Generic rule/check mechanism
 
@@ -670,8 +670,8 @@ hash).
    first `cutover_at`). The marker is created with `wx` and detected with
    `lstat`, so a planted or dangling symlink is never followed. One
    exception to "every legacy reader goes through `resolveProfileDir`":
-   `app/src-tauri/src/main.rs` still reads `profiles/<slug>` directly; it is
-   retired with `app/` (decision 10). `--report out.json` stays deferred to
+   `app/src-tauri/src/main.rs` read `profiles/<slug>` directly; `app/` was
+   retired on 2026-10-26 (decision 10; detached in S11b2a, removed in S11b2b). `--report out.json` stays deferred to
    S8. `cutover` refuses while the importer has left anything behind
    (`notImported` or `skipped`, minus files that are never imported by
    design) unless `--partial` is passed; the examples are cut over with
@@ -952,8 +952,9 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S11a2 | Remainder of the old S11a: `generar-reel-semana`, `carousel-designer` + `references/` (`brand-context-protocol.md`, `verification-checklist.md`) and `examples/`, `narrated-slide-video` (`SKILL.md` l.78, l.265, `references/voice-casting.md` l.166-181), `system/recipes/weekly-roundup.md` l.173 (`<perfil>/carousels/week-input.json`); denylist parity with folder derivation (handles in guidance, recipes, config and tokens, any `name` key, recipe and carousel city); the gate warns when the generated file is absent while storage has non-example brands, or is stale | ~500 | S11a | `rg "profiles/" .claude/skills` returns nothing; a brand known only to storage is caught by the gate; the absent-file warning has a test |
 | S11a2b2 | `generar-reel-semana` rewritten in English on top of `brand run` (create run, save storyboard, render with `--run`), and the matching lines of `system/recipes/reel-week.md` (the sentence `El JSON del input (...)` there has the same missing-verb wording as `weekly-roundup.md` had: fix it when the patch lands) | ~420 | S11a2 | `rg "profiles/" .claude/skills` returns nothing (met in S11a2b2: `rg` returns nothing) |
 | S11a2c | Prose left by S11a2b: English for `generar-carrusel-semana`, command-prefix consistency in the `usar-perfil` tables, the Spanish rest of `system/recipes/*.md`; end-to-end timing of the gate query against a real store | ~150 | S11a2 | no skill mixes languages; documented timing |
-| S11b | Agents (incl. content agents on `content_items`): all `.claude/agents/*.md` + README, the `brand content` verbs (list, get, put, stage) they use (the CLI had none), `system/guides/workflow.md`, schema docs, and the S11a2b2 advisories | ~600 | S8, S11a2 | no agent references `profiles/`; **real brands can now be cut over** (see S11b2 for the one reader still on folders) |
-| S11b2 | `app/` retirement (§8, decision 10: retire formally, no migration): **pending owner decision** (retire or keep the old Tauri app). Until decided, `app/`, `CLAUDE.md` and `docs/` pointers to `app/ESTADO.md` stay as they are. `app/src-tauri` is the one consumer still reading `profiles/<slug>` directly, so it only works on folder brands; the owner settles this before cutting over a brand the app is used with | tbd | S11b | owner decision recorded; if retired, no tracked consumer of the folder layout is left except `ProfileStore` (S12) |
+| S11b | Agents (incl. content agents on `content_items`): all `.claude/agents/*.md` + README, the `brand content` verbs (list, get, put, stage) they use (the CLI had none), `system/guides/workflow.md`, schema docs, and the S11a2b2 advisories | ~600 | S8, S11a2 | no agent references `profiles/`; **real brands can now be cut over** (`app/`, the one reader still on folders, is retired by S11b2a/b) |
+| S11b2a | `app/` detach (owner decision 2026-10-26: retire, no migration): the `app` workspace member and its lockfile entries, the `.gitignore` block, the `GENERIC_PREFIXES` entry and every pointer in `CLAUDE.md`, `README.md`, `docs/` and the editor; `app/` itself is left in place | ~250 | S11b | nothing outside `app/` depends on or points at it |
+| S11b2b | `git rm app/` (history is the archive) | tbd | S11b2a | no tracked consumer of the folder layout is left except `ProfileStore` (S12) |
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
@@ -1029,7 +1030,7 @@ when S7a lands.
 7. Commit-gate denylist: gitignored local file generated by `brand denylist --write`.
 8. `brand_owner` credentials: owner only; an editor UI for rules/guidance comes later.
 9. `author`: free text for now.
-10. `app/`: retired formally (S11b).
+10. `app/`: retired formally (S11b); owner decision 2026-10-26: retire now, no migration (S11b2a detaches it, S11b2b removes it).
 
 **Decided in S11a.**
 1. `brand denylist [--write]` did not exist (S8 listed it in the verb table only); S11a built it. It is a read (no owner opt-in) and prints the terms as brand data, or, with `--write` (a flag, no value), writes them one per line to the pinned `<repo>/scripts/brand-denylist.generated.txt` (0600, temp file + rename, temp removed on failure; a symlink or directory there is refused, exit 6). The target cannot be chosen, so a tracked file such as the public denylist is unreachable. Terms come from storage only, for every non-example brand including archived ones: slug, display name, `tokens.copy.wordmark`, domains and base names of `tokens.copy.site` and `tokens.sourceImageHosts` (third-party platforms excluded), `config.content.default_hashtags` (compound ones only) and `config.profile.name`, and `@handle` in the `identity` and `spec` text. Parity with the folder derivation was completed in S11a2a (see below).
@@ -1106,4 +1107,8 @@ Known limits of `brand run`: `run save` cannot clear a storyboard (the repositor
 3. S11a2b2 advisories folded: `reel-week` stage 7 names `<brand folder>/reels/week-input.json` (overwritten each period) for folder brands and the run for stored ones; the reel skill passes the run's current version to `run save` and stops to ask when several runs match a period; `run list --recipe` is proved against a run of another recipe; Step 1 of the reel skill is a list with the exit codes explained; `VOICE_WORKDIR` comment says it is always required; the git >= 2.31 requirement of `--path-format` is noted; `splitHost` shares one regex.
 4. Content flow. An idea is promoted by its own row (same slug, no copy): `content stage <idea> --stage draft --if-version n`, then `content put <idea> --file <body.md> --if-version n+1` writes the draft body. `--derived-from <parent-slug>` is resolved to the parent's id (unknown slug exits 4) and is fixed at creation; `get` and `list` print the parent's slug and the piece `id`. `put` never creates a piece as `published` (exit 2): it gets there with `content stage ... --stage published --published-at` from `draft`. `--meta <json-file>` sets the opaque `meta` (a JSON object; the notion link, notes or an approval flag live there). Flags a subcommand does not take are a usage error.
 5. Notion for a stored brand. `notion.enabled` and `notion.database_id` are read from the `config` document. A private `database_id` kept in a folder brand's `config.local.yaml` is **not** imported (local files are never imported), so a stored brand carries it in `config` itself or in the owner's environment; `notion-sync` stops and asks when it finds none.
-6. `app/` is not touched: its retirement waits for the owner (S11b2).
+6. `app/` is not touched in S11b: its retirement was decided by the owner on 2026-10-26 (S11b2a/b).
+
+**Decided in S11b2.**
+
+1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`docs/CONTEXTO-HANDOFF.md`, `openspec/changes/**`) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.

@@ -29,8 +29,8 @@ never published.
 
 ## pnpm, not npm
 
-The repo is a pnpm workspace: `app/` and `system/ig-reel/remotion/` are
-members, and one install at the root mounts all three projects. Installing a
+The repo is a pnpm workspace: `system/ig-reel/remotion/`, `core/`, `storage/` and
+`editor/*` are members, and one install at the root mounts all of them. Installing a
 member on its own builds a second, differently-shaped `node_modules` beside
 the one the workspace links, and resolves a tree the lockfile never
 described.
