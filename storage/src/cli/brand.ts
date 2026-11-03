@@ -9,7 +9,7 @@ import { blobStoreFromEnv } from "../blob/index.ts";
 import { NotFoundError, PurgeRefusedError, type BlobStore } from "../contracts/index.ts";
 import { isToolName } from "../revision-policy.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
-import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
+import { CutOverError, importBrand, verifyBrand, WorkspaceFolderError, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { DEFAULT_LEGACY_PREFIX, LEGACY_SOURCE, LegacyBucketError, OUTPUTS_MARKER, withLegacyBucket } from "../import/legacy-bucket.ts";
 import { EXIT, readInputBytes, readInputFile, runVerb, SLUG_FORMAT, VERB_SPECS, VERB_USAGE, hasUnknownSubcommand, writeTarget, type CliResult } from "./verbs.ts";
 import { connect, type Sql } from "../pg/connect.ts";
@@ -28,6 +28,8 @@ const VERBS: Record<string, { values: string[]; flags: string[]; positionals: [n
   backup: { values: [], flags: [], positionals: [1, 1] },
   ...VERB_SPECS,
 };
+/** A `brand workspace` copy is never an import or cutover source. */
+const WORKSPACE_REFUSAL = "La carpeta es un espacio de trabajo generado por brand workspace (workspace.json): es una copia de solo lectura de storage, no una fuente de importación. No se hizo nada.";
 const REMOTE_REFUSAL = "Se rechaza escribir en una base de datos remota sin un simulacro de restauración verificado y reciente.";
 const USAGE = ["Uso:", "  brand import --from <carpeta | legacy-bucket:<marca>> [--dry-run] [--owner-opt-in <slug>]", "  brand cutover <slug> --confirm <slug> [--from <carpeta>] [--partial] [--owner-opt-in <slug>]", "  (una marca que no es de ejemplo requiere la aprobación explícita del dueño)", ...VERB_USAGE];
 
@@ -164,6 +166,16 @@ function profilesRoot(env: NodeJS.ProcessEnv): string {
   if (!configured) return join(REPO_ROOT, "profiles");
   const expanded = expandHome(configured);
   return isAbsolute(expanded) ? expanded : join(REPO_ROOT, expanded);
+}
+
+/** Whether the folder holds a `workspace.json`; a `--from` that is a file (ENOTDIR) holds nothing. */
+function isWorkspace(from: string): boolean {
+  try {
+    return lstatSync(join(from, "workspace.json"), { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return false;
+    throw error;
+  }
 }
 
 /** `lstat`, so a planted or dangling symlink counts as present and is never followed. */
@@ -367,6 +379,8 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     if (basename(from) !== slug) return { lines: ["La carpeta debe llamarse igual que la marca."], exitCode: EXIT.REFUSED };
   }
 
+  // Checked before anything reads or writes the folder (a cut-over brand would otherwise restore its marker inside the copy).
+  if (source.kind === "folder" && isWorkspace(source.from)) return { lines: [WORKSPACE_REFUSAL], exitCode: EXIT.REFUSED };
   // Backup gate (§10): a real write to a remote database needs a recent verified restore drill.
   if (!dryRun && !isLocalDatabase(env.DATABASE_URL)) {
     const gate = await backupGate(repos, env);
@@ -390,6 +404,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
     return { lines: [...noSlash, ...describe(report)], exitCode: report.counts.conflict ? EXIT.CONFLICT : EXIT.OK };
   } catch (error) {
     if (error instanceof LegacyBucketError) return { lines: [error.message], exitCode: error.kind === "empty" ? EXIT.NOT_FOUND : EXIT.REFUSED };
+    if (error instanceof WorkspaceFolderError) return { lines: [WORKSPACE_REFUSAL], exitCode: EXIT.REFUSED };
     if (error instanceof CutOverError) return { lines: [`La marca "${error.slug}" ya fue cortada a storage: no se reimporta desde su carpeta.`], exitCode: EXIT.REFUSED };
     return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
   } finally {

@@ -50,6 +50,8 @@ try {
   for (let i = 0; i < 40; i++) deep = { n: deep };
   await repos.recipes.put(real.id, "nested", { params: deep, schemaVersion: 1 }, meta());
 
+  await repos.tools.put(real.id, "render.mjs", { description: "d", body: "// credit @tool_handle\n" }, meta());
+  await repos.tools.put(real.id, "typed.mjs", { description: "d", body: "/**\n * @param {string} x\n * @returns {void}\n * @typedef {object} Shape\n */\n@dataclass\n@staticmethod\n// @example usage\n * @author someone\n * @version 2\n@functools.wraps(fn)\n  @abstractmethod\n/* @module m */\n# @private\n" }, meta());
   await repos.guidance.put(real.id, "links", { description: "d", body: "Profiles: https://social.test/@url_handle/video/1 and shop.test/@path.handle/post; tags @_lead @1lead, sizes @1080p @2160P." }, meta());
 
   // Handle edge cases: a dot before the at sign does not glue it; an over-long run is no handle; a `url` that is not a host is not a domain.
@@ -57,6 +59,8 @@ try {
   await repos.recipes.put(real.id, "paths", { params: { a: { url: "assets/relative-path" }, b: { url: "./local/place" }, c: { url: "logo.png" }, f: { url: "//cdn.fictional-proto.test/x" }, g: { url: "https://fictional-md.md/a.md" }, d: { url: "free text here" }, e: { url: "plainword" } } , schemaVersion: 1 }, meta());
 
   const terms = await brandTerms(repos);
+  assert.ok(terms.includes("tool_handle"), "a handle written in a stored tool body is watched");
+  assert.ok(!["param", "returns", "typedef", "dataclass", "staticmethod", "example", "author", "version", "functools.wraps", "abstractmethod", "module", "private"].some((t) => terms.includes(t)), "JSDoc tags and decorators in a tool body add no terms");
   assert.ok(terms.includes("after_dot") && terms.includes("b".repeat(30)), "a dot before the at sign, and a 30-character handle, are handles");
   assert.ok(!terms.some((t) => t.startsWith("aaaa")), "a run over 30 characters is not truncated into a term");
   for (const t of ["cdn.fictional-proto.test", "fictional-md.md"]) assert.ok(terms.includes(t), `a protocol-relative or .md-TLD host is kept: ${t}`);

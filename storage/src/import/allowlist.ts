@@ -164,14 +164,10 @@ export function contentRefusal(name: string, bytes: Buffer): Refusal | null {
 // A script holds code, so the loose key-assignment guess would refuse `const apiKey = process.env.X`: only an assignment to a quoted literal counts.
 const SCRIPT_ASSIGNMENT = /(secret|api[_-]?key|password|passwd|token)["']?\s{0,64}[:=]\s{0,64}["'`][^\s"',`]{8}/i;
 
-/** Why a brand script is refused: the text signatures (credential in a URL, `sk-` keys, fixed-prefix tokens) or a secret-named assignment to a string literal. A hit is a proven secret. */
+/** Why a brand script is refused: the text signatures (credential in a URL, `sk-` keys, fixed-prefix tokens) or a secret-named assignment to a string literal. A hit is a proven secret; reading text cannot fail, so there is no "unscanned" outcome. */
 export function scriptRefusal(bytes: Buffer): Refusal | null {
-  try {
-    const text = bytes.toString("utf-8");
-    return CONTENT.some((p) => p.test(text)) || SCRIPT_ASSIGNMENT.test(text) ? { kind: "secret", why: "secret-like: secret pattern in content" } : null;
-  } catch {
-    return { kind: "unknown", why: "suspicious content: could not be scanned" };
-  }
+  const text = bytes.toString("utf-8");
+  return CONTENT.some((p) => p.test(text)) || SCRIPT_ASSIGNMENT.test(text) ? { kind: "secret", why: "secret-like: secret pattern in content" } : null;
 }
 
 function scan(name: string, bytes: Buffer): Refusal | null {
