@@ -62,7 +62,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_recipe" | "brand_asset" | "carousel" | "content_item" | "recipe_run";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_tool" | "brand_recipe" | "brand_asset" | "carousel" | "content_item" | "recipe_run";
 
 export interface Revision {
   brandId?: string;
@@ -126,6 +126,16 @@ export interface GuidanceEnvelope {
 export interface GuidanceRepository {
   list(brandId: string): Promise<Array<{ id: string; name: string; description: string; version: number; updatedAt: string }>>;
   get(brandId: string, name: string): Promise<GuidanceEnvelope>;
+  put(brandId: string, name: string, input: { description: string; body: string }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
+}
+
+/** A brand-owned script. Same envelope as guidance: the body is brand data, run only when the owner asks. */
+export type ToolEnvelope = GuidanceEnvelope;
+
+/** Writes need the owner role. Names are file names with a script extension (`render-cover.mjs`). */
+export interface ToolRepository {
+  list(brandId: string): Promise<Array<{ id: string; name: string; description: string; version: number; updatedAt: string }>>;
+  get(brandId: string, name: string): Promise<ToolEnvelope>;
   put(brandId: string, name: string, input: { description: string; body: string }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 

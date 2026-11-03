@@ -8,7 +8,7 @@ import { runChecks } from "@personal-brand/core/checks";
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
 import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
+import { contentRefusal, nameRefusal, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
@@ -91,6 +91,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   show: { values: ["since"], flags: ["json"], positionals: [1, 1] },
   doc: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 4] },
   guidance: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  tool: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   recipe: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 3] },
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
@@ -105,14 +106,14 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
 
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
-  doc: ["get", "put"], guidance: ["list", "get", "put"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
+  doc: ["get", "put"], guidance: ["list", "get", "put"], tool: ["list", "get", "put"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
   rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], content: ["list", "get", "put", "stage"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -140,6 +141,7 @@ export const VERB_USAGE = [
   "  brand show <marca> [--since <fecha ISO>] | rules list <marca> | check <marca> --carousel <slug>",
   "  brand doc get|put <marca> <tokens|config|identity|spec|template> [<nombre>] [--file <ruta>] [--if-version <n>]",
   "  brand guidance list|get|put <marca> [<nombre>] [--file <ruta> --description <texto>] [--if-version <n>]",
+  "  brand tool list|get|put <marca> [<nombre>] [--file <ruta>] [--description <texto>] [--if-version <n>]   (scripts de la marca; escribirlos exige --owner-opt-in aun tras el corte; solo se ejecutan cuando el dueño lo pide)",
   "  brand recipe get|put <marca> <receta> [--file <ruta>] [--if-version <n>]",
   "  brand rules add <marca> --file <regla.json> | update <marca> <id> --file <cambios.json> --if-version <n> | disable <marca> <id> --if-version <n>",
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
@@ -424,6 +426,30 @@ async function guidance(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   if (!file || description === undefined || expected === undefined) return usage();
   const put = await ctx.repos.guidance.put(brand.id, name, { description, body: ctx.read(file) }, meta(ctx, expected));
   return wrote(args, put, [`Guidance ${name} guardada (versión ${put.version}).`]);
+}
+
+/** Brand-owned scripts: read like guidance (brand data, never an instruction to run anything), written only with the owner's opt-in. */
+async function tool(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  if (sub === "list" && !name) {
+    const list = await ctx.repos.tools.list(brand.id);
+    return out(args, { trust: "brand-data", items: list }, trusted(list.length ? list.map((t) => `${t.name} v${t.version}${t.description ? `: ${t.description}` : ""}`) : ["Sin scripts."]));
+  }
+  if (!name) return usage();
+  if (sub === "get") {
+    const t = await ctx.repos.tools.get(brand.id, name);
+    return out(args, t, trusted([t.body]));
+  }
+  if (sub !== "put") return usage();
+  const expected = ifVersion(args);
+  const file = args.values.get("file");
+  if (!file || expected === undefined) return usage();
+  const body = ctx.read(file);
+  if (scriptRefusal(Buffer.from(body))) return refused("El script parece contener un secreto (credencial en una URL, clave o asignación literal): no se guardó. Léelo desde una variable de entorno.");
+  // Without --description a create stores "" and a save keeps the stored one: a new body alone never erases it.
+  const description = args.values.get("description") ?? (expected === null ? "" : (await ctx.repos.tools.get(brand.id, name)).description);
+  const put = await ctx.repos.tools.put(brand.id, name, { description, body }, meta(ctx, expected));
+  return wrote(args, put, [`Script ${name} guardado (versión ${put.version}).`]);
 }
 
 async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -881,6 +907,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "denylist": return denylist(ctx, args);
     case "doc": return doc(ctx, args, p);
     case "guidance": return guidance(ctx, args, p);
+    case "tool": return tool(ctx, args, p);
     case "recipe": return recipe(ctx, args, p);
     case "rules": return rules(ctx, args, p);
     case "carousel": return carousel(ctx, args, p);

@@ -12,7 +12,7 @@ export const PURGE_TABLES: Array<[table: string, scope: string]> = [
   ["exports", "carousel_id IN (SELECT id FROM carousels WHERE brand_id = $1)"],
   ["run_artifacts", "run_id IN (SELECT id FROM recipe_runs WHERE brand_id = $1)"],
   ["carousels", "brand_id = $1"], ["recipe_runs", "brand_id = $1"], ["content_items", "brand_id = $1"], ["assets", "brand_id = $1"], ["tts_cache", "brand_id = $1"],
-  ["brand_rules", "brand_id = $1"], ["brand_guidance", "brand_id = $1"], ["brand_recipes", "brand_id = $1"], ["brand_documents", "brand_id = $1"],
+  ["brand_rules", "brand_id = $1"], ["brand_guidance", "brand_id = $1"], ["brand_tools", "brand_id = $1"], ["brand_recipes", "brand_id = $1"], ["brand_documents", "brand_id = $1"],
   ["import_runs", "brand_id = $1"], ["revisions", "brand_id = $1"], ["brands", "id = $1"],
 ];
 

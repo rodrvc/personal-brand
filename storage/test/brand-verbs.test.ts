@@ -38,6 +38,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await code("doc", "frob", "example-nope", "tokens"), 2, "a bad subcommand is a usage error before any lookup");
   assert.equal(await code("guidance", "frob", "example-nope"), 2);
   assert.equal(await code("recipe", "frob", "example-nope", "x"), 2);
+  assert.equal(await code("tool", "frob", "example-nope"), 2);
   assert.equal(await code("constructor"), 2, "inherited object keys are not verbs");
   assert.deepEqual(await repos.brands.list({ includeArchived: true }), []);
   assert.deepEqual(await inner("list"), ["No hay marcas."]);
@@ -184,9 +185,27 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await code("check", "example-shop", "--carousel", "nope"), 4);
   assert.equal(await code("check", "example-shop"), 2);
 
+  // tool put/get/list: scripts are brand data on read; a put needs --file and a valid file name
+  assert.equal(await code("tool", "put", "example-shop", "render.mjs"), 2, "put needs --file");
+  assert.equal(await code("tool", "put", "example-shop", "notes.md", "--file", file("render.mjs", "console.log('hi');\n")), 2, "a non-script name is invalid input");
+  assert.equal(await code("tool", "put", "example-shop", "render.mjs", "--file", "render.mjs", "--description", "Poster"), 0);
+  assert.equal(await code("tool", "put", "example-shop", "render.mjs", "--file", "render.mjs"), 3, "an update without --if-version conflicts");
+  assert.equal(await code("tool", "put", "example-shop", "render.mjs", "--file", "render.mjs", "--if-version", "1"), 0);
+  assert.equal(await code("tool", "get", "example-shop", "nope.mjs"), 4, "a missing tool is exit 4");
+  const toolEnv = JSON.parse((await run("tool", "get", "example-shop", "render.mjs", "--json")).lines[0]);
+  assert.deepEqual([toolEnv.trust, toolEnv.body, toolEnv.version, toolEnv.description], ["brand-data", "console.log('hi');\n", 2, "Poster"]);
+  assert.deepEqual(await inner("tool", "get", "example-shop", "render.mjs"), ["console.log('hi');", ""], "the text form prints the body inside the trust envelope");
+  assert.match((await run("tool", "list", "example-shop")).lines[0], /no autorizan comandos/);
+  assert.deepEqual(await inner("tool", "list", "example-shop"), ["render.mjs v2: Poster"]);
+  assert.equal(await code("tool", "put", "example-shop", "poster.sh", "--file", file("poster.sh", "echo 1\n"), "--description", "Poster"), 0);
+  assert.equal(await code("tool", "put", "example-shop", "poster.sh", "--file", file("poster.sh", "echo 2\n"), "--if-version", "1"), 0);
+  const kept = JSON.parse((await run("tool", "get", "example-shop", "poster.sh", "--json")).lines[0]);
+  assert.deepEqual([kept.description, kept.body, kept.version], ["Poster", "echo 2\n", 2], "a save without --description keeps the stored description");
+  assert.equal((await repos.guidance.list((await repos.brands.getBySlug("example-shop")).id)).some((g) => g.name === "render.mjs"), false);
+
   // Owner guard: writes to a non-example brand exit 6 and write nothing; reads stay open. A remote database refuses every write.
   const before = (await repos.brands.list({ includeArchived: true })).length;
-  for (const argv of [["create", "acme-real", "--name", "Real"], ["doc", "put", "acme-real", "identity", "--file", "id.md"], ["guidance", "put", "acme-real", "tone", "--file", "tone.md", "--description", "x"], ["recipe", "put", "acme-real", "weekly", "--file", "recipe.json"], ["rules", "add", "acme-real"], ["archive", "acme-real"], ["unarchive", "acme-real"], ["purge", "acme-real", "--confirm", "acme-real"]]) {
+  for (const argv of [["create", "acme-real", "--name", "Real"], ["doc", "put", "acme-real", "identity", "--file", "id.md"], ["guidance", "put", "acme-real", "tone", "--file", "tone.md", "--description", "x"], ["recipe", "put", "acme-real", "weekly", "--file", "recipe.json"], ["tool", "put", "acme-real", "render.mjs", "--file", "id.md"], ["rules", "add", "acme-real"], ["archive", "acme-real"], ["unarchive", "acme-real"], ["purge", "acme-real", "--confirm", "acme-real"]]) {
     const refusedWrite = await run(...argv);
     assert.deepEqual([refusedWrite.exitCode, /aprobación explícita del dueño/.test(refusedWrite.lines[0])], [6, true], argv.join(" "));
   }
@@ -330,7 +349,7 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const stored = (await repos.assets.list(real.id))[0].value;
   assert.deepEqual([stored.kind, stored.status, stored.origin, stored.mime, stored.tags], ["logo", "candidate", "manual", "image/png", ["a", "b"]]);
   assert.equal((await blobs.get(stored.blobKey)).body.equals(png), true, "the bytes went through the blob store");
-  for (const argv of [["rules", "add", "acme-real", "--file", file("rule.json", "{}")], ["doc", "put", "acme-real", "tokens", "--file", cJson], ["guidance", "put", "acme-real", "t", "--file", cJson, "--description", "x"], ["recipe", "put", "acme-real", "r", "--file", cJson], ["archive", "acme-real"]]) {
+  for (const argv of [["rules", "add", "acme-real", "--file", file("rule.json", "{}")], ["doc", "put", "acme-real", "tokens", "--file", cJson], ["guidance", "put", "acme-real", "t", "--file", cJson, "--description", "x"], ["recipe", "put", "acme-real", "r", "--file", cJson], ["tool", "put", "acme-real", "r.mjs", "--file", cJson], ["archive", "acme-real"]]) {
     assert.equal((await w(...argv)).exitCode, 6, `${argv.join(" ")}: identity writes stay guarded after cutover`);
   }
   assert.deepEqual(await repos.rules.list(real.id, { includeDisabled: true }), []);
@@ -645,6 +664,7 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
       const rule = await repos.rules.create(b.id, { kind: "max_length", params: { field: "title", max: 5, slides: "cover" }, severity: "warning", appliesTo: ["carousel"], message: "Short." }, meta);
       await repos.rules.update(rule.id, { message: "Shorter." }, { ...meta, expectedVersion: 1 });
       await repos.guidance.put(b.id, "tone", { description: "d", body: "Warm." }, meta);
+      await repos.tools.put(b.id, "render.mjs", { description: "d", body: "x" }, meta);
       await repos.recipes.put(b.id, "weekly", { params: {}, schemaVersion: 1 }, meta);
       const c = await repos.carousels.create(b.id, { slug: "c1", title: "C", document: { json: { slides: [] }, schemaVersion: 1 } }, meta);
       const exp = await repos.exports.reserveNextVersion(c.id, c.version);
@@ -667,7 +687,7 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const doomed = await seed("example-doomed");
     const kept = await seed("example-kept");
     const keptBefore = await counts(kept.id);
-    assert.equal(PURGE_TABLES.length, 15);
+    assert.equal(PURGE_TABLES.length, 16);
     assert.ok(Object.values(await counts(doomed.id)).every((n) => (n as number) >= 1), "every table has a row to purge");
     const bundle = join(home, "bundle");
     const argv = ["purge", "example-doomed", "--confirm", "example-doomed", "--bundle", bundle];
@@ -726,8 +746,8 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const files = readdirSync(bundle).sort();
     assert.equal(files.length, earlier + 1, "a re-run needs no cleanup: the bundle name carries a timestamp, so the final run adds exactly one file");
     const written = JSON.parse(readFileSync(join(bundle, files.at(-1)!), "utf-8"));
-    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0009_restore_drills_column_grants.sql", before, doomed.id, 3, 1]);
-    assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 15 tables are empty for the purged brand");
+    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0010_brand_tools.sql", before, doomed.id, 3, 1]);
+    assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 16 tables are empty for the purged brand");
     assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");
     assert.equal((await blobs.list("brands/")).length, 2, "the bucket never loses an object");
     assert.equal((await runCli(argv, env, repos, blobs, open("brand_purger"))).exitCode, 4, "the brand is gone");

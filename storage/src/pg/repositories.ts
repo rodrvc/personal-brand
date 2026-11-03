@@ -32,6 +32,7 @@ import {
   type BrandRule,
   type BrandRuleRepository,
   type GuidanceRepository,
+  type ToolRepository,
   type RecipeRepository,
   type RuleInput,
   type Versioned,
@@ -40,7 +41,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -52,6 +53,7 @@ export interface PgRepositories {
   revisions: RevisionRepository;
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
+  tools: ToolRepository;
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
@@ -321,7 +323,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
 
   /** Insert-or-update of one row keyed by (brand, key), with the same version semantics as documents. */
   async function putKeyed(
-    table: "brand_guidance" | "brand_recipes",
+    table: "brand_guidance" | "brand_tools" | "brand_recipes",
     keyColumn: "name" | "recipe",
     entityType: string,
     brandId: string,
@@ -330,7 +332,8 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     revision: { body: unknown; bodyText: string | null },
     meta: WriteMeta,
   ) {
-    assertSlug(key, keyColumn);
+    if (table === "brand_tools") assertToolName(key);
+    else assertSlug(key, keyColumn);
     if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
     return sql.begin(async (tx) => {
       const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
@@ -365,6 +368,24 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     async put(brandId, name, input, meta) {
       assertGuidance(input);
       return putKeyed("brand_guidance", "name", "brand_guidance", brandId, name, { description: input.description, body_md: input.body },
+        { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const tools: ToolRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT id, name, description, version, updated_at FROM brand_tools WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async get(brandId, name) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_tools WHERE brand_id = ${brandId} AND name = ${name}` : [];
+      if (!r) throw new NotFoundError(`tool ${name}`);
+      return { trust: "brand-data", id: r.id, name: r.name, description: r.description, body: r.body, version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, name, input, meta) {
+      assertTool(name, input);
+      return putKeyed("brand_tools", "name", "brand_tool", brandId, name, { description: input.description, body: input.body },
         { body: { description: input.description }, bodyText: input.body }, meta);
     },
   };
@@ -814,5 +835,5 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
+  return { brands, documents, revisions, rules, guidance, tools, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }
