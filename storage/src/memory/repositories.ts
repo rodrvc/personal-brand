@@ -32,6 +32,7 @@ import {
   type BrandRule,
   type BrandRuleRepository,
   type GuidanceRepository,
+  type ToolRepository,
   type RecipeRepository,
   type RuleInput,
   type DocumentKind,
@@ -42,7 +43,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -50,6 +51,7 @@ export interface MemoryRepositories {
   revisions: RevisionRepository;
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
+  tools: ToolRepository;
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
@@ -233,18 +235,19 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
 
   /** Keyed rows (guidance by name, recipes by recipe) share the document version semantics. */
   interface KeyedRow { id: string; brandId: string; key: string; data: Record<string, unknown>; version: number; updatedAt: string }
-  const keyed = { brand_guidance: new Map<string, KeyedRow>(), brand_recipes: new Map<string, KeyedRow>() };
+  const keyed = { brand_guidance: new Map<string, KeyedRow>(), brand_tools: new Map<string, KeyedRow>(), brand_recipes: new Map<string, KeyedRow>() };
   const findKeyed = (table: keyof typeof keyed, brandId: string, key: string) => [...keyed[table].values()].find((r) => r.brandId === brandId && r.key === key);
 
   function putKeyed(table: keyof typeof keyed, what: string, brandId: string, key: string, data: Record<string, unknown>, revision: { body: unknown; bodyText: string | null }, meta: WriteMeta) {
-    assertSlug(key, what);
+    if (table === "brand_tools") assertToolName(key);
+    else assertSlug(key, what);
     if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
     const cur = findKeyed(table, brandId, key);
     if (cur && meta.expectedVersion === null) throw new AlreadyExistsError(`${table} ${key}`, cur.version);
     if (meta.expectedVersion !== (cur?.version ?? null)) throw new VersionConflictError(cur?.version ?? null);
     const row: KeyedRow = { id: cur?.id ?? randomUUID(), brandId, key, data: structuredClone(data), version: (cur?.version ?? 0) + 1, updatedAt: now().toISOString() };
     keyed[table].set(row.id, row);
-    record({ brandId, entityType: table === "brand_guidance" ? "brand_guidance" : "brand_recipe", entityId: row.id, version: row.version, ...structuredClone(revision) }, meta);
+    record({ brandId, entityType: { brand_guidance: "brand_guidance", brand_tools: "brand_tool", brand_recipes: "brand_recipe" }[table] as RevisionEntity, entityId: row.id, version: row.version, ...structuredClone(revision) }, meta);
     return { id: row.id, version: row.version, updatedAt: row.updatedAt };
   }
 
@@ -261,6 +264,22 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     async put(brandId, name, input, meta) {
       assertGuidance(input);
       return putKeyed("brand_guidance", "name", brandId, name, input, { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const tools: ToolRepository = {
+    async list(brandId) {
+      return [...keyed.brand_tools.values()].filter((r) => r.brandId === brandId).sort((a, b) => cmp(a.key, b.key))
+        .map((r) => ({ id: r.id, name: r.key, description: r.data.description as string, version: r.version, updatedAt: r.updatedAt }));
+    },
+    async get(brandId, name) {
+      const r = findKeyed("brand_tools", brandId, name);
+      if (!r) throw new NotFoundError(`tool ${name}`);
+      return { trust: "brand-data", id: r.id, name, description: r.data.description as string, body: r.data.body as string, version: r.version, updatedAt: r.updatedAt };
+    },
+    async put(brandId, name, input, meta) {
+      assertTool(name, input);
+      return putKeyed("brand_tools", "name", brandId, name, input, { body: { description: input.description }, bodyText: input.body }, meta);
     },
   };
 
@@ -667,5 +686,5 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
+  return { brands: brandRepo, documents, revisions, rules, guidance, tools, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }

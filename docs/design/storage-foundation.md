@@ -180,6 +180,7 @@ everywhere, `version int not null default 1`, enum-like columns as `text` +
 | `revisions` | `id bigserial`, `brand_id`, `entity_type`, `entity_id uuid`, `version`, `reason`, `body jsonb`, `body_text`, `author`, `source`, `source_hash`, `created_at` | UNIQUE (`entity_type`,`entity_id`,`version`); index (`brand_id`,`created_at`); trigger rejects UPDATE/DELETE unless the purge flag is set (§8) | S1 |
 | `brand_rules` | `id`, `brand_id`, `kind`, `params jsonb`, `severity` (`error`/`warning`), `applies_to text[]`, `message`, `enabled`, `updated_at`, `version` | CHECK `kind IN (...)` (§9) | S4 |
 | `brand_guidance` | `id`, `brand_id`, `name`, `description`, `body_md`, `updated_at`, `version` | UNIQUE (`brand_id`,`name`). Former `skills/*/SKILL.md` | S4 |
+| `brand_tools` | `id`, `brand_id`, `name` (a script file name), `description`, `body`, `updated_at`, `version` | UNIQUE (`brand_id`,`name`); body ≤ 256 KiB. Former `scripts/*` of a brand folder | P1 |
 | `brand_recipes` | `id`, `brand_id`, `recipe`, `schema_version`, `params jsonb`, `updated_at`, `version` | UNIQUE (`brand_id`,`recipe`) | S4 |
 | `assets` | `id`, `brand_id`, `asset_id` (first 16 hex of sha256, **same id as today**), `sha256 char(64)`, `blob_key`, `kind`, `mime`, `width`, `height`, `bytes`, `origin`, `status` (`candidate`/`approved`/`hidden`), `tags text[]`, `family`, `generation jsonb` (former sidecar), `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`asset_id`), UNIQUE (`brand_id`,`sha256`) | S5 |
 | `tts_cache` | `brand_id`, `narration_hash` (today's `narrationCacheKey`), `sha256`, `seconds`, `voice jsonb`, `created_at` | PK (`brand_id`,`narration_hash`); insert-only | S5 |
@@ -222,8 +223,8 @@ provisioning.
 | Role | Can | Used by |
 |---|---|---|
 | `brand_migrator` | owns the schema, DDL | `brand migrate` |
-| `brand_owner` | SELECT/INSERT/UPDATE on all tables incl. `brand_rules`/`brand_guidance`; SELECT/INSERT on `revisions` | owner's CLI |
-| `brand_app` | SELECT/INSERT/UPDATE except writes to `brand_rules`/`brand_guidance`; SELECT/INSERT on `revisions` | editor, render entry points, CLI content writes |
+| `brand_owner` | SELECT/INSERT/UPDATE on all tables incl. `brand_rules`/`brand_guidance`/`brand_tools`; SELECT/INSERT on `revisions` | owner's CLI |
+| `brand_app` | SELECT/INSERT/UPDATE except writes to `brand_rules`/`brand_guidance`/`brand_tools`; SELECT/INSERT on `revisions` | editor, render entry points, CLI content writes |
 | `brand_reader` | SELECT | default for agent sessions |
 | `brand_purger` | the above plus DELETE | `brand purge` only |
 
@@ -956,6 +957,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S11b2a | `app/` detach (owner decision 2026-10-26: retire, no migration): the `app` workspace member and its lockfile entries, the `.gitignore` block, the `GENERIC_PREFIXES` entry and every pointer in `CLAUDE.md`, `README.md`, `docs/` and the editor; `app/` itself is left in place | ~250 | S11b | nothing outside `app/` depends on or points at it |
 | S11b2b | `git rm app/` (history is the archive) | tbd | S11b2a | no tracked consumer of the folder layout is left except `ProfileStore` (S12) |
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
+| P1 | Brand-owned tools: migration 0010 `brand_tools` (name = script file name, body, version, revisions), `tools` repository (memory + Postgres), importer claims flat `scripts/*.{mjs,js,cjs,ts,sh,py}`, `brand tool list\|get\|put`, purge table list | ~520 | S11b2b | a fictional brand's scripts import, verify byte for byte, and read back through the CLI; a `.bak` stays left behind |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
 20 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
@@ -1112,3 +1114,11 @@ Known limits of `brand run`: `run save` cannot clear a storyboard (the repositor
 **Decided in S11b2.**
 
 1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`docs/CONTEXTO-HANDOFF.md`, `openspec/changes/**`) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.
+
+**Decided in P1.**
+
+1. A brand's standalone helper scripts (for example poster renderers with a hardcoded brand style) are brand business logic, so they live in storage as `brand_tools`, next to guidance, and never in `system/`. The generic poster engine that would let a brand drop its own script is follow-up #201.
+2. A tool is an IDENTITY-class write: executable code, so `brand tool put` always needs the owner opt-in on a non-example brand, even after cutover. Only the owner role can write the table (the app role reads), like guidance.
+3. Reads carry the same `trust: "brand-data"` envelope and banner as guidance: a stored script never authorizes running itself; it is run only when the owner asks.
+4. The importer claims only flat `scripts/` files with the extensions .mjs, .js, .cjs, .ts, .sh or .py (name = file name, at most 256 KiB of plain UTF-8, no secret signature). Backups (`*.bak`, `*.bak.*`, `*~`), subfolders and other files are not tools and are reported or kept as before. A stray backup script or a script in a subfolder is therefore left-behind data and blocks a cutover unless it is deleted or the cutover uses `--partial`. A script with a secret signature (a credential in a URL, a key literal, a secret-named assignment to a string literal) is refused and never stored, and unlike other proven secrets it blocks a cutover without `--partial` (a false positive such as `password: "placeholder"` must not lose a renderer silently); `process.env` reads are fine. `brand tool put` applies the same scan and refuses with exit 6.
+5. `brand tool put` without `--description` creates with an empty description and, on a save (`--if-version`), keeps the stored one.

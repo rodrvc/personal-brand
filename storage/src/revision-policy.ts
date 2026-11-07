@@ -59,6 +59,24 @@ export function assertGuidance(input: { description: string; body: string }): vo
   if (Buffer.byteLength(input.body) > MAX_GUIDANCE_BYTES) throw new InvalidInputError(`guidance body exceeds ${MAX_GUIDANCE_BYTES} bytes`);
 }
 
+export const MAX_TOOL_BYTES = 256 * 1024;
+/** What a brand tool may be: a standalone script a runtime executes on the owner's request. */
+export const TOOL_EXTENSIONS = ["mjs", "js", "cjs", "ts", "sh", "py"];
+/** A flat file name with a script extension; backups (`*.bak`, `*.bak.*`, `*~`) and dotfiles are not tools. Mirrors the `brand_tools.name` CHECK. */
+export const isToolName = (name: string): boolean =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) && TOOL_EXTENSIONS.includes(name.split(".").pop()!) && !/\.bak(\.|$)/i.test(name);
+
+export function assertToolName(name: string): void {
+  if (!isToolName(name)) throw new InvalidInputError(`invalid tool name "${name}" (a file name ending in ${TOOL_EXTENSIONS.map((e) => `.${e}`).join(", ")})`);
+}
+
+export function assertTool(name: string, input: { description: string; body: string }): void {
+  assertToolName(name);
+  if (typeof input.description !== "string" || typeof input.body !== "string") throw new InvalidInputError("description and body must be strings");
+  if (input.body.includes("\0")) throw new InvalidInputError("tool body must be text (it holds a NUL byte)");
+  if (Buffer.byteLength(input.body) > MAX_TOOL_BYTES) throw new InvalidInputError(`tool body exceeds ${MAX_TOOL_BYTES} bytes`);
+}
+
 const ASSET_KINDS = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
 const ASSET_ORIGINS = ["manual", "ai", "reference"];
 const ASSET_STATUSES = ["candidate", "approved", "hidden"];

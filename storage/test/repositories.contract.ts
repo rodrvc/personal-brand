@@ -181,6 +181,27 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.equal((revs[2].body as { enabled: boolean }).enabled, false);
     },
 
+    async "tools: file names, trust envelope, versions, size, revisions"(r, _clock, h) {
+      const o = h.owner.tools;
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const put = await o.put(a.id, "render-cover.mjs", { description: "Cover", body: "console.log(1);\n" }, meta());
+      assert.deepEqual(await r.tools.get(a.id, "render-cover.mjs"), { trust: "brand-data", id: put.id, name: "render-cover.mjs", description: "Cover", body: "console.log(1);\n", version: 1, updatedAt: put.updatedAt });
+      await o.put(a.id, "build.sh", { description: "", body: "echo" }, meta());
+      assert.deepEqual((await r.tools.list(a.id)).map((x) => x.name), ["build.sh", "render-cover.mjs"]);
+      assert.deepEqual(await r.guidance.list(a.id), [], "tools do not leak into guidance");
+      await assert.rejects(() => o.put(a.id, "build.sh", { description: "", body: "x" }, meta()), (e) => e instanceof AlreadyExistsError && e.currentVersion === 1);
+      await assert.rejects(() => o.put(a.id, "build.sh", { description: "", body: "x" }, meta({ expectedVersion: 5 })), (e) => e instanceof VersionConflictError && e.currentVersion === 1);
+      for (const bad of ["notes.md", "a/b.mjs", "../x.mjs", ".hidden.mjs", "old.bak.mjs", "x.mjs.bak", "x.mjs~", "noext"]) await assert.rejects(() => o.put(a.id, bad, { description: "", body: "x" }, meta()), InvalidInputError, bad);
+      await assert.rejects(() => o.put(a.id, "nul.py", { description: "", body: "a\0b" }, meta()), InvalidInputError);
+      await assert.rejects(() => o.put("00000000-0000-4000-8000-000000000000", "x.js", { description: "", body: "x" }, meta()), NotFoundError);
+      await assert.rejects(() => r.tools.get(a.id, "nope.js"), NotFoundError);
+      await assert.rejects(() => o.put(a.id, "big.js", { description: "", body: "x".repeat(256 * 1024 + 1) }, meta()), InvalidInputError);
+      await o.put(a.id, "big.js", { description: "", body: "x".repeat(256 * 1024) }, meta());
+      assert.equal((await o.put(a.id, "build.sh", { description: "v2", body: "echo 2" }, meta({ expectedVersion: 1 }))).version, 2);
+      const revs = await r.revisions.list("brand_tool", (await r.tools.get(a.id, "build.sh")).id);
+      assert.deepEqual(revs.map((x) => [x.version, x.bodyText]), [[1, "echo"], [2, "echo 2"]]);
+    },
+
     async "guidance: trust envelope, versions, names, revisions"(r, _clock, h) {
       const o = h.owner.guidance;
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
@@ -668,12 +689,13 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => h.owner.importRuns.record({ ...run(3), brandId: "00000000-0000-4000-8000-000000000000" }), NotFoundError);
     },
 
-    async "least privilege: the app role cannot write rules, guidance or import runs"(r, _clock, h) {
+    async "least privilege: the app role cannot write rules, guidance, tools or import runs"(r, _clock, h) {
       if (!h.restricted) return;
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
       const rule: RuleInput = { kind: "slide_count", params: { max: 5 }, severity: "error", appliesTo: ["carousel"], message: "m" };
       await assert.rejects(() => r.rules.create(a.id, rule, meta()), /permission denied/);
       await assert.rejects(() => r.guidance.put(a.id, "x", { description: "", body: "b" }, meta()), /permission denied/);
+      await assert.rejects(() => r.tools.put(a.id, "x.mjs", { description: "", body: "b" }, meta()), /permission denied/);
       for (const statement of ["UPDATE import_runs SET report = '{}'", "DELETE FROM import_runs"]) {
         await assert.rejects(() => h.rawSql!.unsafe(statement), /permission denied/, `app role: ${statement}`);
       }

@@ -11,6 +11,8 @@ import { collectAssets } from "./assets.ts";
 import { planLegacy, type LegacyFile } from "./legacy.ts";
 import { OUTPUTS_LABEL, resolveOutputs } from "./outputs.ts";
 import { collectRuns } from "./runs.ts";
+import { isToolName, MAX_TOOL_BYTES } from "../revision-policy.ts";
+import { scriptRefusal } from "./allowlist.ts";
 import { putBlob } from "../blob/put-blob.ts";
 import { canon, found, readRegular, rereadChecked, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
@@ -149,6 +151,43 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       write: (id, expectedVersion, meta) => repos.guidance.put(id, name, payload, { ...meta, expectedVersion }),
     });
   }
+  // Brand-owned scripts: flat files of `scripts/` with a script extension. Backups, subfolders, oversized or non-UTF-8 files are
+  // left unclaimed, so the legacy pass reports them as before (a refused one under its own class).
+  const scriptsDir = join(dir, "scripts");
+  const toolEntries: Array<{ name: string; raw: Buffer }> = [];
+  const refusedScripts: string[] = []; // proven secrets: reported as refused, never read into storage, never left as unclaimed data
+  const unscannedScripts: string[] = []; // could not be scanned: a guess, left-behind data like any unknown file
+  const claimed = new Set<string>();
+  for (const name of existsSync(scriptsDir) ? readdirSync(scriptsDir).sort() : []) {
+    if (!isToolName(name)) continue;
+    const raw = readRegular(root, join(scriptsDir, name), `scripts/${name}`, skipped);
+    if (!raw) continue;
+    // A script is judged by its content, not its name: a secret-looking name alone does not refuse it.
+    const why = scriptRefusal(raw);
+    if (why) {
+      (why.kind === "secret" ? refusedScripts : unscannedScripts).push(`scripts/${name} (${why.why})`);
+      claimed.add(name);
+      continue;
+    }
+    const body = raw.toString("utf-8");
+    if (raw.length > MAX_TOOL_BYTES || raw.includes(0) || !Buffer.from(body).equals(raw)) {
+      skipped.push(`scripts/${name} (over ${MAX_TOOL_BYTES} bytes or not plain UTF-8 text)`);
+      continue;
+    }
+    toolEntries.push({ name, raw });
+    claimed.add(name);
+    const payload = { description: "", body };
+    items.push({
+      key: `tool:${name}`, entityType: "brand_tool", hash: sha256(raw), payload,
+      read: async (id) => {
+        const t = await found(repos.tools.get(id, name));
+        return t && { id: t.id, version: t.version, value: { description: t.description, body: t.body } };
+      },
+      write: (id, expectedVersion, meta) => repos.tools.put(id, name, payload, { ...meta, expectedVersion }),
+    });
+  }
+  // Nothing else in the folder: it is fully imported, not "left behind".
+  if (claimed.size && claimed.size === readdirSync(scriptsDir).length) handled.add("scripts");
   const recipesDir = join(dir, "recipes");
   for (const file of existsSync(recipesDir) ? readdirSync(recipesDir).sort() : []) {
     handled.add("recipes");
@@ -171,10 +210,10 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   }
   const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices, quietMissingOutputs);
   if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
-  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set<string>(), skipped, notices, handled, now };
+  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set([...claimed].map((n) => join(root, "scripts", n))), skipped, notices, handled, now };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
-  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: left.refused, unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: [...left.unimported, ...unscannedScripts].sort(), proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
 }
 
 /**
@@ -193,7 +232,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
 }
 
 /**
- * Imports documents, templates, guidance, recipes, content, carousels, assets (blobs) and recipe runs of a brand folder (slug = folder name). Idempotent per item via the
+ * Imports documents, templates, guidance, tools (`scripts/*`), recipes, content, carousels, assets (blobs) and recipe runs of a brand folder (slug = folder name). Idempotent per item via the
  * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
  * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
  */

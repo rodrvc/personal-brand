@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { blobStoreFromEnv } from "../blob/index.ts";
 import { NotFoundError, PurgeRefusedError, type BlobStore } from "../contracts/index.ts";
+import { isToolName } from "../revision-policy.ts";
 import { BY_DESIGN, entryPath, isKept } from "../import/legacy.ts";
 import { CutOverError, importBrand, verifyBrand, type ImportReport, type ImportRepos } from "../import/importer.ts";
 import { DEFAULT_LEGACY_PREFIX, LEGACY_SOURCE, LegacyBucketError, OUTPUTS_MARKER, withLegacyBucket } from "../import/legacy-bucket.ts";
@@ -187,9 +188,12 @@ function markerNames(path: string, brandId: string): boolean {
 
 /**
  * Data a cutover would strand: everything not imported, skipped or refused on a guess (unknown type, suspicious name),
- * minus what is never imported by design, kept as a legacy blob, or proven secret (`refused`: deliberate, never blocks).
+ * minus what is never imported by design, kept as a legacy blob, or proven secret (`refused`: deliberate, never blocks, except a refused brand script).
  */
-const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped.filter((e) => !accountedFor(r, entryPath(e))), ...r.unimported];
+const leftBehind = (r: ImportReport) => [...r.notImported.filter((f) => !BY_DESIGN.test(f)), ...r.skipped.filter((e) => !accountedFor(r, entryPath(e))), ...r.unimported, ...r.refused.filter(refusedScript)];
+
+/** A refused brand script (a secret-looking renderer) is code the cutover would strand, so unlike other proven secrets it blocks: a false positive must not lose it silently. */
+const refusedScript = (e: string) => /^scripts\/[^/]+$/.test(entryPath(e)) && isToolName(basename(entryPath(e)));
 
 /**
  * A skipped entry whose files the legacy pass kept, or refused as proven secrets (itself or inside it), is not stranded data:

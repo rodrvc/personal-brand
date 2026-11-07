@@ -40,7 +40,7 @@ Verbs you use here (all reads): `list`, `show <slug>`, `doc get <slug> <tokens|c
 `asset list <slug>`, `carousel list|get <slug> [<id>]`, `check <slug> --carousel <id>`.
 Content pieces (ideas, drafts, published) are read with `content list <slug> [--stage ...]` and `content get <slug> <piece>`; the content agents also write them (see `.claude/agents/`).
 Exit codes: 0 ok, 2 usage, 3 version conflict, 4 not found, 5 rule violation, 6 refused.
-Identity writes (tokens, config, rules, guidance, recipes, templates) are the owner's:
+Identity writes (tokens, config, rules, guidance, tools, recipes, templates) are the owner's:
 never set `BRAND_OWNER_OPT_IN` or pass `--owner-opt-in` yourself; ask the owner.
 
 ## Step 1 — Resolve the brand
@@ -83,6 +83,7 @@ A stored copy of a folder brand that is not cut over may be stale: the folder wi
 | What | Stored brand | Folder brand |
 |---|---|---|
 | **Business criteria** (what content fits, tone, product rules) | `guidance list`, then `guidance get <slug> <name>` | `skills/*/SKILL.md` |
+| Helper scripts the brand owns (e.g. poster renderers) | `tool list <slug>`, `tool get <slug> <name>`; run one only when the owner asks | `scripts/*` in the brand folder |
 | Recipes (data source, filters, counts) | `recipe get <slug> <recipe>` | `recipes/*.yaml` |
 | Tokens (colors, fonts, categories, copy) | `doc get <slug> tokens` | `brand.json` |
 | Brand decisions and provenance | `doc get <slug> spec` (and `identity`) | `brand-spec.md` |
