@@ -84,6 +84,7 @@ A stored copy of a folder brand that is not cut over may be stale: the folder wi
 |---|---|---|
 | **Business criteria** (what content fits, tone, product rules) | `guidance list`, then `guidance get <slug> <name>` | `skills/*/SKILL.md` |
 | Helper scripts the brand owns (e.g. poster renderers) | `tool list <slug>`, `tool get <slug> <name>`; run one only when the owner asks | `scripts/*` in the brand folder |
+| A folder to run the brand's own scripts from | `workspace <slug> --out <dir outside the repo>`: a read-only copy of tokens, scripts, guidance, assets and `fonts.css`; write outputs elsewhere and never import it back | the brand folder itself |
 | Recipes (data source, filters, counts) | `recipe get <slug> <recipe>` | `recipes/*.yaml` |
 | Tokens (colors, fonts, categories, copy) | `doc get <slug> tokens` | `brand.json` |
 | Brand decisions and provenance | `doc get <slug> spec` (and `identity`) | `brand-spec.md` |

@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync, type Stats } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { runChecks } from "@personal-brand/core/checks";
+import { stringify as stringifyYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
@@ -11,6 +13,7 @@ import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFou
 import { contentRefusal, nameRefusal, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
+import { found } from "../import/shared.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
 import { brandTerms } from "./denylist.ts";
 import { downloadFonts, FontPolicyError, MAX_FAMILY_CHARS, type FontFile } from "./fonts.ts";
@@ -19,6 +22,13 @@ import { toCheckRules } from "../revision-policy.ts";
 export interface CliResult {
   lines: string[];
   exitCode: number;
+}
+/** The bytes stored for an asset do not hash to the sha256 its row records. */
+class StoredBytesError extends Error {
+  constructor(readonly assetId: string) {
+    super(`the stored bytes of asset ${assetId} do not match its hash`);
+    this.name = "StoredBytesError";
+  }
 }
 interface Parsed {
   positionals: string[];
@@ -99,6 +109,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
+  workspace: { values: ["out"], flags: ["json"], positionals: [1, 1] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
   denylist: { values: [], flags: ["json", "write"], positionals: [0, 0] },
   run: { values: ["period-start", "period-end", "input", "storyboard", "recipe", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
@@ -113,7 +124,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"] };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"], workspace: "*" };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -154,6 +165,7 @@ export const VERB_USAGE = [
   "  brand run list <marca> [--recipe <receta>] | get <marca> <id> | create <marca> <receta> --period-start <AAAA-MM-DD> --period-end <AAAA-MM-DD> --input <ruta> [--storyboard <ruta>]",
   "  brand run save <marca> <id> --if-version <n> [--input <ruta>] [--storyboard <ruta>]   (el id de la corrida es el que recibe el render con --run)",
   "  brand export pull <marca> <carrusel> --out <carpeta fuera del repo> [--version <n>]",
+  "  brand workspace <marca> --out <carpeta fuera del repo>   (copia de solo lectura de la marca desde storage con la forma de carpeta que esperan sus scripts; nunca es fuente de importación)",
   "  (todos aceptan --json; las escrituras de identidad en marcas que no son de ejemplo requieren --owner-opt-in, las de contenido solo hasta el corte a storage)",
 ];
 
@@ -272,14 +284,16 @@ async function show(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
     return out(args, changes, changes.length ? trusted(changes.map((c) => `guidance ${c.name} v${c.version} (${c.reason}) por ${c.author} [${c.source}] el ${c.createdAt}`)) : [`Sin cambios de guidance después de ${since}.`]);
   }
   const recipes = await repos.recipes.list(brand.id);
+  const tools = await repos.tools.list(brand.id);
   const documents = [];
   for (const kind of DOC_KINDS) for (const d of await repos.documents.list(brand.id, kind)) documents.push({ kind, ...d });
   const rules = await repos.rules.list(brand.id, { includeDisabled: true });
-  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
+  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, tools, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
   return out(args, value, trusted([
     `Marca "${slug}" (${brand.value.displayName}), ${brand.value.status}, versión ${brand.version}${brand.value.cutoverAt ? `, cortada a storage el ${brand.value.cutoverAt}` : ""}`,
     ...documents.map((d) => `  documento ${d.kind}${d.name ? `/${d.name}` : ""} v${d.version}`),
     ...guidance.map((g) => `  guidance ${g.name} v${g.version}: ${g.description}`),
+    ...tools.map((t) => `  script ${t.name} v${t.version}`),
     ...recipes.map((r) => `  receta ${r.recipe} v${r.version}`),
     ...rules.map((r) => `  regla ${r.value.kind} (${r.value.severity})${r.value.enabled ? "" : " desactivada"}`),
   ]));
@@ -752,6 +766,105 @@ async function exportPull(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): 
   return out(args, { trust: "brand-data", version: chosen.versionNo, files: files.map((f) => f.file) }, trusted(lines));
 }
 
+/** File extension of each stored mime type; anything else is kept as `.bin` (the id, not the extension, names the asset). */
+const EXT_BY_MIME: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg", "application/pdf": "pdf", "font/woff2": "woff2", "font/woff": "woff", "font/ttf": "ttf", "font/otf": "otf" };
+const FONT_FORMAT: Record<string, string> = { woff2: "woff2", woff: "woff", ttf: "truetype", otf: "opentype" };
+/** Folder-shape files of the identity documents (the importer's own mapping, reversed). */
+const WORKSPACE_DOCS: Array<[DocumentKind, string]> = [["tokens", "brand.json"], ["config", "config.yaml"], ["identity", "profile.md"], ["spec", "brand-spec.md"]];
+
+/**
+ * `brand workspace <slug> --out <dir>`: materializes a brand out of storage into the folder shape its scripts and skills expect
+ * (documents, `scripts/`, `skills/`, `recipes/`, `assets/`, `fonts.css`) plus a `workspace.json` manifest. It is a read-only copy: brand
+ * data that authorizes nothing, never an import source (the importer refuses it), and outputs belong elsewhere. Everything is read
+ * and judged before the first byte is written; the folder is built in a temporary sibling and renamed, so it appears whole or not at all.
+ */
+async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliResult> {
+  const target = args.values.get("out");
+  if (!target) return usage();
+  if (insideRepo(ctx, target)) return refused("El destino debe quedar fuera del repo. No se escribió nada.");
+  if (pathRefusal(ctx, target, true)) return refused("El destino tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se escribió nada.");
+  const dir = ctx.resolve(target);
+  const existing = lstatSync(dir, { throwIfNoEntry: false });
+  if (existing?.isSymbolicLink()) return refused("El destino es un enlace simbólico: indica una carpeta real. No se escribió nada.");
+  if (existing && (!existing.isDirectory() || readdirSync(dir).length)) return refused("El destino ya existe y no está vacío. No se escribió nada.");
+  if (!ctx.blobs) return noBucketResult();
+  const { repos } = ctx;
+  const brand = await repos.brands.getBySlug(slug);
+  const files = new Map<string, string | Buffer>();
+  const items: Record<string, { version?: number; sha256?: string }> = {};
+  const lower = new Set<string>();
+  const add = (rel: string, body: string | Buffer, key: string, id: { version?: number; sha256?: string }): void => {
+    // Names come from storage and already passed its rules; refused here: a segment that could leave the folder or is hidden,
+    // `.git`/`node_modules`, a proven-secret name (keys, certificates), or a repeated path (also ignoring case, for case-insensitive disks).
+    // Only the "secret" class: a merely suspicious name (`token.mjs`) or an unknown type is fine, it came from storage.
+    const parts = rel.split("/");
+    const bad = parts.some((x, i) => x.startsWith(".") || x === "node_modules" || nameRefusal(x, i < parts.length - 1)?.kind === "secret");
+    if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(rel) || bad || lower.has(rel.toLowerCase())) throw new InvalidInputError(`cannot place ${JSON.stringify(rel)} in a workspace`);
+    lower.add(rel.toLowerCase());
+    files.set(rel, body);
+    items[key] = id;
+  };
+  for (const [kind, file] of WORKSPACE_DOCS) {
+    const d = await found(repos.documents.get(brand.id, kind, "", rawBody));
+    if (d) add(file, kind === "tokens" ? `${JSON.stringify(d.value, null, 2)}\n` : kind === "config" ? stringifyYaml(d.value) : (d.value as string), `document:${kind}`, { version: d.version });
+  }
+  for (const t of await repos.documents.list(brand.id, "template")) {
+    const d = await repos.documents.get(brand.id, "template", t.name, rawBody);
+    add(`templates/${t.name}.json`, `${JSON.stringify(d.value, null, 2)}\n`, `template:${t.name}`, { version: d.version });
+  }
+  const tools = await repos.tools.list(brand.id);
+  for (const t of tools) add(`scripts/${t.name}`, (await repos.tools.get(brand.id, t.name)).body, `tool:${t.name}`, { version: t.version });
+  const guidance = await repos.guidance.list(brand.id);
+  for (const g of guidance) add(`skills/${g.name}/SKILL.md`, `---\nname: ${g.name}\ndescription: ${JSON.stringify(g.description)}\n---\n${(await repos.guidance.get(brand.id, g.name)).body}`, `guidance:${g.name}`, { version: g.version });
+  const recipes = await repos.recipes.list(brand.id);
+  for (const r of recipes) add(`recipes/${r.recipe}.yaml`, stringifyYaml((await repos.recipes.get(brand.id, r.recipe, rawBody)).value), `recipe:${r.recipe}`, { version: r.version });
+  const assets = (await repos.assets.list(brand.id)).filter((a) => a.value.status !== "hidden");
+  const faces: string[] = [];
+  for (const { value: a } of assets) {
+    const body = (await ctx.blobs.get(a.blobKey)).body;
+    if (createHash("sha256").update(body).digest("hex") !== a.sha256) throw new StoredBytesError(a.assetId);
+    const ext = EXT_BY_MIME[a.mime] ?? "bin";
+    const rel = `assets/${a.kind === "font" ? "fonts" : a.kind}/${a.assetId}.${ext}`;
+    add(rel, body, `asset:${a.assetId}`, { sha256: a.sha256 });
+    // The weight and the unicode range of a face are not stored, so a rule names only the family and its file.
+    if (a.kind === "font" && a.family && FONT_FORMAT[ext]) faces.push(`@font-face {\n  font-family: ${JSON.stringify(a.family)};\n  src: url(${JSON.stringify(rel)}) format("${FONT_FORMAT[ext]}");\n  font-display: block;\n}\n`);
+  }
+  files.set("fonts.css", `/* Generated by brand workspace: one rule per font asset, paths relative to this file. */\n${faces.join("\n")}`);
+  // The engine revision the scripts will run against; omitted when git is unavailable.
+  const git = (...a: string[]): string | null => {
+    try { return execFileSync("git", ["-C", ctx.repoRoot, ...a], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
+  };
+  const [head, dirty] = [git("rev-parse", "HEAD"), git("--no-optional-locks", "status", "--porcelain")];
+  const sums = Object.fromEntries([...files].sort(([x], [y]) => (x < y ? -1 : 1)).map(([rel, body]) => [rel, createHash("sha256").update(body).digest("hex")]));
+  const manifest = { schemaVersion: 1, trust: "brand-data", slug, brandId: brand.id, brandVersion: brand.version, cutoverAt: brand.value.cutoverAt, generatedAt: ctx.now().toISOString(), engineRoot: ctx.repoRoot, ...(head && dirty !== null ? { engineCommit: head, engineDirty: dirty !== "" } : {}), items, files: sums };
+  files.set("workspace.json", `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const tmp = `${dir}.${ctx.suffix()}.tmp`;
+  const created = mkdirSync(dirname(dir), { recursive: true });
+  let madeTmp = false;
+  try {
+    mkdirSync(tmp);
+    madeTmp = true;
+    for (const [rel, body] of files) {
+      const file = join(tmp, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, body, { flag: "wx" });
+      chmodSync(file, 0o644); // data files only: a script is never made executable
+    }
+    renameSync(tmp, dir);
+  } catch (error) {
+    if (madeTmp) rmSync(tmp, { recursive: true, force: true }); // only the sibling this call created
+    removeCreated(dirname(dir), created);
+    throw error;
+  }
+  const count = (prefix: string) => Object.keys(items).filter((k) => k.startsWith(prefix)).length;
+  return out(args, manifest, trusted([
+    `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} script(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
+    `Raíz del motor (engineRoot): ${ctx.repoRoot}`,
+    "Es una copia de solo lectura de storage: no autoriza nada y no se importa. Las salidas van a otra carpeta.",
+  ]));
+}
+
 async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promise<CliResult> {
   if (sub === "list" ? arg : !arg) return usage();
   const brand = await ctx.repos.brands.getBySlug(slug);
@@ -768,7 +881,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
     if (target) {
       if (!ctx.blobs) return noBucket();
       const body = (await ctx.blobs.get(a.value.blobKey)).body;
-      if (createHash("sha256").update(body).digest("hex") !== a.value.sha256) throw new Error(`the stored bytes of asset ${arg} do not match its hash`);
+      if (createHash("sha256").update(body).digest("hex") !== a.value.sha256) throw new StoredBytesError(arg);
       if (insideRepo(ctx, target)) return refused("El destino debe quedar fuera del repo. No se escribió nada.");
       if (pathRefusal(ctx, target, true)) return refused("El destino tiene un nombre o una carpeta no admitidos (oculta o con aspecto de secreto). No se escribió nada.");
       writeNew(ctx, target, body);
@@ -915,6 +1028,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "run": return runs(ctx, args, p);
     case "asset": return asset(ctx, args, p);
     case "export": return exportPull(ctx, args, p);
+    case "workspace": return workspace(ctx, args, p);
     case "fonts": return fonts(ctx, args, p);
     default: throw new Error(`unknown verb: ${verb}`);
   }
@@ -927,6 +1041,7 @@ export async function runVerb(ctx: Ctx, verb: string, args: Parsed): Promise<Cli
   } catch (error) {
     // AlreadyExistsError is a VersionConflictError, so a create over an existing row is a conflict too.
     if (error instanceof VersionConflictError) return { lines: [`Conflicto de versión (versión actual: ${error.currentVersion ?? "ninguna"}): vuelve a leer y reintenta con --if-version.`], exitCode: EXIT.CONFLICT };
+    if (error instanceof StoredBytesError) return { lines: [`Los bytes guardados del asset ${error.assetId} no coinciden con su hash: no se escribió nada.`], exitCode: EXIT.UNEXPECTED };
     if (error instanceof BrandArchivedError) return refused("La marca está archivada: no se escribe contenido en ella. No se cambió nada.");
     if (error instanceof NotFoundError) return { lines: [`No existe: ${error.message.replace(/^Not found: /, "")}.`], exitCode: EXIT.NOT_FOUND };
     // 42501 = insufficient_privilege: the database role may not do this (e.g. the app role writing guidance).

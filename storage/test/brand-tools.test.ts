@@ -93,4 +93,17 @@ const refusedPut = await cli("tool", "put", "example-guarded", "secret.mjs", "--
 assert.equal(refusedPut.exitCode, 6, refusedPut.lines.join("\n"));
 assert.match(refusedPut.lines[0], /secreto/);
 assert.equal((await guardedRepos.tools.list(guardedBrand.id)).some((t) => t.name === "secret.mjs"), false);
+// `tool put` without --description on a missing tool is a plain create (no --if-version), with an empty description.
+const plainFile = join(work, "plain.mjs");
+writeFileSync(plainFile, "console.log(1);\n");
+assert.equal((await cli("tool", "put", "example-guarded", "plain.mjs", "--file", plainFile)).exitCode, 0);
+assert.equal((await guardedRepos.tools.get(guardedBrand.id, "plain.mjs")).description, "");
+// A `scripts` entry that is a file is left unclaimed (reported), never walked.
+const fileScripts = join(work, "example-filescripts");
+mkdirSync(fileScripts);
+writeFileSync(join(fileScripts, "profile.md"), "# Profile\n");
+writeFileSync(join(fileScripts, "scripts"), "not a folder\n");
+const fileScriptsReport = await importBrand(createMemoryRepositories(), { ...opts, from: fileScripts, dryRun: true });
+assert.ok([...fileScriptsReport.notImported, ...fileScriptsReport.unimported].some((e) => e.startsWith("scripts")), "a scripts file is reported as left behind");
+assert.deepEqual(fileScriptsReport.items.map((i) => i.key), ["document:identity"]);
 console.log("brand tools importer: ok");

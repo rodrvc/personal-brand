@@ -112,7 +112,7 @@ function* walk(v: unknown, key = "", depth = 0): Generator<[string, string]> {
  * (`derive_terms` in `scripts/validate_commit_guardian.py`): the same sources, not the same handle rules (see `HANDLE`). For every brand that is not an example: its slug and display
  * name; the tokens' wordmark and owned domains; the identifying hashtags of the config; any `name` key of the config and
  * tokens; every recipe's `city` and `url` (domain and base name); every carousel's `city`; and the @handles written in any
- * stored text (identity, spec, templates, guidance, recipes, config, tokens, carousels, content items). The gate applies its own length and
+ * stored text (identity, spec, templates, guidance, tool bodies, recipes, config, tokens, carousels, content items). The gate applies its own length and
  * generic-word filters on top.
  */
 export async function brandTerms(repos: ImportRepos): Promise<string[]> {
@@ -126,12 +126,20 @@ export async function brandTerms(repos: ImportRepos): Promise<string[]> {
       throw error;
     }
   };
-  const handles = (text: string): void => {
-    for (const m of text.matchAll(HANDLE)) if (!isSkippedHandle(text, m)) terms.add(m[1]);
+  // In code (a tool body) an `@` that opens its line, after whitespace and comment markers only, is a doc tag or a decorator
+  // (`@param`, `@author`, `@dataclass`), never a handle. Trade-off: a handle that opens a line is not watched,
+  // whether a lone `// @handle` or the start of a line inside a multi-line string (a template literal, a docstring); the
+  // brand's handles are still collected from its identity, spec and config.
+  const CODE_LINE_START = /^\s*(?:(?:\/\*\*?|\/\/|#|\*)\s*)*$/;
+  const handles = (text: string, code = false): void => {
+    for (const m of text.matchAll(HANDLE)) {
+      if (code && CODE_LINE_START.test(text.slice(text.lastIndexOf("\n", m.index! - 1) + 1, m.index))) continue;
+      if (!isSkippedHandle(text, m)) terms.add(m[1]);
+    }
   };
-  const scan = (body: unknown, onKey?: (key: string, value: string) => void): void => {
+  const scan = (body: unknown, onKey?: (key: string, value: string) => void, code = false): void => {
     for (const [key, value] of walk(body)) {
-      handles(value);
+      handles(value, code);
       onKey?.(key, value);
     }
   };
@@ -163,6 +171,7 @@ export async function brandTerms(repos: ImportRepos): Promise<string[]> {
         scan([item.title, item.bodyMd, item.meta]);
       }),
       each(repos.guidance.list(brand.id), async (g) => scan((await repos.guidance.get(brand.id, g.name)).body)),
+      each(repos.tools.list(brand.id), async (t) => scan((await repos.tools.get(brand.id, t.name)).body, undefined, true)),
       each(repos.recipes.list(brand.id), async (r) => {
         scan((await repos.recipes.get(brand.id, r.recipe, (b) => b)).value, (key, value) => {
           if (key === "city") terms.add(value);

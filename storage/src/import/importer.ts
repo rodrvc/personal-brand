@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
@@ -32,6 +32,14 @@ export class CutOverError extends Error {
   constructor(readonly slug: string) {
     super(`Brand "${slug}" is cut over; its folder is no longer imported`);
     this.name = "CutOverError";
+  }
+}
+
+/** The folder is a `brand workspace` copy of storage: a read-only materialization, never an import source. */
+export class WorkspaceFolderError extends Error {
+  constructor(readonly dir: string) {
+    super(`${dir} is a brand workspace (workspace.json): a copy of storage, not an import source`);
+    this.name = "WorkspaceFolderError";
   }
 }
 
@@ -152,20 +160,21 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
     });
   }
   // Brand-owned scripts: flat files of `scripts/` with a script extension. Backups, subfolders, oversized or non-UTF-8 files are
-  // left unclaimed, so the legacy pass reports them as before (a refused one under its own class).
-  const scriptsDir = join(dir, "scripts");
-  const toolEntries: Array<{ name: string; raw: Buffer }> = [];
-  const refusedScripts: string[] = []; // proven secrets: reported as refused, never read into storage, never left as unclaimed data
-  const unscannedScripts: string[] = []; // could not be scanned: a guess, left-behind data like any unknown file
+  // left unclaimed, so the legacy pass reports them as before. A script with a secret signature is claimed (never read into
+  // storage, never reported as unclaimed data) but listed in `refused`, which blocks a cutover.
+  const scriptsDir = join(root, "scripts");
+  // `scripts` may be a file or a link to one: only a directory is walked, anything else stays an unclaimed entry.
+  const scriptNames = statSync(scriptsDir, { throwIfNoEntry: false })?.isDirectory() ? readdirSync(scriptsDir).sort() : [];
+  const refusedScripts: string[] = [];
   const claimed = new Set<string>();
-  for (const name of existsSync(scriptsDir) ? readdirSync(scriptsDir).sort() : []) {
+  for (const name of scriptNames) {
     if (!isToolName(name)) continue;
     const raw = readRegular(root, join(scriptsDir, name), `scripts/${name}`, skipped);
     if (!raw) continue;
     // A script is judged by its content, not its name: a secret-looking name alone does not refuse it.
     const why = scriptRefusal(raw);
     if (why) {
-      (why.kind === "secret" ? refusedScripts : unscannedScripts).push(`scripts/${name} (${why.why})`);
+      refusedScripts.push(`scripts/${name} (${why.why})`);
       claimed.add(name);
       continue;
     }
@@ -174,7 +183,6 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       skipped.push(`scripts/${name} (over ${MAX_TOOL_BYTES} bytes or not plain UTF-8 text)`);
       continue;
     }
-    toolEntries.push({ name, raw });
     claimed.add(name);
     const payload = { description: "", body };
     items.push({
@@ -186,8 +194,8 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       write: (id, expectedVersion, meta) => repos.tools.put(id, name, payload, { ...meta, expectedVersion }),
     });
   }
-  // Nothing else in the folder: it is fully imported, not "left behind".
-  if (claimed.size && claimed.size === readdirSync(scriptsDir).length) handled.add("scripts");
+  // Every entry is claimed (a refused script too: it still blocks a cutover through `refused`), so `scripts` is not reported as left behind.
+  if (claimed.size && claimed.size === scriptNames.length) handled.add("scripts");
   const recipesDir = join(dir, "recipes");
   for (const file of existsSync(recipesDir) ? readdirSync(recipesDir).sort() : []) {
     handled.add("recipes");
@@ -210,10 +218,10 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   }
   const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices, quietMissingOutputs);
   if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
-  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set([...claimed].map((n) => join(root, "scripts", n))), skipped, notices, handled, now };
+  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set([...claimed].map((n) => join(scriptsDir, n))), skipped, notices, handled, now };
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
-  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: [...left.unimported, ...unscannedScripts].sort(), proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
 }
 
 /**
@@ -239,6 +247,7 @@ async function classify(item: Item, brandId: string | null, repos: Repos): Promi
 export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date; extraSkipped?: string[]; origin?: string; /** Set for a source that is a temporary copy: the label reported instead of the (temporary) outputs path, and no "outputs root missing" notice. */ outputsLabel?: string }): Promise<ImportReport> {
   const dir = resolve(opts.from);
   const slug = basename(dir);
+  if (lstatSync(join(dir, "workspace.json"), { throwIfNoEntry: false })) throw new WorkspaceFolderError(dir);
   const now = opts.now ?? (() => new Date());
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
