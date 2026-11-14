@@ -9,7 +9,7 @@ import { stringify as stringifyYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
-import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { AlreadyExistsError, BrandArchivedError, MAX_ASSET_TAG_CHARS, MAX_ASSET_TAGS, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
@@ -106,7 +106,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   content: { values: ["file", "title", "channel", "format", "stage", "derived-from", "published-at", "meta", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
-  asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  asset: { values: ["kind", "status", "origin", "tag", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
   workspace: { values: ["out"], flags: ["json"], positionals: [1, 1] },
@@ -160,7 +160,7 @@ export const VERB_USAGE = [
   "  brand content list <marca> [--stage idea|draft|published|archived] [--channel <canal>] [--derived-from <pieza>] | get <marca> <pieza>",
   "  brand content put <marca> <pieza> --file <cuerpo.md> [--title <texto>] [--channel <canal>] [--format <formato>] [--stage idea|draft|archived] [--derived-from <pieza>] [--meta <json>] [--if-version <n>]   (sin --if-version crea y exige --title; published solo con content stage)",
   "  brand content stage <marca> <pieza> --stage <etapa> --if-version <n> [--published-at <fecha ISO>]   (published solo desde draft y exige --published-at)",
-  "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
+  "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] [--tag <etiqueta> (exacta; --tags es un alias)] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
   "  brand fonts fetch <marca>   (descarga las fuentes de googleFontsHref de los tokens y las registra como candidatas; reemplaza a system/assets/fetch-fonts.ts)",
   "  brand run list <marca> [--recipe <receta>] | get <marca> <id> | create <marca> <receta> --period-start <AAAA-MM-DD> --period-end <AAAA-MM-DD> --input <ruta> [--storyboard <ruta>]",
   "  brand run save <marca> <id> --if-version <n> [--input <ruta>] [--storyboard <ruta>]   (el id de la corrida es el que recibe el render con --run)",
@@ -871,7 +871,9 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const text = (a: { assetId: string; kind: string; status: string; origin: string; mime: string; bytes: number; family: string | null; tags: string[] }) => `${a.assetId} ${a.kind} ${a.status} ${a.origin} ${a.mime} ${a.bytes} B${a.family ? ` familia ${a.family}` : ""}${a.tags.length ? ` [${a.tags.join(", ")}]` : ""}`;
   if (sub === "list") {
     const filter = Object.fromEntries(["kind", "status", "origin"].flatMap((k) => (args.values.has(k) ? [[k, args.values.get(k)]] : [])));
-    const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version }));
+    // `--tag` is an exact match on one of the asset's tags; combined with `--status hidden` it lists what a batch folder put aside.
+    const tag = args.values.get("tag") ?? args.values.get("tags"); // `--tags a` is an alias of `--tag a` here: one exact tag
+    const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version })).filter((a) => tag === undefined || a.tags.includes(tag));
     return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map(text) : ["Sin assets."]));
   }
   const noBucket = noBucketResult;
@@ -930,7 +932,7 @@ function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: stri
   if (byContent) return { refused: byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why };
   const kind = o.kind ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
   const tags = o.tags?.split(",").map((t) => t.trim()).filter(Boolean);
-  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (o.family && o.family.length > MAX_FAMILY_CHARS)) throw new InvalidInputError(`invalid --kind, --tags (at most 20 of 50 characters) or --family (at most ${MAX_FAMILY_CHARS} characters)`);
+  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > MAX_ASSET_TAGS || tags.some((t) => t.length > MAX_ASSET_TAG_CHARS))) || (o.family && o.family.length > MAX_FAMILY_CHARS)) throw new InvalidInputError(`invalid --kind, --tags (at most ${MAX_ASSET_TAGS} of ${MAX_ASSET_TAG_CHARS} characters) or --family (at most ${MAX_FAMILY_CHARS} characters)`);
   return { sha256: createHash("sha256").update(bytes).digest("hex"), mime: mimeOf(bytes, name), kind: kind as AssetKind, ...(tags?.length ? { tags } : {}), ...(o.family ? { family: o.family } : {}) };
 }
 

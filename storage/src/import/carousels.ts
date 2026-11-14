@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { assertCarousel } from "../revision-policy.ts";
 import { InvalidInputError, VersionConflictError, type CarouselStatus, type WriteMeta } from "../contracts/index.ts";
+import { isBatchFolder } from "./batches.ts";
 import { canon, found, readRegular, sha256, type CollectContext, type Item } from "./shared.ts";
 
 const STATUSES: CarouselStatus[] = ["draft", "exported", "scheduled", "published"];
@@ -37,6 +38,11 @@ export function collectCarousels(ctx: CollectContext): Item[] {
     const rel = `carousels/${id}`;
     const folder = join(base, id);
     if (id.endsWith(".json")) continue; // a recipe input: `collectRuns` imports it (or reports it)
+    if (isBatchFolder(folder)) {
+      // Made by a brand-owned tool, not a carousel: `batches.ts` takes its finished renders; this entry is what keeps the rest of the folder on the legacy pass, as before (the legacy pass walks the folders named in `skipped`).
+      skipped.push(`${rel} (batch folder, not a carousel: finished renders are imported as hidden assets)`);
+      continue;
+    }
     if (!/^[a-z0-9-]+$/.test(id)) {
       skipped.push(`${rel} (not a valid carousel id)`);
       continue;

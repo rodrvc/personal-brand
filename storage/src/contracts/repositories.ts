@@ -173,6 +173,10 @@ export interface Asset extends Required<Pick<AssetInput, "sha256" | "kind" | "mi
   generation: Record<string, unknown> | null;
   createdAt: string;
 }
+/** Limits on the tags of one asset: enforced by `asset add` and respected by the importer. */
+export const MAX_ASSET_TAGS = 20;
+export const MAX_ASSET_TAG_CHARS = 50;
+
 export type AssetPatch = Partial<Pick<AssetInput, "kind" | "tags" | "status" | "family">>;
 
 export interface AssetRepository {
