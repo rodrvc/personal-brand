@@ -584,11 +584,23 @@ today's modules until its cutover (D12; S9a1, S9a2, S10).
 | `skills/*/SKILL.md` | `brand_guidance` |
 | `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved); `index.json` is a rebuildable cache and is not imported (S7b2a) |
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
+| `carousels/<id>/{final,final-*}/*.{png,jpg,jpeg,webp}` of a batch folder (`batch.json`, no `carousel.json`) | hidden `unclassified` manual blobs + `assets` rows tagged `batch:<id>` and `batch:<id>/<folder>` (C1a); the rest of the folder (`batch.json`, `cover.json`, `caption.txt`, sources, zip) is unchanged (legacy blobs or unimported) |
 | `carousels/*.json` (flat), `reels/week-input.json`, `reels/<date>/storyboard.yaml` | `recipe_runs`; recipe and period are derived and recorded on the run (S7b2b1, §14 Q-S7b2b) |
 | reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b3a) |
 | `<outputs.editor>/<slug>/v<N>/` of the resolved `outputs.base_dir` | `exports` + export keys (S7b2b3b) |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
 | `content/**`, anything else | blob keyed by content (`blobKey(sha256)`), with the path -> sha256 manifest in that run's `import_runs.report` (nothing lost; S7b2b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
+
+**Batch renders (C1a).** Presence of `batch.json` decides that a folder is a batch (it is never parsed; a
+`carousel.json` wins). Only images directly inside `final` or `final-<suffix>` are taken, recognised by content.
+Same bytes are one asset however many folders or batches hold them: the tags are the union. If `assets/**` holds
+the same bytes, that item wins for kind, origin and status, and the batch tags are only added to its tags. A tag over
+50 characters is never truncated: the file is reported and falls to the legacy pass. A placement that would bring the
+asset past 20 tags is not added and is reported (its file is still claimed as an asset). A batch never hides an
+asset registered elsewhere: bytes already stored as anything but a hidden, unclassified, manual asset make the
+reimport report a conflict. As with `assets/**`, an owner edit of a stored batch asset (unhide, retag) is reported as
+a conflict on every reimport and keeps verification dirty until the folder or the row is reconciled. List a batch with
+`brand asset list <brand> --status hidden --tag batch:<id>`.
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -959,6 +971,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | P1 | Brand-owned tools: migration 0010 `brand_tools` (name = script file name, body, version, revisions), `tools` repository (memory + Postgres), importer claims flat `scripts/*.{mjs,js,cjs,ts,sh,py}`, `brand tool list\|get\|put`, purge table list | ~520 | S11b2b | a fictional brand's scripts import, verify byte for byte, and read back through the CLI; a `.bak` stays left behind |
 | P2 | `brand workspace <brand> --out <dir>`: a read-only, atomic materialization of a stored brand (documents, `scripts/`, `skills/`, `recipes/`, assets, `fonts.css`, `workspace.json`) for the brand's own scripts; the importer refuses such a folder; `brand show` lists tools; P1 follow-ups (a `scripts` file is not walked, dead `toolEntries` and unreachable `scriptRefusal` branch removed, tool bodies in the denylist scan) | ~320 | P1 | a fictional brand's workspace holds its tokens, scripts, guidance and assets byte for byte, `import` and `cutover` refuse it with exit 6 |
+| C1a | Batch folders (`carousels/<id>/` with a top-level `batch.json` and no `carousel.json`, made by brand-owned tools): the images directly inside `final` / `final-*` become hidden `unclassified` manual assets tagged `batch:<id>` and `batch:<id>/<folder>` (`storage/src/import/batches.ts`, shared register/verify in `asset-item.ts`); `brand asset list --tag` | ~400 | P1, S7b2a | batch renders import, dedupe, re-import and verify clean; workspace and library never show them |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
 20 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600

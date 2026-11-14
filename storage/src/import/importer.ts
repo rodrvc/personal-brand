@@ -8,6 +8,7 @@ import { collectCarousels } from "./carousels.ts";
 import { collectContent } from "./content.ts";
 import { collectExports } from "./exports.ts";
 import { collectAssets } from "./assets.ts";
+import { collectBatchAssets, scanBatches } from "./batches.ts";
 import { planLegacy, type LegacyFile } from "./legacy.ts";
 import { OUTPUTS_LABEL, resolveOutputs } from "./outputs.ts";
 import { collectRuns } from "./runs.ts";
@@ -219,7 +220,10 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices, quietMissingOutputs);
   if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
   const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set([...claimed].map((n) => join(scriptsDir, n))), skipped, notices, handled, now };
-  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
+  // Batch renders are scanned first so the tags they put on bytes that `assets/**` also holds land on that one asset.
+  const batches = scanBatches(ctx);
+  const assetItems = collectAssets(ctx, batches.tags);
+  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...assetItems, ...collectBatchAssets(ctx, batches, new Set(assetItems.map((i) => i.key.slice("asset:".length)))), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
   return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
 }
