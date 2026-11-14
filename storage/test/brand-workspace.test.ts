@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,6 +101,16 @@ assert.deepEqual(manifest.items[`asset:${logoId}`], { sha256: (await repos.asset
 assert.deepEqual(Object.keys(manifest.items).sort(), ["asset:" + [fontId, logoId].sort()[0], "asset:" + [fontId, logoId].sort()[1], "document:config", "document:identity", "document:tokens", "guidance:tone", "recipe:weekly", "tool:render.mjs"].sort());
 assert.equal(manifest.files["scripts/render.mjs"], createHash("sha256").update(SCRIPT).digest("hex"), "every file has its sha256");
 assert.deepEqual(Object.keys(manifest.files), Object.keys(manifest.files).sort());
+// The engine libraries are linked, not copied: `node_modules` is the only entry outside the data files, and it is named in the manifest, never hashed.
+const engineModules = join(repoRoot, "node_modules");
+assert.equal(manifest.engineModules, existsSync(engineModules) ? engineModules : null);
+assert.deepEqual(readdirSync(outside).sort(), ["assets", "brand.json", "config.yaml", "fonts.css", ...(manifest.engineModules ? ["node_modules"] : []), "profile.md", "recipes", "scripts", "skills", "workspace.json"], "exact top-level set of the workspace");
+if (manifest.engineModules) {
+  assert.ok(lstatSync(join(outside, "node_modules")).isSymbolicLink());
+  assert.equal(realpathSync(join(outside, "node_modules")), realpathSync(engineModules));
+  assert.match(made.lines.join("\n"), /Los scripts pueden importar las librerías del motor/);
+}
+assert.equal(Object.keys(manifest.files).some((f) => f.startsWith("node_modules")), false, "the link is not a data file");
 assert.ok(manifest.files["fonts.css"] && !("workspace.json" in manifest.files), "the manifest cannot hash itself");
 const second = join(work, "ws-json");
 const json = await run("workspace", "example-posters", "--out", second, "--json");

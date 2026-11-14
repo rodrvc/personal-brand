@@ -1,6 +1,6 @@
 #!/usr/bin/env -S pnpm exec tsx
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -219,6 +219,9 @@ const isSameOrUnder = (path: string, entry: string): boolean => {
   return p === path || p.startsWith(`${path}/`);
 };
 
+/** Where the outputs folder came from, in the words the owner uses (the file or variable that decided it). */
+const OUTPUTS_ORIGIN = { env: "indicada por la variable BRAND_OUTPUTS_ROOT", "config-local": "indicada en config.local.yaml", config: "indicada en config.yaml", default: "carpeta por defecto", bucket: "copiada del bucket de la marca" } as const;
+
 function describe(report: ImportReport): string[] {
   const c = report.counts;
   return [
@@ -227,10 +230,11 @@ function describe(report: ImportReport): string[] {
     `Creados ${c.created}, actualizados ${c.updated}, sin cambios ${c.unchanged}, conflictos ${c.conflict}.`,
     ...(report.conflicts.length ? [`Conflictos: ${report.conflicts.join(", ")}.`] : []),
     ...(report.origin ? [`Origen: ${report.origin}.`] : []),
-    ...(report.outputsRoot ? [`Carpeta de salidas leída (fuera de la marca): ${report.outputsRoot}.`] : []),
+    ...(report.outputsRoot ? [`Carpeta de salidas leída: ${report.outputsRoot} (${OUTPUTS_ORIGIN[report.outputsSource ?? "config"]}). Solo se lee: nunca se escribe en ella.`] : []),
     ...(report.legacy.count ? [`Guardados como legado, por contenido: ${report.legacy.count} archivo(s)${report.legacy.changed.length ? `; nuevos o cambiados desde la última importación: ${report.legacy.changed.join(", ")}` : ""}.`] : []),
     ...(report.refused.length ? [`Rechazados, nunca importados: ${report.refused.join(", ")}.`] : []),
     ...(report.unimported.length ? [`Sin importar (tipo no reconocido o nombre sospechoso): ${report.unimported.join(", ")}.`] : []),
+    ...(report.toolWarnings?.length ? ["Avisos de herramientas:", ...report.toolWarnings.map((w) => `  - ${w}`)] : []),
     ...(report.notices.length ? [`Avisos: ${report.notices.join("; ")}.`] : []),
     ...(report.notImported.length ? [`Fuera de esta etapa, no importado: ${report.notImported.join(", ")}.`] : []),
     ...report.proposals.map((p) => `Propuesta de regla (no creada): ${p.kind} ${JSON.stringify(p.params)} desde ${p.from}.`),
@@ -287,6 +291,8 @@ async function cutover(repos: ImportRepos, blobs: BlobStore | undefined, env: No
 /** @internal Test seams: `suffix` names the temporary sibling of `asset get --out`; `beforeRead` runs between the path check and the read of `asset add`. */
 export interface CliHooks {
   suffix?: () => string;
+  /** Replaces the symlink of `brand workspace` (a seam to test a refused link). */
+  link?: (target: string, path: string) => void;
   beforeRead?: (path: string) => void;
   /** The clock of the purge bundle name. */
   now?: () => Date;
@@ -349,7 +355,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, repos?: Imp
         if (!url || !isLocalDatabase(url)) throw new PurgeRefusedError("DATABASE_PURGE_URL no apunta a una base de datos local: la purga solo corre en local");
         return hooks.openPurger ? hooks.openPurger() : openPurger(connect(env, url), verbSql ?? undefined);
       };
-      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: hooks.repoRoot ?? REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), now, fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
+      return await runVerb({ repos: verbRepos, openPurger: purgerFor, blobs, env, author, repoRoot: hooks.repoRoot ?? REPO_ROOT, read: (path) => readInputFile(fromCwd(path, env)), readBytes: (path, max) => (hooks.beforeRead?.(fromCwd(path, env)), readInputBytes(fromCwd(path, env), max)), suffix: hooks.suffix ?? (() => randomBytes(6).toString("hex")), link: hooks.link ?? ((target, path) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir")), now, fetch: hooks.fetch ?? fetch, resolve: (path) => fromCwd(path, env) }, verb!, args);
     } catch (error) {
       return { lines: [`Error: ${(error as Error).message}`], exitCode: EXIT.UNEXPECTED };
     } finally {

@@ -1,0 +1,8 @@
+profile:
+  slug: example-posters
+  name: Example Posters
+  primary_language: en
+
+# Rendered posters are written outside the brand folder: the tool takes the output folder as an argument.
+outputs:
+  base_dir: ~/example-posters-outputs

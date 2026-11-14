@@ -10,10 +10,10 @@ import { collectExports } from "./exports.ts";
 import { collectAssets } from "./assets.ts";
 import { collectBatchAssets, scanBatches } from "./batches.ts";
 import { planLegacy, type LegacyFile } from "./legacy.ts";
-import { OUTPUTS_LABEL, resolveOutputs } from "./outputs.ts";
+import { OUTPUTS_LABEL, resolveOutputs, type OutputsSource } from "./outputs.ts";
 import { collectRuns } from "./runs.ts";
 import { isToolName, MAX_TOOL_BYTES } from "../revision-policy.ts";
-import { scriptRefusal } from "./allowlist.ts";
+import { portabilityWarning, scriptRefusal } from "./allowlist.ts";
 import { putBlob } from "../blob/put-blob.ts";
 import { canon, found, readRegular, rereadChecked, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
 
@@ -63,6 +63,10 @@ export interface ImportReport {
   unimported: string[];
   /** Real path of the outputs root when it lies outside the brand folder (a second root, read confined to it); null otherwise. */
   outputsRoot: string | null;
+  /** Portability warnings of brand tools (Spanish, one per tool): printed in their own block, never blocking a cutover. */
+  toolWarnings?: string[];
+  /** Why that folder was chosen (null with it); `bucket` is a legacy-bucket source, whose outputs are a label, not a path. */
+  outputsSource?: OutputsSource | "bucket" | null;
   /** One `<key> (<reason>)` per item counted as `conflict`: why it was left alone. */
   conflicts: string[];
   /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
@@ -86,7 +90,7 @@ function splitFrontmatter(raw: string): { description: string; body: string } {
 }
 
 /** Every importable item of a brand folder. Read-only on the folder. */
-function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date(), quietMissingOutputs = false): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
+function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date(), quietMissingOutputs = false): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null; outputsSource: OutputsSource | null; toolWarnings: string[] } {
   const items: Item[] = [];
   const skipped: string[] = [];
   const notices: string[] = [];
@@ -167,6 +171,7 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   // `scripts` may be a file or a link to one: only a directory is walked, anything else stays an unclaimed entry.
   const scriptNames = statSync(scriptsDir, { throwIfNoEntry: false })?.isDirectory() ? readdirSync(scriptsDir).sort() : [];
   const refusedScripts: string[] = [];
+  const toolWarnings: string[] = [];
   const claimed = new Set<string>();
   for (const name of scriptNames) {
     if (!isToolName(name)) continue;
@@ -185,6 +190,9 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
       continue;
     }
     claimed.add(name);
+    // A notice, never a refusal: the script is imported as it is, and the owner decides when to make it portable.
+    const portability = portabilityWarning(name, body);
+    if (portability) toolWarnings.push(portability);
     const payload = { description: "", body };
     items.push({
       key: `tool:${name}`, entityType: "brand_tool", hash: sha256(raw), payload,
@@ -225,7 +233,7 @@ function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: N
   const assetItems = collectAssets(ctx, batches.tags);
   items.push(...collectContent(ctx), ...collectCarousels(ctx), ...assetItems, ...collectBatchAssets(ctx, batches, new Set(assetItems.map((i) => i.key.slice("asset:".length)))), ...collectRuns(ctx), ...collectExports(ctx));
   const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
-  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null, outputsSource: outputs && !outputs.inside ? outputs.source : null, toolWarnings };
 }
 
 /**
@@ -256,7 +264,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const startedAt = now().toISOString();
   let brand = await found(repos.brands.getBySlug(slug));
   if (brand?.value.cutoverAt) throw new CutOverError(slug);
-  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now, !!opts.outputsLabel);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot, outputsSource, toolWarnings } = collect(dir, repos, opts.blobs, opts.env, opts.now, !!opts.outputsLabel);
   if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
   // In place: the report shares these arrays with the items, which add notices while they are written.
   skipped.unshift(...(opts.extraSkipped ?? []));
@@ -269,7 +277,7 @@ export async function importBrand(repos: Repos, opts: { from: string; dryRun: bo
   const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
   const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
   const report: ImportReport = {
-    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.outputsLabel && outputsRoot ? opts.outputsLabel : outputsRoot, ...(opts.origin ? { origin: opts.origin } : {}),
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.outputsLabel && outputsRoot ? opts.outputsLabel : outputsRoot, outputsSource: opts.outputsLabel && outputsRoot ? "bucket" : outputsSource, toolWarnings, ...(opts.origin ? { origin: opts.origin } : {}),
     legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
     counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
     sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),

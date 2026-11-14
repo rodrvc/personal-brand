@@ -50,7 +50,8 @@ export function scanBatches(ctx: CollectContext): BatchScan {
           skipped.push(`${rel} (no blob store configured: nothing imported)`);
           continue;
         }
-        const bytes = readRegular(root, join(folder, sub, name), rel, skipped);
+        const file = join(folder, sub, name);
+        const bytes = readRegular(root, file, rel, skipped);
         if (!bytes) continue;
         if (!IMAGE_MIME.includes(mimeOf(bytes, name))) {
           skipped.push(`${rel} (not an image by content)`);
@@ -69,10 +70,11 @@ export function scanBatches(ctx: CollectContext): BatchScan {
           continue;
         }
         placement.forEach((t) => entry.tags.add(t));
+        const real = realpathSync(file); // once: the file's own real path
         scan.found.set(assetId, entry);
         // Both spellings: under `root` (what the legacy pass compares against) and the file's own real path (a `carousels/` that is a link inside the folder).
         used.add(join(root, rel));
-        used.add(realpathSync(join(folder, sub, name)));
+        used.add(real);
       }
     }
   }

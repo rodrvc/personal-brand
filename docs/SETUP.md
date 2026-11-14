@@ -293,6 +293,29 @@ owner-only).
   example brands are cut over with `--partial`. Without `--from`, the folder is
   `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
 
+### Herramientas de una marca
+
+Cada marca trae sus propias herramientas de render en `scripts/` (se guardan con
+`brand tool put`, o se importan con la carpeta). Para que funcionen en cualquier equipo:
+
+- Importa las librerías **por nombre**: `import { chromium } from "playwright"`. Nunca con una ruta
+  absoluta ni con `createRequire("/Users/...")`.
+- La carpeta de salida es un **argumento** de la herramienta (y falla con un mensaje claro si falta);
+  jamás una ruta escrita dentro del script, y siempre fuera de la carpeta de la marca y del repo.
+- `brand workspace <marca> --out <carpeta>` deja una copia de la marca con un enlace `node_modules` hacia
+  las librerías del motor, así el `import` por nombre funciona sin configurar nada. Si el motor no tiene
+  `node_modules`, avisa: ejecuta `pnpm install`.
+- No ejecutes npm/pnpm dentro del espacio de trabajo: su `node_modules` es el del motor.
+- Solo resuelven las librerías del `package.json` de la raíz del motor. Si una herramienta necesita otra,
+  agrégala en la raíz del repo.
+- Si una herramienta contiene una ruta fija de este equipo, `tool put`, `workspace`, `import` y `cutover`
+  muestran un aviso con el nombre y las líneas (nunca la ruta). Es solo un aviso: no bloquea nada.
+- `import` y `cutover` dicen qué carpeta de salidas leyeron y de dónde salió (variable
+  `BRAND_OUTPUTS_ROOT`, `config.local.yaml`, `config.yaml` o la carpeta por defecto). Solo se lee.
+
+`profiles/example-posters/` es una marca ficticia que sirve de ejemplo completo
+(`scripts/render-sample.mjs --check` imprime `ok` sin abrir un navegador).
+
 ## Specs (OpenSpec)
 
 Architectural and module-design decisions are proposed and tracked as specs

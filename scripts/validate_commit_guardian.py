@@ -24,6 +24,10 @@ PROFILES_DIR = ROOT / 'profiles'
 # indefinitely in a guide.
 GENERIC_PREFIXES = ('system/', '.claude/', 'core/', 'docs/')
 
+# The fictional example profiles are tracked, so their content is scanned too: a real brand
+# hiding under an `example-<x>` folder name is caught by its content, not its folder name.
+SCANNED_PREFIXES = GENERIC_PREFIXES + ('profiles/example',)
+
 # Only example profiles (fictional onboarding brands) are publishable.
 # A real profile lives outside the repo tree.
 PUBLIC_PROFILE_PREFIX = 'profiles/example'
@@ -599,10 +603,10 @@ VERIFIED_CAST_DOCS = 'system/ig-carousel/render-batch.types.test.ts'
 # A negation in .gitignore is how real profiles snuck into the repo:
 # silently wins over any rule written in prose.
 #
-# `/?` because `!/profiles/<brand>/` is valid gitignore with the same effect, and
-# `(?![^/]*)` anchors the exception to the whole segment: `!profiles/exampleEVIL/`
-# isn't the example profile and shouldn't pass just by starting the same.
-GITIGNORE_NEGATION = re.compile(r'^\s*!\s*/?profiles/(?!example(?:-personal)?/)')
+# `/?` because `!/profiles/<brand>/` is valid gitignore with the same effect. Allowed: the
+# fictional folders `example` and `example-<words>` (lowercase, hyphen separated), anchored to the
+# whole segment: `!profiles/exampleEVIL/` is not an example profile just by starting the same.
+GITIGNORE_NEGATION = re.compile(r'^\s*!\s*/?profiles/(?!example(?:-[a-z0-9]+)*/)')
 
 
 def git(*args: str) -> str:
@@ -640,7 +644,7 @@ def check_brand_leaks(staged_files: list[str]) -> list[str]:
     )
     leaks = []
     for path in staged_files:
-        if not path.startswith(GENERIC_PREFIXES):
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         blob = staged_blob(path)
         if blob is None:
@@ -808,7 +812,7 @@ def scan_tree() -> int:
     tracked = sorted(filter(None, git('ls-files', '-co', '--exclude-standard').splitlines()))
     leaks = []
     for path in tracked:
-        if not path.startswith(GENERIC_PREFIXES):
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         try:
             blob = (ROOT / path).read_text(encoding='utf-8', errors='replace')
@@ -824,7 +828,7 @@ def scan_tree() -> int:
                 )
 
     tree_findings = [
-        ('brand literals in the generic layers (%s)' % ', '.join(GENERIC_PREFIXES), leaks),
+        ('brand literals in the generic layers (%s)' % ', '.join(SCANNED_PREFIXES), leaks),
         ('real profile files tracked', check_private_profiles(tracked, tracked=True)),
         ('.gitignore negations', [
             f'.gitignore:{number}: {line.strip()}'
@@ -992,7 +996,7 @@ def check_push(revisions: list[str]) -> int:
             continue
         if not line.startswith('+') or line.startswith('+++'):
             continue
-        if not path.startswith(GENERIC_PREFIXES):
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         body = line[1:]
         found = pattern.search(body)

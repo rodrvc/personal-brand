@@ -10,7 +10,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
 import { AlreadyExistsError, BrandArchivedError, MAX_ASSET_TAG_CHARS, MAX_ASSET_TAGS, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
+import { contentRefusal, nameRefusal, portabilityWarning, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import { found } from "../import/shared.ts";
@@ -51,6 +51,8 @@ interface Ctx {
   readBytes(path: string, max: number): { bytes: Buffer; stat: Stats };
   /** The random part of the temporary sibling `asset get --out` writes first (a seam for tests). */
   suffix(): string;
+  /** Links the engine's `node_modules` into a workspace (a seam for tests; `junction` on Windows, which needs no privilege). */
+  link(target: string, path: string): void;
   /** The clock for the purge bundle name and timestamp (a seam for tests). */
   now(): Date;
   /** The network, for `fonts fetch` only (a seam for tests; the default is the global `fetch`). */
@@ -463,7 +465,8 @@ async function tool(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promis
   // Without --description a create stores "" and a save keeps the stored one: a new body alone never erases it.
   const description = args.values.get("description") ?? (expected === null ? "" : (await ctx.repos.tools.get(brand.id, name)).description);
   const put = await ctx.repos.tools.put(brand.id, name, { description, body }, meta(ctx, expected));
-  return wrote(args, put, [`Script ${name} guardado (versión ${put.version}).`]);
+  const warning = portabilityWarning(name, body);
+  return wrote(args, put, [`Herramienta ${name} guardada (versión ${put.version}).`, ...(warning ? [`Aviso: ${warning}`] : [])]);
 }
 
 async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -835,16 +838,30 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
     try { return execFileSync("git", ["-C", ctx.repoRoot, ...a], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
   };
   const [head, dirty] = [git("rev-parse", "HEAD"), git("--no-optional-locks", "status", "--porcelain")];
-  const sums = Object.fromEntries([...files].sort(([x], [y]) => (x < y ? -1 : 1)).map(([rel, body]) => [rel, createHash("sha256").update(body).digest("hex")]));
-  const manifest = { schemaVersion: 1, trust: "brand-data", slug, brandId: brand.id, brandVersion: brand.version, cutoverAt: brand.value.cutoverAt, generatedAt: ctx.now().toISOString(), engineRoot: ctx.repoRoot, ...(head && dirty !== null ? { engineCommit: head, engineDirty: dirty !== "" } : {}), items, files: sums };
-  files.set("workspace.json", `${JSON.stringify(manifest, null, 2)}\n`);
-
   const tmp = `${dir}.${ctx.suffix()}.tmp`;
   const created = mkdirSync(dirname(dir), { recursive: true });
   let madeTmp = false;
+  let manifest: Record<string, unknown>;
+  let engineModules: string | null = null;
+  let linkFailed = false;
   try {
     mkdirSync(tmp);
     madeTmp = true;
+    // The engine's libraries, linked (not copied) as `<out>/node_modules`, so a script in `scripts/` imports `playwright` by name from any machine.
+    // The link is not a data file: it is in no `files` checksum, only named in the manifest. No libraries, or a link the system refuses
+    // (Windows without Developer Mode, a read-only filesystem...), is a warning, never a failure: the workspace is built without it.
+    const modulesDir = join(ctx.repoRoot, "node_modules");
+    if (statSync(modulesDir, { throwIfNoEntry: false })?.isDirectory()) {
+      try {
+        ctx.link(modulesDir, join(tmp, "node_modules"));
+        engineModules = modulesDir;
+      } catch {
+        linkFailed = true;
+      }
+    }
+    const sums = Object.fromEntries([...files].sort(([x], [y]) => (x < y ? -1 : 1)).map(([rel, body]) => [rel, createHash("sha256").update(body).digest("hex")]));
+    manifest = { schemaVersion: 1, trust: "brand-data", slug, brandId: brand.id, brandVersion: brand.version, cutoverAt: brand.value.cutoverAt, generatedAt: ctx.now().toISOString(), engineRoot: ctx.repoRoot, engineModules, ...(head && dirty !== null ? { engineCommit: head, engineDirty: dirty !== "" } : {}), items, files: sums };
+    files.set("workspace.json", `${JSON.stringify(manifest, null, 2)}\n`);
     for (const [rel, body] of files) {
       const file = join(tmp, rel);
       mkdirSync(dirname(file), { recursive: true });
@@ -858,9 +875,11 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
     throw error;
   }
   const count = (prefix: string) => Object.keys(items).filter((k) => k.startsWith(prefix)).length;
-  return out(args, manifest, trusted([
+  return out(args, manifest!, trusted([
     `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} script(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
     `Raíz del motor (engineRoot): ${ctx.repoRoot}`,
+    engineModules ? "Los scripts pueden importar las librerías del motor (por ejemplo playwright) sin rutas fijas." : linkFailed ? "Aviso: no se pudo enlazar node_modules del motor (en Windows requiere el Modo desarrollador o permisos de administrador); los scripts no podrán importar sus librerías por nombre." : "Aviso: el motor no tiene node_modules instalado (ejecuta pnpm install en el repo); los scripts no podrán importar sus librerías.",
+    ...tools.flatMap((t) => { const w = portabilityWarning(t.name, String(files.get(`scripts/${t.name}`))); return w ? [`Aviso: ${w}`] : []; }),
     "Es una copia de solo lectura de storage: no autoriza nada y no se importa. Las salidas van a otra carpeta.",
   ]));
 }
@@ -873,6 +892,7 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
     const filter = Object.fromEntries(["kind", "status", "origin"].flatMap((k) => (args.values.has(k) ? [[k, args.values.get(k)]] : [])));
     // `--tag` is an exact match on one of the asset's tags; combined with `--status hidden` it lists what a batch folder put aside.
     const tag = args.values.get("tag") ?? args.values.get("tags"); // `--tags a` is an alias of `--tag a` here: one exact tag
+    if ((args.values.has("tag") && args.values.has("tags")) || tag?.includes(",")) throw new InvalidInputError("--tag acepta una sola etiqueta exacta (sin comas, y no junto a --tags)");
     const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version })).filter((a) => tag === undefined || a.tags.includes(tag));
     return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map(text) : ["Sin assets."]));
   }

@@ -145,7 +145,7 @@ await toLegacyBucket(outDir, "example-outputs", withOut);
 await withOut.put("profiles/example-outputs/_outputs/editor/note.txt", Buffer.from("rendered"));
 const outRun = await runCli(["import", "--from", "legacy-bucket:example-outputs", "--dry-run"], env, createMemoryRepositories(), withOut);
 const outText = outRun.lines.join("\n");
-assert.match(outText, /Carpeta de salidas leída \(fuera de la marca\): _outputs\/\./);
+assert.match(outText, /Carpeta de salidas leída: _outputs\/ \(copiada del bucket de la marca\)\. Solo se lee: nunca se escribe en ella\./);
 assert.ok(!outText.includes(decoy) && !outText.includes("secret.txt"));
 console.log("  ok - legacy bucket: outputs come from _outputs/, never from outputs.base_dir");
 
