@@ -101,6 +101,12 @@ const none = await run("asset", "list", "example-posters", "--tag", "batch:daily
 assert.equal(none.lines.filter((l) => l.includes("batch:daily-2026-01-10")).length, 3, "exact tag match over every status");
 assert.ok((await run("asset", "list", "example-posters", "--tag", "batch:daily")).lines.some((l) => l.includes("Sin assets.")), "a tag filter is an exact match, not a prefix");
 assert.ok((await run("asset", "list", "example-posters", "--status", "approved", "--tag", "batch:daily-2026-01-10")).lines.some((l) => l.includes("Sin assets.")), "hidden renders do not match an approved filter");
+// One exact tag only: a comma or both spellings at once is refused, never guessed.
+for (const argv of [["--tag", "a,b"], ["--tags", "a,b"], ["--tag", "a", "--tags", "b"]]) {
+  const bad = await run("asset", "list", "example-posters", ...argv);
+  assert.equal(bad.exitCode, 2, argv.join(" "));
+  assert.match(bad.lines.join("\n"), /--tag acepta una sola etiqueta exacta/);
+}
 
 // Idempotent, and verification covers the batch assets (including their blobs).
 const again = await importBrand(repos, opts);
@@ -120,7 +126,7 @@ assert.deepEqual(await verifyBrand(repos, dir, blobs, env), []);
 // `brand workspace` materializes visible assets only: no batch render is copied out of storage.
 const out = join(work, "ws");
 assert.equal((await run("workspace", "example-posters", "--out", out)).exitCode, 0);
-const materialized = readdirSync(out, { recursive: true, encoding: "utf-8" }).filter((f) => statSync(join(out, f)).isFile()).map((f) => createHash("sha256").update(readFileSync(join(out, f))).digest("hex"));
+const materialized = readdirSync(out, { recursive: true, encoding: "utf-8" }).filter((f) => !f.startsWith("node_modules") && statSync(join(out, f)).isFile()).map((f) => createHash("sha256").update(readFileSync(join(out, f))).digest("hex"));
 for (const b of [A, B, C]) assert.ok(!materialized.includes(createHash("sha256").update(b).digest("hex")), "a hidden batch render is not materialized");
 assert.ok(materialized.includes(createHash("sha256").update(D).digest("hex")), "the visible asset still is");
 
@@ -168,6 +174,7 @@ for (let i = 1; i <= 11; i++) put2(`carousels/m${String(i).padStart(2, "0")}/bat
 const many = await importBrand(repos2, opts2);
 assert.equal((await repos2.assets.get(brand2.id, idOf(MANY))).value.tags.length, 20);
 assert.ok(many.skipped.some((e) => e.startsWith("carousels/m11/final/x.png") && e.includes("more than 20 batch tags")));
+assert.ok("carousels/m11/final/x.png" in many.legacy.manifest, "the over-limit file is not claimed: the legacy pass keeps it");
 // The same limit when `assets/**` owns the bytes: 19 own tags + 2 placement tags -> placement tags not added, reported.
 const OWN = png("own");
 put2("assets/own.png", OWN);

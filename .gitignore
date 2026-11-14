@@ -11,6 +11,7 @@
 profiles/*
 !profiles/example/
 !profiles/example-personal/
+!profiles/example-posters/
 
 # Reels engine spike (ACU-74). Untracked on purpose — it still has brand
 # literals baked in and hasn't been ported to system/ yet — but it is the ONLY
@@ -35,8 +36,8 @@ system/ig-carousel/output/
 system/ig-carousel/week-input.json
 
 # Rendered output of the template profiles (regenerated on demand).
-profiles/example/outputs/
-profiles/example-personal/outputs/
+profiles/example*/outputs/
+profiles/example*/config.local.yaml
 # Derived by the reel's storyboard step (per-card MP3s, sidecars, timeline).
 profiles/example/reels/*/audio/
 profiles/example/reels/*/timeline.json
@@ -95,5 +96,7 @@ profiles/example*/assets/meta/
 profiles/example*/carousels/*/versions/
 profiles/example*/carousels/*/chat.jsonl
 profiles/example*/carousels/*/
+# The one fictional batch folder of the poster example (proof of a portable brand tool); its renders are tracked.
+!profiles/example-posters/carousels/daily-2026-01-10/
 profiles/example*/assets/references/
 profiles/example*/assets/generated/

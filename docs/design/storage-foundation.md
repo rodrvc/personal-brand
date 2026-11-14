@@ -596,7 +596,9 @@ today's modules until its cutover (D12; S9a1, S9a2, S10).
 Same bytes are one asset however many folders or batches hold them: the tags are the union. If `assets/**` holds
 the same bytes, that item wins for kind, origin and status, and the batch tags are only added to its tags. A tag over
 50 characters is never truncated: the file is reported and falls to the legacy pass. A placement that would bring the
-asset past 20 tags is not added and is reported (its file is still claimed as an asset). A batch never hides an
+asset past 20 tags is never truncated either, and what happens depends on who holds the bytes. Between batch folders
+alone, the extra file is reported and falls to the legacy pass (it is not claimed). When an `assets/**` item holds the
+same bytes, the batch tags are not added and the file stays claimed by that item. A batch never hides an
 asset registered elsewhere: bytes already stored as anything but a hidden, unclassified, manual asset make the
 reimport report a conflict. As with `assets/**`, an owner edit of a stored batch asset (unhide, retag) is reported as
 a conflict on every reimport and keeps verification dirty until the folder or the row is reconciled. List a batch with
@@ -972,6 +974,7 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | P1 | Brand-owned tools: migration 0010 `brand_tools` (name = script file name, body, version, revisions), `tools` repository (memory + Postgres), importer claims flat `scripts/*.{mjs,js,cjs,ts,sh,py}`, `brand tool list\|get\|put`, purge table list | ~520 | S11b2b | a fictional brand's scripts import, verify byte for byte, and read back through the CLI; a `.bak` stays left behind |
 | P2 | `brand workspace <brand> --out <dir>`: a read-only, atomic materialization of a stored brand (documents, `scripts/`, `skills/`, `recipes/`, assets, `fonts.css`, `workspace.json`) for the brand's own scripts; the importer refuses such a folder; `brand show` lists tools; P1 follow-ups (a `scripts` file is not walked, dead `toolEntries` and unreachable `scriptRefusal` branch removed, tool bodies in the denylist scan) | ~320 | P1 | a fictional brand's workspace holds its tokens, scripts, guidance and assets byte for byte, `import` and `cutover` refuse it with exit 6 |
 | C1a | Batch folders (`carousels/<id>/` with a top-level `batch.json` and no `carousel.json`, made by brand-owned tools): the images directly inside `final` / `final-*` become hidden `unclassified` manual assets tagged `batch:<id>` and `batch:<id>/<folder>` (`storage/src/import/batches.ts`, shared register/verify in `asset-item.ts`); `brand asset list --tag` | ~400 | P1, S7b2a | batch renders import, dedupe, re-import and verify clean; workspace and library never show them |
+| C1b | Portable brand tools: `brand workspace` links `<out>/node_modules` to the engine's `node_modules` (named in the manifest as `engineModules`, never hashed) so a tool imports `playwright` by name; one shared scanner warns (never refuses) about machine-specific absolute paths in a tool on `tool put`, `workspace` and the import/cutover report; the import report says which outputs folder was read, from where, and that it is read-only; `asset list --tag` takes one exact tag; tracked fictional brand `profiles/example-posters` as end-to-end proof | ~600 | P2, C1a | the example tool runs `--check` from a workspace on any machine; a tool with a home-style path imports and cuts over with a notice, not a refusal |
 | S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
 
 20 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
