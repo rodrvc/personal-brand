@@ -7,6 +7,8 @@ interface PromptHeaderProps {
   stats: StatsResponse | null;
   onRegenerateUnpinned: () => void;
   regenerateUnpinnedError: string | null;
+  /** An archived brand: regenerating writes, so the trigger is disabled. */
+  readOnly?: boolean;
 }
 
 function summarize(doc: CarouselDocument) {
@@ -46,7 +48,7 @@ function relativeTime(iso: string): string {
   return t("promptHeader.relativeTime.days", { count: days });
 }
 
-export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpinnedError }: PromptHeaderProps) {
+export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpinnedError, readOnly = false }: PromptHeaderProps) {
   const { slideCount, libraryPieces, generatedBackgrounds, draftedTexts, awaitingImages } = summarize(doc);
 
   return (
@@ -91,7 +93,7 @@ export function PromptHeader({ doc, stats, onRegenerateUnpinned, regenerateUnpin
         {regenerateUnpinnedError && <p className="prompt-error">{regenerateUnpinnedError}</p>}
       </div>
       {/* Nothing to regenerate on an empty deck, and its dialog needs an active slide — disabled, not inert. */}
-      <button className="prompt-redo" onClick={onRegenerateUnpinned} disabled={slideCount === 0}>
+      <button className="prompt-redo" onClick={onRegenerateUnpinned} disabled={readOnly || slideCount === 0}>
         ↻ {t("promptHeader.regenerateUnpinned")}
       </button>
     </div>

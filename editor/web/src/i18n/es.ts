@@ -47,6 +47,8 @@ export const es = {
   "profilePicker.title": "Elige una",
   "profilePicker.titleAccent": "marca",
   "profilePicker.loading": "Cargando perfiles",
+  "profilePicker.archived": "Archivadas",
+  "profilePicker.archivedHint": "Solo lectura: una marca archivada no admite cambios.",
   "profilePicker.empty": "No se encontraron perfiles en la raíz configurada.",
   "profilePicker.noBrandTitle": "Este perfil no tiene brand.json configurado",
   "profilePicker.noBrandHint": "Sin brand.json configurado",
@@ -81,6 +83,7 @@ export const es = {
 
   // Editor route (routes/EditorRoute.tsx)
   "editorRoute.loading": "Abriendo carrusel",
+  "editorRoute.archivedReadOnly": "Marca archivada: solo lectura. Los cambios no se guardan.",
 
   // Top bar (editor/TopBar.tsx)
   "topbar.back": "← Carruseles",
@@ -322,6 +325,8 @@ export const es = {
   "editor.deleteBlocked": "Este objeto está bloqueado: desbloquéalo primero para poder eliminarlo.",
   "editor.conflictReloaded":
     "Este carrusel cambió en otra pestaña o por el chat. Se cargó la versión guardada; tus últimos cambios sin guardar no se aplicaron.",
+
+  "editor.versionMissing": "No se pudo guardar porque falta la versión del carrusel. Se cargó la versión guardada; vuelve a hacer tu último cambio.",
 
   // AI chat (editor/ChatPanel.tsx)
   "chat.title": "Chat",

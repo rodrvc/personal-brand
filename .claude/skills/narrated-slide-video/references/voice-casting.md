@@ -163,23 +163,38 @@ credit, every later one costs nothing.
 
 | Case | Where the cache lives |
 |---|---|
-| Casting for a brand in this repo | `profiles/<slug>/voice-samples/` — already ignored by `profiles/*` |
+| Casting for a brand in this repo | `$VOICE_WORKDIR/<slug>/voice-samples/` — `VOICE_WORKDIR` is an absolute path outside the repo that persists across sessions, e.g. `$HOME/voice-work` |
 | A standalone commission | the commission's working directory, outside the repo |
 | Never | anywhere under `.claude/` or `system/` |
 
-Verify rather than assume the path is ignored, because `profiles/example*` is
-un-ignored and would track anything placed under it:
-
-```bash
-git check-ignore -v profiles/<slug>/voice-samples/probe.mp3   # must print a rule
-```
+The check below runs **after** the directory is created, on its resolved path, and
+refuses anything inside this repo (a relative or not-yet-existing path would
+otherwise pass and land inside it). It is part of the script that follows.
 
 ```bash
 # The REAL paragraph the samples are judged on, already normalized.
 TXT='<first paragraph of the script>'
 
-CACHE="profiles/<slug>/voice-samples"        # or the commission's dir
+# $VOICE_WORKDIR is always required, with no default: guessing a path is how a cache lands
+# inside a repo. For a brand in this repo it is the shared voice-work directory; for a
+# standalone commission, set it to the commission's own absolute directory.
+VOICE_WORKDIR="${VOICE_WORKDIR:-}"
+[ -n "$VOICE_WORKDIR" ] || { echo "refused: set VOICE_WORKDIR to an absolute directory outside any repo (the commission dir for a standalone job)"; exit 1; }
+CACHE="$VOICE_WORKDIR/<slug>/voice-samples"   # or the commission's dir
+case "$CACHE" in /*) ;; *) echo "refused: not absolute"; exit 1;; esac
 mkdir -p "$CACHE"
+REAL="$(cd "$CACHE" && pwd -P)"
+# Refuse a cache inside ANY git checkout, whatever the shell's cwd is: the cache path's own repo,
+# this session's checkout, every worktree, and the main checkout (parent of --git-common-dir).
+# A directory in no repo (a standalone commission dir) passes.
+# `--path-format` needs git >= 2.31: on an older git that source is skipped (the three others still apply).
+{ git -C "$REAL" rev-parse --show-toplevel 2>/dev/null
+  git rev-parse --show-toplevel 2>/dev/null
+  git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p'
+  COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && dirname "$COMMON"; } \
+| while IFS= read -r CHECKOUT; do
+    case "$REAL/" in "$CHECKOUT"/*) echo "refused: $REAL is inside the repo ($CHECKOUT)"; exit 1;; esac
+  done || exit 1
 f="$CACHE/<voice-name>-$(printf '%s' "$TXT" | shasum | cut -c1-8).mp3"
 
 if [ -s "$f" ]; then

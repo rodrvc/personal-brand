@@ -4,6 +4,9 @@
   "private": true,
   "description": "Framework-free helpers (color, layout, LinkedIn copy rules) shared by system/ and editor/.",
   "type": "module",
+  "scripts": {
+    "test": "node test/run.mjs && node test/checks.test.mjs && node test/narration.test.mjs && node test/clips.test.mjs"
+  },
   "exports": {
     "./color": {
       "types": "./types/color.d.ts",
@@ -12,6 +15,18 @@
     "./layout": {
       "types": "./types/layout.d.ts",
       "default": "./src/layout.js"
+    },
+    "./checks": {
+      "types": "./types/checks.d.ts",
+      "default": "./src/checks.js"
+    },
+    "./clips": {
+      "types": "./types/clips.d.ts",
+      "default": "./src/clips.js"
+    },
+    "./narration": {
+      "types": "./types/narration.d.ts",
+      "default": "./src/narration.js"
     },
     "./linkedin": {
       "types": "./types/linkedin.d.ts",

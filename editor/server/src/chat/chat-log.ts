@@ -43,7 +43,7 @@ export type ChatRecord =
     };
 
 type WithoutStamp<R> = R extends unknown ? Omit<R, "id" | "at"> : never;
-type NewRecord = WithoutStamp<ChatRecord>;
+export type NewRecord = WithoutStamp<ChatRecord>;
 
 function logRelPath(carouselId: string): string {
   assertValidCarouselId(carouselId);
@@ -63,6 +63,11 @@ export function readChatLog(store: ProfileStore, carouselId: string): ChatRecord
     .map((line) => JSON.parse(line) as ChatRecord);
 }
 
+/** The record as it is logged: an id and a time in front of what the caller gave. */
+export function stampRecord(record: NewRecord): ChatRecord {
+  return { id: newChatId(record.role === "event" ? "evt" : "msg"), at: new Date().toISOString(), ...record } as ChatRecord;
+}
+
 /**
  * Appends one record to the chat log. Goes through `ProfileStore.appendLine`
  * (issue #99), which in `s3` mode reads the log's current content and etag
@@ -73,11 +78,7 @@ export function readChatLog(store: ProfileStore, carouselId: string): ChatRecord
  * did before that guarantee existed.
  */
 export async function appendChatRecord(store: ProfileStore, carouselId: string, record: NewRecord): Promise<ChatRecord> {
-  const full = {
-    id: newChatId(record.role === "event" ? "evt" : "msg"),
-    at: new Date().toISOString(),
-    ...record,
-  } as ChatRecord;
+  const full = stampRecord(record);
   await store.appendLine(logRelPath(carouselId), JSON.stringify(full));
   return full;
 }

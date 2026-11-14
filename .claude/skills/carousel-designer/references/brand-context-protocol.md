@@ -64,8 +64,10 @@ than settling for a 6 and calling it done.
 
 ## Step 5 — Freeze into `brand-spec.md`
 
-Write the verified result into `profiles/<name>/brand-spec.md` using
-`templates/brand-spec-template.md`. Include:
+Draft the verified result as the brand's `spec` document using
+`templates/brand-spec-template.md` (stored with `brand doc put <slug> spec`,
+which is the owner's: write the draft to a scratch file outside the repo and
+hand it over; never set the owner opt-in yourself). Include:
 
 - Logo, with light/dark variants and explicit permitted/forbidden uses.
 - Photography/UI assets, if applicable.
@@ -81,7 +83,7 @@ Write the verified result into `profiles/<name>/brand-spec.md` using
 This file becomes the thing every future design decision reads first —
 see `examples/worked-brand-spec.md` for what a finished one looks like.
 
-Then mirror it into `profiles/<name>/brand.json`, the machine-readable form
+Then mirror it into the `tokens` document (`brand.json` shape), the machine-readable form
 the render engine actually consumes (`loadBrand` in
 `system/ig-carousel/brand-schema.ts` reads and validates it). `brand-spec.md`
 stays the source of truth — it carries the provenance of each value —

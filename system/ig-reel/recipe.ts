@@ -228,8 +228,11 @@ export function loadReelRecipe(profileDir: string): ReelRecipe {
     throw error;
   }
 
-  const parsed = parseYaml(text, path);
+  return validateReelRecipe(parseYaml(text, path), path);
+}
 
+/** Validates a parsed recipe. `path` only names the source in errors: a file, or the stored recipe. */
+export function validateReelRecipe(parsed: Node, path: string): ReelRecipe {
   rejectUnknownKeys(parsed, "", path);
   for (const scope of ["defaults", "source", "curation", "map", "render", "voice", "music", "caption"]) {
     const node = parsed[scope];

@@ -6,7 +6,7 @@ name: brand-gate
 # or a commit made from a web UI all bypass them silently. This job is the
 # copy that runs whether or not anyone remembered to install anything.
 #
-# What it enforces is the contract in CLAUDE.md: `system/`, `.claude/`, `app/`
+# What it enforces is the contract in CLAUDE.md: `system/`, `.claude/`
 # and `core/` are the generic engine and may not carry a real brand's literals.
 # Brands live in `profiles/<slug>/`, outside version control.
 

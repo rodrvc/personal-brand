@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { getBrand, getProfileCard, listCarousels } from "../api/client";
+import { useArchivedBrand } from "../hooks/useArchivedBrand";
 import type { CarouselSummary, ProfileCardSummary } from "../api/types";
 import { Button } from "../components/Button";
 import { CarouselCoverCard } from "../components/CarouselCoverCard";
@@ -47,6 +48,7 @@ export function BrandHomeRoute() {
   const [carousels, setCarousels] = useState<CarouselSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { creating, createError, handleCreate } = useCreateCarousel(slug, accentColor);
+  const archived = useArchivedBrand(slug ?? "");
 
   useEffect(() => {
     if (!slug) return;
@@ -106,7 +108,7 @@ export function BrandHomeRoute() {
               {wordmark}
             </h1>
           </div>
-          <Button variant="primary" onClick={handleCreate} disabled={creating}>
+          <Button variant="primary" onClick={handleCreate} disabled={creating || archived === true}>
             {creating ? t("carouselList.creating") : t("carouselList.new")}
           </Button>
         </header>

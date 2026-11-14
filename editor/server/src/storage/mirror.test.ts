@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { FakeObjectStore } from "./fake-object-store.js";
+import { FakeObjectStore } from "@personal-brand/storage/blob";
 import {
   bucketHasBrand,
   fetchObjectOnDemand,

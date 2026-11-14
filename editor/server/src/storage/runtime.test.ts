@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
-import { S3ObjectStore } from "./s3-object-store.js";
+import { S3ObjectStore } from "@personal-brand/storage/blob";
 import {
   getStorageRuntime,
   initStorageRuntime,

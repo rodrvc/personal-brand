@@ -15,7 +15,7 @@ import { join } from "node:path";
 import {
   CLIP_DURATION_TOLERANCE_SECONDS,
   assertRangesTileComposition,
-  clipFileName,
+  clipFileForRange,
   clipRangesFor,
   concatListContents,
   framesArg,
@@ -387,7 +387,7 @@ test("framesArg formats the remotion --frames range", () => {
 test("clip file names sort in scene order with a zero-padded index", () => {
   const { scenes, cardIds } = fourSceneTimeline();
   const ranges = clipRangesFor(scenes, cardIds);
-  const names = ranges.map((r) => clipFileName(r, ranges.length));
+  const names = ranges.map((r) => clipFileForRange(r, ranges.length));
   assert(
     JSON.stringify(names) === JSON.stringify(["0-cover.mp4", "1-item-1.mp4", "2-item-2.mp4", "3-closing.mp4"]),
     `unexpected file names: ${JSON.stringify(names)}`,

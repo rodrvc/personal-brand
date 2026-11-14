@@ -281,3 +281,12 @@ export function listVersions(store: ProfileStore, carouselId: string): string[] 
     .sort()
     .reverse();
 }
+
+/** Whether a save changes the document's structure: slide count or kinds, or the template (swapped, added or removed). Shared by the folder and the stored save. */
+export function isStructuralChange(
+  previous: { slides?: Array<{ kind?: string }>; template?: { id?: string } },
+  next: { slides: Array<{ kind?: string }>; template?: { id?: string } },
+): boolean {
+  const kinds = (d: { slides?: Array<{ kind?: string }> }) => (d.slides ?? []).map((s) => s.kind).join(",");
+  return (previous.slides?.length ?? 0) !== next.slides.length || kinds(previous) !== kinds(next) || previous.template?.id !== next.template?.id;
+}

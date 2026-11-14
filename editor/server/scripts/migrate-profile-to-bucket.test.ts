@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { FakeObjectStore } from "../src/storage/fake-object-store.js";
+import { FakeObjectStore } from "@personal-brand/storage/blob";
 import type { S3StorageConfig } from "../src/storage/config.js";
 import { migrateProfile, parseArgs, resolveMigrationTarget } from "./migrate-profile-to-bucket.js";
 

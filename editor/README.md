@@ -9,8 +9,8 @@ state docs) for decisions, what works today, what's missing, and known
 pitfalls. Design rationale lives in
 [`../openspec/changes/editor-carruseles/design.md`](../openspec/changes/editor-carruseles/design.md).
 
-This module supersedes `app/` (the Tauri desktop editor), which is now
-deprecated but not deleted — see `../app/ESTADO.md`.
+This module superseded `app/` (the Tauri desktop editor), which was retired
+on 2026-10-26 and lives in git history.
 
 ## Folder map
 

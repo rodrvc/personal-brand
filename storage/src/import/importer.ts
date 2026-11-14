@@ -1,0 +1,328 @@
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+
+import { parse as parseYaml } from "yaml";
+
+import { AlreadyExistsError, blobKey, InvalidInputError, ObjectNotFoundError, VersionConflictError, type BlobStore, type DocumentKind, type WriteMeta } from "../contracts/index.ts";
+import { collectCarousels } from "./carousels.ts";
+import { collectContent } from "./content.ts";
+import { collectExports } from "./exports.ts";
+import { collectAssets } from "./assets.ts";
+import { planLegacy, type LegacyFile } from "./legacy.ts";
+import { OUTPUTS_LABEL, resolveOutputs } from "./outputs.ts";
+import { collectRuns } from "./runs.ts";
+import { isToolName, MAX_TOOL_BYTES } from "../revision-policy.ts";
+import { scriptRefusal } from "./allowlist.ts";
+import { putBlob } from "../blob/put-blob.ts";
+import { canon, found, readRegular, rereadChecked, sha256, splitFrontmatter as splitYaml, type ImportRepos, type Item } from "./shared.ts";
+
+export type { ImportRepos };
+type Repos = ImportRepos;
+
+/**
+ * What a pass did (or, in a dry run, would do) with one item:
+ * `created` is new in storage, `updated` replaced a row the importer itself wrote last, `unchanged` has the same
+ * source hash as the last import, and `conflict` was left alone because storage changed since, a write raced, or the
+ * repository refused the move (the reason is in `ImportReport.conflicts`).
+ */
+export type Outcome = "created" | "updated" | "unchanged" | "conflict";
+
+/** The brand was cut over: its folder is no longer a valid import source. */
+export class CutOverError extends Error {
+  constructor(readonly slug: string) {
+    super(`Brand "${slug}" is cut over; its folder is no longer imported`);
+    this.name = "CutOverError";
+  }
+}
+
+/** The folder is a `brand workspace` copy of storage: a read-only materialization, never an import source. */
+export class WorkspaceFolderError extends Error {
+  constructor(readonly dir: string) {
+    super(`${dir} is a brand workspace (workspace.json): a copy of storage, not an import source`);
+    this.name = "WorkspaceFolderError";
+  }
+}
+
+export interface ImportReport {
+  slug: string;
+  dryRun: boolean;
+  /** sha256 over the sorted per-item source hashes: equal roots mean an unchanged source. */
+  sourceRootHash: string;
+  items: Array<{ key: string; outcome: Outcome }>;
+  counts: Record<Outcome, number>;
+  /** Present in the folder but outside this importer's scope (or deliberately not imported); nothing is lost, nothing is deleted. */
+  notImported: string[];
+  /** Entries inside imported areas that were passed over, each with the reason, so nothing disappears silently. */
+  skipped: string[];
+  /** Informational lines that are not left-behind data (e.g. a stored take the import no longer claims). Printed, never blocking a cutover. */
+  notices: string[];
+  /** Files the legacy pass proved secret-like (dotfiles, key files, secret content): never uploaded, deliberately not counted as left behind. */
+  refused: string[];
+  /** Files it would not upload on a guess (unknown type, suspicious name): never uploaded, but left-behind data that blocks a cutover without `--partial`. */
+  unimported: string[];
+  /** Real path of the outputs root when it lies outside the brand folder (a second root, read confined to it); null otherwise. */
+  outputsRoot: string | null;
+  /** One `<key> (<reason>)` per item counted as `conflict`: why it was left alone. */
+  conflicts: string[];
+  /** Rules the folder implies (e.g. a recipe's `image_hosts`). Reported, never created: rules are owner decisions. */
+  proposals: Array<{ kind: string; params: Record<string, unknown>; from: string }>;
+  /**
+   * Files no collector imported, kept as content-keyed blobs: how many, the path -> sha256 manifest, and the paths new or
+   * different since the latest import run's manifest (empty on a first run).
+   */
+  legacy: { count: number; manifest: Record<string, string>; changed: string[] };
+  /** Where the source lives when it is not a folder (`legacy-bucket:<prefix><slug>`); then `outputsRoot` is the label `_outputs/`, not a temporary path. */
+  origin?: string;
+  /** Set when the pass threw part-way; the counts then cover only the items done before it. */
+  aborted?: string;
+}
+
+/** A guidance file as `{ description, body }`: the description comes from the YAML frontmatter. */
+function splitFrontmatter(raw: string): { description: string; body: string } {
+  const { yaml, body } = splitYaml(raw);
+  const description = yaml === null ? undefined : (parseYaml(yaml) as { description?: unknown } | null)?.description;
+  return { description: typeof description === "string" ? description.trim() : "", body };
+}
+
+/** Every importable item of a brand folder. Read-only on the folder. */
+function collect(dir: string, repos: Repos, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv, now: () => Date = () => new Date(), quietMissingOutputs = false): { items: Item[]; notImported: string[]; skipped: string[]; notices: string[]; refused: string[]; unimported: string[]; proposals: ImportReport["proposals"]; legacy: LegacyFile[]; outputsRoot: string | null } {
+  const items: Item[] = [];
+  const skipped: string[] = [];
+  const notices: string[] = [];
+  const proposals: ImportReport["proposals"] = [];
+  const root = realpathSync(dir); // the folder itself may be a symlink; what it contains may not point out of it
+  const handled = new Set<string>();
+  const docs: Array<[DocumentKind, string[], "json" | "text"]> = [
+    ["tokens", ["brand.json", "brand.yaml"], "json"],
+    ["config", ["config.yaml"], "json"],
+    ["identity", ["profile.md"], "text"],
+    ["spec", ["brand-spec.md"], "text"],
+  ];
+  for (const [kind, files, form] of docs) {
+    files.forEach((f) => handled.add(f));
+    let file = "";
+    let raw: Buffer | null = null;
+    for (const f of files) {
+      raw = readRegular(root, join(dir, f), f, skipped);
+      if (raw) {
+        file = f;
+        break;
+      }
+    }
+    if (!raw) continue;
+    const payload = form === "text" ? raw.toString("utf-8") : file.endsWith(".json") ? JSON.parse(raw.toString("utf-8")) : parseYaml(raw.toString("utf-8"));
+    const body = form === "text" ? { text: payload as string, schemaVersion: 1 } : { json: payload, schemaVersion: 1 };
+    items.push({
+      key: `document:${kind}`, entityType: "brand_document", hash: sha256(raw), payload,
+      read: (id) => found(repos.documents.get(id, kind, "", (b) => b)),
+      write: (id, expectedVersion, meta) => repos.documents.put(id, kind, "", body, { ...meta, expectedVersion }),
+    });
+  }
+  const templatesDir = join(dir, "templates");
+  for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).sort() : []) {
+    handled.add("templates");
+    const id = basename(file, ".json");
+    if (!file.endsWith(".json") || !/^[a-z0-9-]+$/.test(id)) {
+      skipped.push(`templates/${file} (not a <template-id>.json file)`);
+      continue;
+    }
+    const raw = readRegular(root, join(templatesDir, file), `templates/${file}`, skipped);
+    if (!raw) continue;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw.toString("utf-8"));
+    } catch {
+      payload = null;
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      skipped.push(`templates/${file} (not valid JSON)`);
+      continue;
+    }
+    items.push({
+      key: `template:${id}`, entityType: "brand_document", hash: sha256(raw), payload,
+      read: (brandId) => found(repos.documents.get(brandId, "template", id, (b) => b)),
+      write: (brandId, expectedVersion, meta) => repos.documents.put(brandId, "template", id, { json: payload, schemaVersion: 1 }, { ...meta, expectedVersion }),
+    });
+  }
+  const skillsDir = join(dir, "skills");
+  for (const name of existsSync(skillsDir) ? readdirSync(skillsDir).sort() : []) {
+    handled.add("skills");
+    const raw = readRegular(root, join(skillsDir, name, "SKILL.md"), `skills/${name}/SKILL.md`, skipped, true);
+    if (!raw) continue;
+    const payload = splitFrontmatter(raw.toString("utf-8"));
+    items.push({
+      key: `guidance:${name}`, entityType: "brand_guidance", hash: sha256(raw), payload,
+      read: async (id) => {
+        const g = await found(repos.guidance.get(id, name));
+        return g && { id: g.id, version: g.version, value: { description: g.description, body: g.body } };
+      },
+      write: (id, expectedVersion, meta) => repos.guidance.put(id, name, payload, { ...meta, expectedVersion }),
+    });
+  }
+  // Brand-owned scripts: flat files of `scripts/` with a script extension. Backups, subfolders, oversized or non-UTF-8 files are
+  // left unclaimed, so the legacy pass reports them as before. A script with a secret signature is claimed (never read into
+  // storage, never reported as unclaimed data) but listed in `refused`, which blocks a cutover.
+  const scriptsDir = join(root, "scripts");
+  // `scripts` may be a file or a link to one: only a directory is walked, anything else stays an unclaimed entry.
+  const scriptNames = statSync(scriptsDir, { throwIfNoEntry: false })?.isDirectory() ? readdirSync(scriptsDir).sort() : [];
+  const refusedScripts: string[] = [];
+  const claimed = new Set<string>();
+  for (const name of scriptNames) {
+    if (!isToolName(name)) continue;
+    const raw = readRegular(root, join(scriptsDir, name), `scripts/${name}`, skipped);
+    if (!raw) continue;
+    // A script is judged by its content, not its name: a secret-looking name alone does not refuse it.
+    const why = scriptRefusal(raw);
+    if (why) {
+      refusedScripts.push(`scripts/${name} (${why.why})`);
+      claimed.add(name);
+      continue;
+    }
+    const body = raw.toString("utf-8");
+    if (raw.length > MAX_TOOL_BYTES || raw.includes(0) || !Buffer.from(body).equals(raw)) {
+      skipped.push(`scripts/${name} (over ${MAX_TOOL_BYTES} bytes or not plain UTF-8 text)`);
+      continue;
+    }
+    claimed.add(name);
+    const payload = { description: "", body };
+    items.push({
+      key: `tool:${name}`, entityType: "brand_tool", hash: sha256(raw), payload,
+      read: async (id) => {
+        const t = await found(repos.tools.get(id, name));
+        return t && { id: t.id, version: t.version, value: { description: t.description, body: t.body } };
+      },
+      write: (id, expectedVersion, meta) => repos.tools.put(id, name, payload, { ...meta, expectedVersion }),
+    });
+  }
+  // Every entry is claimed (a refused script too: it still blocks a cutover through `refused`), so `scripts` is not reported as left behind.
+  if (claimed.size && claimed.size === scriptNames.length) handled.add("scripts");
+  const recipesDir = join(dir, "recipes");
+  for (const file of existsSync(recipesDir) ? readdirSync(recipesDir).sort() : []) {
+    handled.add("recipes");
+    if (!file.endsWith(".yaml")) {
+      skipped.push(`recipes/${file} (not a .yaml file)`);
+      continue;
+    }
+    const raw = readRegular(root, join(recipesDir, file), `recipes/${file}`, skipped, true);
+    if (!raw) continue;
+    const recipe = basename(file, ".yaml");
+    const payload = parseYaml(raw.toString("utf-8"));
+    const schemaVersion = Number.isInteger(payload?.version) && payload.version >= 1 ? payload.version : 1;
+    const hosts = payload?.source?.image_hosts;
+    if (Array.isArray(hosts) && hosts.every((h) => typeof h === "string")) proposals.push({ kind: "image_hosts", params: { hosts }, from: `recipe:${recipe}` });
+    items.push({
+      key: `recipe:${recipe}`, entityType: "brand_recipe", hash: sha256(raw), payload,
+      read: (id) => found(repos.recipes.get(id, recipe, (b) => b)),
+      write: (id, expectedVersion, meta) => repos.recipes.put(id, recipe, { params: payload, schemaVersion }, { ...meta, expectedVersion }),
+    });
+  }
+  const { outputs, unusable } = resolveOutputs(dir, root, basename(dir), env, notices, quietMissingOutputs);
+  if (unusable) skipped.push(`${OUTPUTS_LABEL} (${unusable})`);
+  const ctx = { dir, root, repos, blobs, outputs, carouselSlugs: new Set<string>(), used: new Set([...claimed].map((n) => join(scriptsDir, n))), skipped, notices, handled, now };
+  items.push(...collectContent(ctx), ...collectCarousels(ctx), ...collectAssets(ctx), ...collectRuns(ctx), ...collectExports(ctx));
+  const left = planLegacy({ root, outputs, used: ctx.used, blobs, notImported: readdirSync(dir).filter((f) => !handled.has(f)).sort(), skipped });
+  return { items, notImported: left.notImported, skipped: left.skipped, notices, refused: [...left.refused, ...refusedScripts].sort(), unimported: left.unimported, proposals, legacy: left.files, outputsRoot: outputs && !outputs.inside ? outputs.real : null };
+}
+
+/**
+ * What a pass would do for one item. Only a row whose version is the one the last import wrote can be judged by
+ * `source_hash`; any other version means storage was edited since (or the row never came from an import), which is a
+ * conflict whatever the hash says, so a stored edit is never reported as unchanged or overwritten.
+ */
+async function classify(item: Item, brandId: string | null, repos: Repos): Promise<{ outcome: Outcome; current: { version: number } | null; reason?: string }> {
+  const current = brandId ? await item.read(brandId) : null;
+  if (!current) return { outcome: "created", current: null };
+  // Not revisioned (exports): equal to the source or a conflict; there is no "updated" for a row that is never rewritten.
+  if (item.revisionless) return canon(current.value) === canon(item.payload) ? { outcome: "unchanged", current } : { outcome: "conflict", current, reason: "differs from storage; never rewritten" };
+  const lastImport = (await repos.revisions.list(item.entityType, current.id)).filter((r) => r.source === "import").at(-1);
+  if (lastImport?.version !== current.version) return { outcome: "conflict", current, reason: "storage changed since the last import" };
+  return { outcome: lastImport.sourceHash === item.hash ? "unchanged" : "updated", current };
+}
+
+/**
+ * Imports documents, templates, guidance, tools (`scripts/*`), recipes, content, carousels, assets (blobs) and recipe runs of a brand folder (slug = folder name). Idempotent per item via the
+ * source hash; never deletes; a dry run writes nothing at all, not even the brand or an `import_runs` row.
+ * Callers must apply the owner guard (non-example brands need the owner's opt-in); only the CLI does today.
+ */
+export async function importBrand(repos: Repos, opts: { from: string; dryRun: boolean; author: string; blobs?: BlobStore; env: NodeJS.ProcessEnv; now?: () => Date; extraSkipped?: string[]; origin?: string; /** Set for a source that is a temporary copy: the label reported instead of the (temporary) outputs path, and no "outputs root missing" notice. */ outputsLabel?: string }): Promise<ImportReport> {
+  const dir = resolve(opts.from);
+  const slug = basename(dir);
+  if (lstatSync(join(dir, "workspace.json"), { throwIfNoEntry: false })) throw new WorkspaceFolderError(dir);
+  const now = opts.now ?? (() => new Date());
+  const startedAt = now().toISOString();
+  let brand = await found(repos.brands.getBySlug(slug));
+  if (brand?.value.cutoverAt) throw new CutOverError(slug);
+  const { items, notImported, skipped, notices, refused, unimported, proposals, legacy, outputsRoot } = collect(dir, repos, opts.blobs, opts.env, opts.now, !!opts.outputsLabel);
+  if (!items.length) throw new InvalidInputError(`Nothing to import under ${dir}`);
+  // In place: the report shares these arrays with the items, which add notices while they are written.
+  skipped.unshift(...(opts.extraSkipped ?? []));
+
+  if (!opts.dryRun && !brand) {
+    const meta: WriteMeta = { expectedVersion: null, author: opts.author, source: "import", reason: "import" };
+    // A concurrent importer may have created the brand first: continue with its row.
+    brand = await repos.brands.create({ slug, displayName: slug }, meta).catch((e) => (e instanceof AlreadyExistsError ? repos.brands.getBySlug(slug) : Promise.reject(e)));
+  }
+  const manifest = Object.fromEntries(legacy.map((f) => [f.path, f.sha256]));
+  const lastManifest = brand ? ((await repos.importRuns.list(brand.id))[0]?.report.legacy as { manifest?: Record<string, string> } | undefined)?.manifest : undefined;
+  const report: ImportReport = {
+    slug, dryRun: opts.dryRun, items: [], notImported, skipped, notices, refused, unimported, proposals, conflicts: [], outputsRoot: opts.outputsLabel && outputsRoot ? opts.outputsLabel : outputsRoot, ...(opts.origin ? { origin: opts.origin } : {}),
+    legacy: { count: legacy.length, manifest, changed: lastManifest ? Object.keys(manifest).filter((p) => lastManifest[p] !== manifest[p]) : [] },
+    counts: { created: 0, updated: 0, unchanged: 0, conflict: 0 },
+    sourceRootHash: sha256([...items.map((i) => `${i.key}:${i.hash}`), ...legacy.map((f) => `legacy:${f.path}:${f.sha256}`)].join("\n")),
+  };
+  const record = (finishedAt: string) =>
+    repos.importRuns.record({ brandId: brand!.id, sourceKind: "folder", sourceRootHash: report.sourceRootHash, startedAt, finishedAt, report: { ...report } });
+  try {
+    for (const item of items) {
+      const planned = await classify(item, brand?.id ?? null, repos);
+      let outcome = planned.outcome;
+      if (planned.reason) report.conflicts.push(`${item.key} (${planned.reason})`);
+      if (!opts.dryRun && (outcome === "created" || outcome === "updated")) {
+        try {
+          await item.write(brand!.id, planned.current?.version ?? null, { expectedVersion: null, author: opts.author, source: "import", reason: "import", sourceHash: item.hash });
+        } catch (error) {
+          // A write landed between classify and write (a changed row, or one created meanwhile): report it and keep going,
+          // so the pass still leaves a report. The same for a row the repository refuses to move (e.g. an idea that would jump to published).
+          if (error instanceof InvalidInputError) report.conflicts.push(`${item.key} (${error.message})`);
+          else if (error instanceof AlreadyExistsError) report.conflicts.push(`${item.key} (created in storage during the pass)`); // before its parent class
+          else if (error instanceof VersionConflictError) report.conflicts.push(`${item.key} (storage changed during the pass)`);
+          else throw error;
+          outcome = "conflict";
+        }
+      }
+      report.items.push({ key: item.key, outcome });
+      report.counts[outcome]++;
+    }
+    // Content-keyed, so a re-run writes nothing new for an unchanged file and never overwrites a different one.
+    if (!opts.dryRun) for (const f of legacy) await putBlob(opts.blobs as BlobStore, brand!.id, rereadChecked(f.base, f.file, f.path, f.sha256));
+  } catch (error) {
+    // An unexpected failure still leaves a run row saying how far the pass got; the original error is what the caller sees.
+    report.aborted = (error as Error).message;
+    if (!opts.dryRun) await record(now().toISOString()).catch((e) => console.warn(`Could not record the aborted import run: ${(e as Error).message}`));
+    throw error;
+  }
+  if (!opts.dryRun) await record(now().toISOString());
+  return report;
+}
+
+/**
+ * Re-reads every item of the folder from storage and returns the keys whose stored value differs from the source;
+ * an item that owns blobs is also re-downloaded and hashed (reported as `<key> (blob)`). Without `blobs`, such items
+ * cannot be verified and are not listed by the collector, which reports them in `skipped` instead.
+ */
+export async function verifyBrand(repos: Repos, from: string, blobs: BlobStore | undefined, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const dir = resolve(from);
+  const brand = await repos.brands.getBySlug(basename(dir));
+  const bad: string[] = [];
+  const { items, legacy } = collect(dir, repos, blobs, env);
+  for (const f of legacy) {
+    const intact = await blobs!.get(blobKey(brand.id, f.sha256)).then((b) => sha256(b.body) === f.sha256, (e) => (e instanceof ObjectNotFoundError ? false : Promise.reject(e)));
+    if (!intact) bad.push(`legacy:${f.path} (blob)`);
+  }
+  for (const item of items) {
+    const stored = await item.read(brand.id);
+    if (!stored || canon(stored.value) !== canon(item.payload)) bad.push(item.key);
+    else if (item.verifyBlobs && !(await item.verifyBlobs(brand.id))) bad.push(`${item.key} (blob)`);
+  }
+  return bad;
+}

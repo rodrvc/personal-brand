@@ -1,16 +1,17 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { featuresOf, loadBrand } from "./brand-schema.js";
-import { resolveOutputBaseDir, resolveOutputSubfolder, resolveProfileDir } from "./profile.js";
+import { featuresOf } from "./brand-schema.js";
+import { openRenderSource, type RenderSource } from "./render-source.js";
 import { renderSlides } from "./render-batch.js";
 import { renderBrandMessage } from "./templates/brand-message.js";
 import type { CarouselInput } from "./types.js";
 import { verifyOrThrow } from "./verify-slides.js";
 
-function parseArgs(argv: string[]): { profile: string; input?: string } {
+function parseArgs(argv: string[]): { profile: string; input?: string; out?: string } {
   const profileIndex = argv.indexOf("--profile");
   const inputIndex = argv.indexOf("--input");
+  const outIndex = argv.indexOf("--out");
   const profile = profileIndex !== -1 ? argv[profileIndex + 1] : undefined;
   if (!profile) {
     throw new Error("--profile <slug> is required (which profile's brand and copy to render).");
@@ -18,6 +19,7 @@ function parseArgs(argv: string[]): { profile: string; input?: string } {
   return {
     profile,
     input: inputIndex !== -1 ? argv[inputIndex + 1] : undefined,
+    out: outIndex !== -1 ? argv[outIndex + 1] : undefined,
   };
 }
 
@@ -60,16 +62,25 @@ function verifyImagePolicyAware<T>(run: () => T): T {
 }
 
 async function main(): Promise<void> {
-  const { profile, input } = parseArgs(process.argv.slice(2));
+  const { profile, input, out } = parseArgs(process.argv.slice(2));
 
-  const profileDir = resolveProfileDir(profile);
+  // A folder brand reads `profiles/<slug>/`; a cut-over brand reads storage (D12). Either way: the same code below.
+  const { source, close } = await openRenderSource(profile);
+  try {
+    await renderBrandMessageCarousel(source, { input, out });
+  } finally {
+    await close();
+  }
+}
+
+async function renderBrandMessageCarousel(source: RenderSource, { input, out }: { input?: string; out?: string }): Promise<void> {
   // Derived from the template itself rather than hand-listed here. The
   // brand-message template is typography-only — no categories, no dates, no
   // list copy — which is what lets a personal-brand profile render from a
   // minimal brand.json.
-  const brand = loadBrand(profileDir, featuresOf([renderBrandMessage]));
+  const brand = await source.loadBrand(featuresOf([renderBrandMessage]));
 
-  const inputPath = input ?? join(profileDir, "carousels", "presentacion-marca.json");
+  const inputPath = source.inputPath(input, "presentacion-marca.json");
   const parsed = JSON.parse(readFileSync(inputPath, "utf-8")) as CarouselInput;
   const { slides } = parsed;
   if (slides.length === 0) {
@@ -90,21 +101,20 @@ async function main(): Promise<void> {
   // and the catch below is what puts that pointer in front of whoever hits it —
   // the guard's own message names the missing path, but not the doc that
   // explains what to put in it.
+  const binding = await source.verifyBinding("brand-message");
   const kept = verifyImagePolicyAware(() =>
     verifyOrThrow({
       slides,
       input: parsed,
       inputPath,
-      profileDir,
-      recipe: "brand-message",
+      ...binding,
     }),
   );
 
   // Which subfolder these land in is an output-location decision, not a brand
   // decision — it sits alongside `outputs.base_dir` in the profile's config,
   // not in brand.json next to colors and type.
-  const baseDir = resolveOutputBaseDir(profileDir);
-  const outputDir = join(baseDir, resolveOutputSubfolder(profileDir, "brand_message"));
+  const outputDir = join(source.outputRoot(out), source.outputSubfolder("brand_message"));
 
   await renderSlides({
     items: kept,

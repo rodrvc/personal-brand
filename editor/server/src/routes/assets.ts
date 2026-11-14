@@ -1,3 +1,4 @@
+import { NotFoundError } from "@personal-brand/storage/contracts";
 import Busboy from "busboy";
 import { createHash } from "node:crypto";
 import { Router } from "express";
@@ -14,7 +15,8 @@ import {
 
 import { invalidateAssetIndex, loadIndexCached } from "../asset-index-cache.js";
 import { ProfileStore, ProfileStoreError } from "../profile-store.js";
-import { getOrCreateThumbnail, resolveThumbWidth } from "../thumbnail.js";
+import { getOrCreateThumbnail, resolveThumbWidth, storedThumbnail } from "../thumbnail.js";
+import { assetIdOfPath, resolveStored, storedAssetEntries, storedAssetFile, type EditorStorage } from "../stored-read.js";
 
 /**
  * Max upload size, defensive rather than product-driven — the spec doesn't
@@ -39,11 +41,23 @@ function mimeFromPath(path: string): string {
   return table[ext] ?? "application/octet-stream";
 }
 
-export function assetsRouter(): Router {
+/** The 404s below hide why; a storage failure (anything but "not there" or a refused path) is still worth a line in the server log. */
+function logUnexpected(error: unknown): void {
+  if (error instanceof NotFoundError || error instanceof ProfileStoreError || (error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+  console.error("asset read failed:", error);
+}
+
+/** `storage` is the stored read path (S10a); uploads, edits and generation sidecars stay on the folder until S10b. */
+export function assetsRouter(storage?: EditorStorage): Router {
   const router = Router();
 
-  router.get("/api/profiles/:slug/assets", (req, res) => {
+  router.get("/api/profiles/:slug/assets", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json({ entries: await storedAssetEntries(stored) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const index = loadIndexCached(store.roots.profileDir);
       const usage = computeUsage(store.roots.profileDir);
@@ -199,9 +213,23 @@ export function assetsRouter(): Router {
    */
   router.get("/api/profiles/:slug/assets/files/*splat", async (req, res) => {
     try {
-      const store = new ProfileStore(req.params.slug);
       const wildcard = (req.params as unknown as Record<string, string | string[]>).splat;
       const relUnderAssets = Array.isArray(wildcard) ? wildcard.join("/") : String(wildcard ?? "");
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        const file = await storedAssetFile(stored, assetIdOfPath(relUnderAssets));
+        if (!file) {
+          res.status(404).end();
+          return;
+        }
+        // Content-addressed like the folder's hash names: the same URL is always the same bytes.
+        res.setHeader("Content-Type", file.mime);
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        // The blob cache lives under a dot folder (`~/.cache`), which `sendFile` would otherwise refuse.
+        res.sendFile(file.path, { dotfiles: "allow" });
+        return;
+      }
+      const store = new ProfileStore(req.params.slug);
       const relPath = `assets/${relUnderAssets}`;
       const buffer = await store.readFileAsync(relPath);
       res.setHeader("Content-Type", mimeFromPath(relPath));
@@ -210,7 +238,8 @@ export function assetsRouter(): Router {
       // safe to cache forever from the client's perspective.
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.send(buffer);
-    } catch {
+    } catch (error) {
+      logUnexpected(error);
       // Never leak *why* — ENOENT vs. confinement rejection both 404, per
       // the spec's "Path outside assets" scenario: "responds 404 without
       // reading the file".
@@ -231,15 +260,28 @@ export function assetsRouter(): Router {
    */
   router.get("/api/profiles/:slug/assets/thumbs/*splat", async (req, res) => {
     try {
-      const store = new ProfileStore(req.params.slug);
       const wildcard = (req.params as unknown as Record<string, string | string[]>).splat;
       const relUnderAssets = Array.isArray(wildcard) ? wildcard.join("/") : String(wildcard ?? "");
       const width = resolveThumbWidth(req.query.w as string | string[] | undefined);
+      const stored = await resolveStored(storage, req.params.slug);
+      const file = stored && (await storedAssetFile(stored, assetIdOfPath(relUnderAssets)));
+      if (stored) {
+        if (!file) {
+          res.status(404).end();
+          return;
+        }
+        res.setHeader("Content-Type", "image/webp");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        res.send(await storedThumbnail(stored.slug, file, width));
+        return;
+      }
+      const store = new ProfileStore(req.params.slug);
       const buffer = await getOrCreateThumbnail(store, relUnderAssets, width);
       res.setHeader("Content-Type", "image/webp");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.send(buffer);
-    } catch {
+    } catch (error) {
+      logUnexpected(error);
       res.status(404).end();
     }
   });

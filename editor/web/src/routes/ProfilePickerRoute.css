@@ -177,3 +177,7 @@
   font-weight: 500;
   color: var(--ui-ink-3);
 }
+
+/* Archived brands: a collapsed, visually secondary group at the end of the picker. */
+.picker-archived { margin-top: 2rem; opacity: 0.75; }
+.picker-archived > summary { cursor: pointer; font-weight: 600; }

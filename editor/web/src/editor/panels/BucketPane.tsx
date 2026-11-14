@@ -12,6 +12,8 @@ interface BucketPaneProps {
   activeIndex: number;
   onDocUpdate: (updater: (prev: CarouselDocument) => CarouselDocument) => void;
   stats: StatsResponse | null;
+  /** An archived brand: uploading is disabled. */
+  readOnly?: boolean;
 }
 
 function usedAssetIds(doc: CarouselDocument): Set<string> {
@@ -48,7 +50,7 @@ function isLibraryEntry(entry: AssetEntry): boolean {
   return entry.origin !== "reference";
 }
 
-export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: BucketPaneProps) {
+export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats, readOnly = false }: BucketPaneProps) {
   const [entries, setEntries] = useState<AssetEntry[] | null>(null);
   const [outputs, setOutputs] = useState<OutputVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +98,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
   const used = usedAssetIds(doc);
 
   async function handleUpload(files: FileList | null) {
-    if (!files || files.length === 0) return;
+    if (readOnly || !files || files.length === 0) return;
     for (const file of Array.from(files)) {
       try {
         await uploadAsset(slug, file);
@@ -293,7 +295,7 @@ export function BucketPane({ slug, doc, activeIndex, onDocUpdate, stats }: Bucke
           }}
         >
           {t("bucketPane.uploadDropzone")}
-          <input type="file" hidden onChange={(e) => void handleUpload(e.target.files)} />
+          <input type="file" hidden disabled={readOnly} onChange={(e) => void handleUpload(e.target.files)} />
         </label>
       </div>
 

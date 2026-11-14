@@ -8,7 +8,7 @@ import { join } from "node:path";
  * (`writeJsonIfRevision`, `appendLine`, `reserveOnce`) against a
  * `FakeObjectStore` injected via `setStorageRuntimeForTests` — the same
  * conditional-write semantics the real bucket enforces (proven separately
- * in `storage/s3-object-store.integration.test.ts` and, for these exact
+ * in `storage/test/s3-object-store.integration.test.ts` and, for these exact
  * ProfileStore-level scenarios, in
  * `profile-store-bucket-guarantees.integration.test.ts`), without needing a
  * bucket running for the normal `pnpm test` chain.
@@ -18,7 +18,7 @@ const root = mkdtempSync(join(tmpdir(), "profile-store-bucket-test-"));
 process.env.BRAND_PROFILES_DIR = root;
 
 const { ProfileStore, RevisionConflictError } = await import("./profile-store.js");
-const { FakeObjectStore } = await import("./storage/fake-object-store.js");
+const { FakeObjectStore } = await import("@personal-brand/storage/blob");
 const { setStorageRuntimeForTests, resetStorageRuntimeForTests } = await import("./storage/runtime.js");
 
 const SLUG = "acme";

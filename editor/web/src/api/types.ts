@@ -52,6 +52,8 @@ export interface ProfileListingEntry {
   slug: string;
   /** False when the profile has no `brand.json` yet — the picker shows it disabled with a hint instead of letting it fail once opened. */
   hasBrand: boolean;
+  /** An archived brand: listed apart and opened read-only (its writes are refused by the server). */
+  archived?: boolean;
   /** Present only when `hasBrand` is true. Absent (rather than a 500) when the profile's brand.json or asset index is broken. */
   card?: ProfileCardSummary;
 }

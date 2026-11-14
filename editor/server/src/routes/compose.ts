@@ -1,11 +1,10 @@
+import { NotFoundError, VersionConflictError } from "@personal-brand/storage/contracts";
 import { Router } from "express";
 
 import { loadBrand, type BrandTokens } from "../../../../system/ig-carousel/brand-schema.js";
 import { loadLayoutTemplate, LayoutTemplateError } from "../../../../system/ig-carousel/layout-template.js";
 import type { CarouselDocument, SlideObject } from "../../../../system/ig-carousel/carousel-document.js";
-import { loadIndex, type AssetEntry } from "../../../../system/assets/index.js";
 import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
-import { readProfilePrimaryLanguage } from "../../../../system/ig-carousel/profile.js";
 
 import {
   applyCompositionPlan,
@@ -13,9 +12,12 @@ import {
   buildCompositionPlan,
   buildEmptyDocument,
   draftCopyBrandContext,
+  folderPlannerSource,
   generateForSlot,
   generateImageBrandContext,
   suggestionForSlot,
+  type CompositionPlan,
+  type PlannerSource,
 } from "../compose/planner.js";
 import {
   assertValidCarouselId,
@@ -29,7 +31,13 @@ import {
 } from "../document-store.js";
 import { GenerationUnavailableError, type PieceGenerator } from "../ai/piece-generator.js";
 import { estimateImageCostCents, IMAGE_MODEL } from "../ai/pricing.js";
-import { ProfileStore, ProfileStoreError } from "../profile-store.js";
+import { ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
+import { handleStoreError } from "./store-errors.js";
+import { createStoredCarousel } from "../stored-create.js";
+import { messages } from "../messages.js";
+import { assertWritable, persistStoredDocument, storedPlannerSource, type StoredToken } from "../stored-compose.js";
+import { etagOf, guardStorage, isStoredError, resolveStored, storedBrandTokens, storedCarousel, storedCarouselRaw, storedStyle, storedTemplate, type EditorStorage, type StoredBrand } from "../stored-read.js";
+import type { SaveOutcome } from "../stored-write.js";
 
 /**
  * Pending plans held in memory between a *preview* POST `/carousels`
@@ -40,9 +48,40 @@ import { ProfileStore, ProfileStoreError } from "../profile-store.js";
  * web UI always calls plain `POST /carousels`, which builds and returns a
  * real document immediately — see that handler's own comment.
  */
-const pendingPlans = new Map<string, ReturnType<typeof buildCompositionPlan>>();
+const pendingPlans = new Map<string, PendingPlan>();
 
-export function composeRouter(getGenerator: (slug: string) => PieceGenerator): Router {
+/** A pending plan is forgotten this long after its last activity: the preview, or the end of its last apply (never while an apply is running). A partial apply therefore keeps its resume for an hour after each retry. */
+const PLAN_TTL_MS = 60 * 60 * 1000;
+let planClock = () => Date.now();
+/**
+ * Test hook: replaces the clock the plan TTL reads.
+ * @internal
+ */
+export function setPlanClock(clock: () => number): void { planClock = clock; }
+
+/** True while an apply for this plan is running: a re-plan under the same id would replace the plan it is paying for. */
+const planBusy = (key: string): boolean => pendingPlans.get(key)?.inFlight === true;
+
+/** Registers a fresh plan, first forgetting plans older than the TTL (never an in-flight one). Returns undefined when an apply is running for this id. */
+function registerPlan(key: string, plan: CompositionPlan): PendingPlan | undefined {
+  if (planBusy(key)) return undefined;
+  for (const [k, p] of pendingPlans) if (expired(p)) pendingPlans.delete(k);
+  const pending: PendingPlan = { plan, inFlight: false, touchedAt: planClock() };
+  pendingPlans.set(key, pending);
+  return pending;
+}
+
+const expired = (p: PendingPlan): boolean => !p.inFlight && planClock() - p.touchedAt > PLAN_TTL_MS;
+
+/** Forgets a plan by identity: a re-plan that replaced it meanwhile is left alone. */
+function dropPlan(key: string, pending: PendingPlan): void {
+  if (pendingPlans.get(key) === pending) pendingPlans.delete(key);
+}
+/** A plan waiting for `plan/apply`: once an apply has persisted, `resume` holds the document and the token (folder revision / stored row version) the next write must name, so a retry continues from it; `inFlight` refuses a second concurrent apply (two would both pay for the same slots). */
+interface PendingPlan { plan: CompositionPlan; inFlight: boolean; touchedAt: number; resume?: { document: CarouselDocument; token: unknown } }
+
+/** `storage` serves a brand cut over to storage, which so far can only create a blank carousel (S10b3); the rest stays on the folder. */
+export function composeRouter(getGenerator: (slug: string) => PieceGenerator, storage?: EditorStorage): Router {
   const router = Router();
 
   /**
@@ -69,6 +108,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
    */
   router.post("/api/profiles/:slug/carousels", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        const outcome = req.query.mode === "plan" || req.body?.preview === true ? await previewStoredPlan(found, req.body ?? {}) : await createStoredCarousel(found, req.body ?? {});
+        if (outcome.etag) res.setHeader("ETag", outcome.etag);
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const body = req.body as {
         title?: string;
@@ -110,6 +156,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
       const isPreview = req.query.mode === "plan" || body.preview === true;
       if (isPreview) {
+        if (planBusy(`${req.params.slug}/${carouselId}`)) return void res.status(409).json({ error: messages.planInFlight });
         if (!body.prompt || typeof body.prompt !== "string") {
           res.status(400).json({ error: `"prompt" is required for a plan preview` });
           return;
@@ -122,25 +169,13 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
           return;
         }
         const template = loadLayoutTemplate(store.roots.profileDir, templateId, loadBrand(store.roots.profileDir));
-        const plan = buildCompositionPlan(store, body.prompt, template, body.slideCount, body.assetIds);
-        pendingPlans.set(`${req.params.slug}/${carouselId}`, plan);
-
-        const estimatedCostCents = plan.visualSlots
-          .filter((v) => v.source === "generate")
-          .reduce((sum, v) => sum + (v.estimatedCostCents ?? 0), 0);
-
-        res.status(201).json({
-          carouselId,
-          templateId,
-          plan,
-          estimatedCostCents,
-          libraryPieces: plan.visualSlots.filter((v) => v.source === "library").length,
-          generatedPieces: plan.visualSlots.filter((v) => v.source === "generate").length,
-        });
+        const plan = await buildCompositionPlan(folderPlannerSource(store), body.prompt, template, body.slideCount, body.assetIds);
+        if (!registerPlan(`${req.params.slug}/${carouselId}`, plan)) return void res.status(409).json({ error: messages.planInFlight });
+        res.status(201).json(planPreviewBody(carouselId, templateId, plan));
         return;
       }
 
-      if (!body.title || !body.title.trim()) {
+      if (typeof body.title !== "string" || !body.title.trim()) {
         res.status(400).json({ error: "title is required" });
         return;
       }
@@ -165,10 +200,12 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
   router.post("/api/profiles/:slug/carousels/:id/plan/apply", async (req, res) => {
     try {
-      const store = new ProfileStore(req.params.slug);
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      const store = found ? undefined : new ProfileStore(req.params.slug);
       const key = `${req.params.slug}/${req.params.id}`;
-      const plan = pendingPlans.get(key);
-      if (!plan) {
+      let pending = pendingPlans.get(key);
+      if (pending && expired(pending)) { dropPlan(key, pending); pending = undefined; }
+      if (!pending) {
         res.status(404).json({ error: `No pending plan for carousel "${req.params.id}" — create one via POST /carousels first.` });
         return;
       }
@@ -180,71 +217,33 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
         return;
       }
       const templateId = requestedTemplateId ?? "explicativo";
-      const brand = loadBrand(store.roots.profileDir);
-      const template = loadLayoutTemplate(store.roots.profileDir, templateId, brand);
-      const generator = getGenerator(req.params.slug);
-
-      let document = await applyCompositionPlan(store, brand, template, templateId, plan, req.params.id, generator);
-      // Persisted immediately: `applyCompositionPlan` already drafted and
-      // wrote copy plus every `library`-sourced visual, so a failure in the
-      // generation loop below must not lose that work on retry either. No
-      // earlier read to carry a revision from here — this re-reads current,
-      // same as before.
-      let revision: string | null = await writeDocumentThroughRevision(store, document);
-
-      // Generate every visual slot the plan marked "generate" — done here,
-      // after the client confirmed the cost the POST /carousels response
-      // showed, rather than inside buildCompositionPlan/applyCompositionPlan
-      // themselves, which must stay free to call for a cost preview.
-      //
-      // Non-transactional by nature (each `generateForSlot` call pays for
-      // and writes an image asset that can't be un-paid-for on a later
-      // failure), so the document is written to disk after every successful
-      // slot instead of once at the end: if `generateForSlot` throws mid-loop
-      // (rate limit, network error), the slots generated so far are not
-      // orphaned — they're already attached to the persisted document, and a
-      // retried `plan/apply` only needs to cover the remaining slots rather
-      // than regenerating (and re-paying for) everything from slot zero.
-      //
-      // Each write below carries the *previous* write's own revision
-      // instead of re-reading "current" — `generateForSlot` calls an AI
-      // provider and can take a while, so re-reading right before the write
-      // would silently swallow a conflicting write (an editor PUT, a chat
-      // proposal) that landed on this exact carousel during that call.
-      try {
-        for (const visual of plan.visualSlots) {
-          if (visual.source !== "generate") continue;
-          // A retried `plan/apply` call replays the same `plan.visualSlots`
-          // list; slots a previous, partially-failed run already generated
-          // and persisted (see the `writeDocumentThroughRevision` call inside this loop) must be
-          // skipped rather than generated — and paid for — a second time.
-          if (isSlotGenerated(document, visual.slideIndex, visual.slot)) continue;
-          const entry: AssetEntry = await generateForSlot(store, generator, {
-            prompt: `${plan.promptText} — ${visual.slot}`,
-            kind: visual.kind,
-            canvas: { w: 1080, h: 1350 },
-            carouselId: req.params.id,
-            slot: visual.slot,
-          });
-          document = attachGeneratedAsset(brand, document, visual.slideIndex, visual.slot, entry.id);
-          revision = await writeDocumentThroughRevision(store, document, { expectedRevision: revision });
-        }
-      } catch (error) {
-        // Whatever slots succeeded before the failure are already on disk
-        // (written above, inside the loop); only the pending plan is left
-        // in place so the client can retry `plan/apply` and pick up where
-        // it left off, instead of re-running `buildCompositionPlan` and
-        // losing the "which slots are already generated" information.
-        res.status(202).json({
-          error: (error as Error).message,
-          partial: true,
-          document,
-        });
+      if (pending.inFlight) {
+        res.status(409).json({ error: messages.planInFlight });
         return;
       }
-
-      pendingPlans.delete(key);
-      res.status(201).json(document);
+      const generator = getGenerator(req.params.slug);
+      let outcome: PlanOutcome;
+      pending.inFlight = true; // set with the check above, before any await, so two requests cannot both pass
+      try {
+        if (found) {
+          await assertWritable(found);
+          outcome = await runPlanApply<StoredToken>({
+            source: storedPlannerSource(found), brand: await storedBrandTokens(found), template: () => storedTemplate(found, templateId), templateId, pending, carouselId: req.params.id, generator,
+            persist: (doc, prev) => persistStoredDocument(found, doc, prev),
+          });
+        } else {
+          const brand = loadBrand(store!.roots.profileDir);
+          outcome = await runPlanApply<string>({
+            source: folderPlannerSource(store!), brand, template: () => loadLayoutTemplate(store!.roots.profileDir, templateId, brand), templateId, pending, carouselId: req.params.id, generator,
+            persist: (doc, prev) => writeDocumentThroughRevision(store!, doc, prev === undefined ? { create: true } : { expectedRevision: prev }),
+          });
+        }
+        if (outcome.status === 201 || outcome.drop) dropPlan(key, pending);
+      } finally {
+        pending.inFlight = false;
+        pending.touchedAt = planClock();
+      }
+      res.status(outcome.status).json(outcome.body);
     } catch (error) {
       handlePlanError(error, res);
     }
@@ -259,6 +258,31 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
    */
   router.post("/api/profiles/:slug/carousels/:id/regenerate", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        const body = (req.body ?? {}) as { target?: { slideId?: string; objectId?: string; scope?: "unpinned" }; prompt?: unknown; preview?: boolean };
+        if (body.prompt !== undefined && typeof body.prompt !== "string") return void res.status(400).json({ error: `"prompt" must be a string` });
+        const { result, version, rowId } = await storedCarousel(found, req.params.id);
+        if (!result.valid) return void res.status(400).json({ error: "Invalid document", details: result.errors });
+        const target = body.target ?? {};
+        const { slideId, objectId } = target;
+        if (typeof slideId !== "string" || !slideId) return void res.status(400).json({ error: `"target.slideId" is required` });
+        if (objectId !== undefined && typeof objectId !== "string") return void res.status(400).json({ error: `"target.objectId" must be a string` });
+        const slideIndex = result.document.slides.findIndex((s) => s.id === slideId);
+        if (slideIndex === -1) return void res.status(404).json({ error: `No slide "${slideId}"` });
+        if (req.query.dryRun === "true" || body.preview === true) {
+          if (typeof objectId !== "string" || !objectId) return void res.status(400).json({ error: `Preview is only meaningful for an image target (objectId).` });
+          res.json({ prompt: finalImagePrompt(result.document, result.document.slides[slideIndex]!, objectId, body.prompt, await storedStyle(found)) });
+          return;
+        }
+        await assertWritable(found);
+        const { document: nextDoc, costCents } = await regenerateTarget(storedPlannerSource(found), getGenerator(req.params.slug), result.document, slideIndex, target, req.params.id, await storedBrandTokens(found), body.prompt);
+        // Stored revisions hold the document AFTER a save, so this write is the snapshot of a multi-piece replacement; it names the version read, so a save that landed meanwhile is a 409 (the generated image stays a candidate asset).
+        const saved = await persistStoredDocument(found, nextDoc, { rowId, version }, "snapshot");
+        res.setHeader("ETag", etagOf(saved.version));
+        res.json({ document: nextDoc, costCents });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       // Carries this read's revision into the final write below, instead of
       // that write re-reading "current" — the regeneration call in between
@@ -285,23 +309,8 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
       const isDryRun = req.query.dryRun === "true" || body.preview === true;
       if (isDryRun) {
-        const slide = doc.slides[slideIndex]!;
-        const style = loadBrandStyle(store.roots.profileDir);
-        if (target.objectId === "background" || target.objectId) {
-          const slotName =
-            target.objectId === "background"
-              ? `background for ${slide.kind}`
-              : slide.objects.find((o) => o.id === target.objectId)?.slot ?? target.objectId!;
-          const suggestion = body.prompt?.trim() || suggestionForSlot(doc.prompt.text, slotName, style, doc.title);
-          const brand = generateImageBrandContext(style);
-          const clauses = [
-            suggestion,
-            brand.imageDirection,
-            brand.styleKeywords.length > 0 ? `Style: ${brand.styleKeywords.join(", ")}.` : undefined,
-            brand.paletteWords ? `Use ${brand.paletteWords}.` : undefined,
-            brand.logoRules,
-          ].filter(Boolean);
-          res.json({ prompt: clauses.join("\n\n") });
+        if (target.objectId) {
+          res.json({ prompt: finalImagePrompt(doc, doc.slides[slideIndex]!, target.objectId, body.prompt, loadBrandStyle(store.roots.profileDir)) });
           return;
         }
         res.status(400).json({ error: `Preview is only meaningful for an image target (objectId).` });
@@ -312,24 +321,7 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
 
       const generator = getGenerator(req.params.slug);
       const brand = loadBrand(store.roots.profileDir);
-      let nextDoc = doc;
-      let costCents = 0;
-
-      if (target.objectId === "background") {
-        const result = await regenerateBackground(store, generator, nextDoc, slideIndex, req.params.id, brand, body.prompt);
-        nextDoc = result.document;
-        costCents = result.costCents;
-      } else if (target.objectId) {
-        const result = await regenerateObject(store, generator, nextDoc, slideIndex, target.objectId, req.params.id, brand, body.prompt);
-        nextDoc = result.document;
-        costCents = result.costCents;
-      } else if (target.scope === "unpinned") {
-        nextDoc = await regenerateUnpinned(store, generator, nextDoc, slideIndex, req.params.id, brand);
-      } else {
-        res.status(400).json({ error: `"target" must name an objectId or set scope: "unpinned"` });
-        return;
-      }
-
+      const { document: nextDoc, costCents } = await regenerateTarget(folderPlannerSource(store), generator, doc, slideIndex, target, req.params.id, brand, body.prompt);
       await writeDocumentThroughRevision(store, nextDoc, { expectedRevision: revision });
       res.json({ document: nextDoc, costCents });
     } catch (error) {
@@ -337,8 +329,15 @@ export function composeRouter(getGenerator: (slug: string) => PieceGenerator): R
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id/stats", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id/stats", async (req, res) => {
     try {
+      const found = await resolveStored(storage && guardStorage(storage), req.params.slug);
+      if (found) {
+        const { result } = await storedCarousel(found, req.params.id);
+        if (!result.valid) return void res.status(400).json({ error: "Invalid document", details: result.errors });
+        res.json({ carouselId: req.params.id, libraryRatio: libraryRatio(result.document), history: await storedLibraryHistory(found, req.params.id) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const doc = readValidatedDocument(store, req.params.id);
       const ratio = libraryRatio(doc);
@@ -408,7 +407,7 @@ interface RegenerateResult {
 }
 
 async function regenerateBackground(
-  store: ProfileStore,
+  source: PlannerSource,
   generator: PieceGenerator,
   doc: CarouselDocument,
   slideIndex: number,
@@ -423,15 +422,15 @@ async function regenerateBackground(
   }
   const prompt =
     promptOverride?.trim() ||
-    suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`, loadBrandStyle(store.roots.profileDir), doc.title);
-  const entry = await generateForSlot(store, generator, {
+    suggestionForSlot(doc.prompt.text, `background for ${slide.kind}`, await source.style(), doc.title);
+  const entry = await generateForSlot(source, generator, {
     prompt,
     kind: "background",
     canvas: doc.canvas,
     carouselId,
     slot: "background",
   });
-  const costCents = readGeneratedAssetCostCents(store, entry.id);
+  const costCents = await source.costCents(entry.id);
   const slides = doc.slides.map((s, i) => {
     if (i !== slideIndex) return s;
     const withNewBackground = {
@@ -448,7 +447,7 @@ async function regenerateBackground(
 }
 
 async function regenerateObject(
-  store: ProfileStore,
+  source: PlannerSource,
   generator: PieceGenerator,
   doc: CarouselDocument,
   slideIndex: number,
@@ -470,7 +469,7 @@ async function regenerateObject(
     const draft = await generator.draftCopy({
       carouselPrompt: doc.prompt.text,
       slides: [{ slideId: slide.id, kind: slide.kind, brief: doc.prompt.text, limits: { headline: 200 } }],
-      brand: draftCopyBrandContext(loadBrandStyle(store.roots.profileDir), readProfilePrimaryLanguage(store.roots.profileDir)),
+      brand: draftCopyBrandContext(await source.style(), await source.language()),
     });
     const newText = draft.slides[0]?.headline ?? object.text;
     const slides = doc.slides.map((s, i) => {
@@ -490,15 +489,15 @@ async function regenerateObject(
 
   const prompt =
     promptOverride?.trim() ||
-    suggestionForSlot(doc.prompt.text, object.slot ?? objectId, loadBrandStyle(store.roots.profileDir), doc.title);
-  const entry = await generateForSlot(store, generator, {
+    suggestionForSlot(doc.prompt.text, object.slot ?? objectId, await source.style(), doc.title);
+  const entry = await generateForSlot(source, generator, {
     prompt,
     kind: "photo",
     canvas: doc.canvas,
     carouselId,
     slot: object.slot ?? objectId,
   });
-  const costCents = readGeneratedAssetCostCents(store, entry.id);
+  const costCents = await source.costCents(entry.id);
   const slides = doc.slides.map((s, i) =>
     i === slideIndex
       ? {
@@ -514,16 +513,6 @@ async function regenerateObject(
   return { document: { ...doc, slides, updatedAt: new Date().toISOString() }, costCents };
 }
 
-/** Reads back the cost an image generation call just recorded in its own sidecar — `generateForSlot`/`AssetEntry` itself carries no cost field (system/assets/index.ts), so this is the one place the number survives past the call. */
-export function readGeneratedAssetCostCents(store: ProfileStore, assetId: string): number {
-  try {
-    const sidecar = store.readJson<{ costCents?: number }>(`assets/generated/${assetId}.json`);
-    return sidecar.costCents ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Owner decision: image generation is NEVER automatic, so "Regenerar lo no
  * fijado" — a bulk, no-per-piece-prompt action — only redrafts unpinned
@@ -533,7 +522,7 @@ export function readGeneratedAssetCostCents(store: ProfileStore, assetId: string
  * the only place a prompt (and its cost) is ever confirmed.
  */
 async function regenerateUnpinned(
-  store: ProfileStore,
+  source: PlannerSource,
   generator: PieceGenerator,
   doc: CarouselDocument,
   slideIndex: number,
@@ -544,7 +533,7 @@ async function regenerateUnpinned(
   const slide = next.slides[slideIndex]!;
   for (const object of slide.objects) {
     if (object.pinned || object.kind !== "text") continue;
-    next = (await regenerateObject(store, generator, next, slideIndex, object.id, carouselId, brand)).document;
+    next = (await regenerateObject(source, generator, next, slideIndex, object.id, carouselId, brand)).document;
   }
   return next;
 }
@@ -607,6 +596,144 @@ function previousCarouselsLibraryRatio(
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** The prompt the provider would receive for one image piece: the planner's suggestion (or the user's override) plus the brand's image direction. Shared by the folder and stored previews. */
+function finalImagePrompt(doc: CarouselDocument, slide: CarouselDocument["slides"][number], objectId: string, override: string | undefined, style: NonNullable<Parameters<typeof suggestionForSlot>[2]>): string {
+  const slotName = objectId === "background" ? `background for ${slide.kind}` : slide.objects.find((o) => o.id === objectId)?.slot ?? objectId;
+  const brand = generateImageBrandContext(style);
+  return [
+    override?.trim() || suggestionForSlot(doc.prompt.text, slotName, style, doc.title),
+    brand.imageDirection,
+    brand.styleKeywords.length > 0 ? `Style: ${brand.styleKeywords.join(", ")}.` : undefined,
+    brand.paletteWords ? `Use ${brand.paletteWords}.` : undefined,
+    brand.logoRules,
+  ].filter(Boolean).join("\n\n");
+}
+
+/** `previousCarouselsLibraryRatio` for a stored brand: the other carousels' ratio from their raw documents, newest first (one that vanished meanwhile is skipped). */
+async function storedLibraryHistory(s: StoredBrand, currentCarouselId: string): Promise<Array<{ carouselId: string; updatedAt: string; libraryRatio: number }>> {
+  const out: Array<{ carouselId: string; updatedAt: string; libraryRatio: number }> = [];
+  for (const head of await s.storage.carousels.list(s.brandId)) {
+    if (head.value.slug === currentCarouselId) continue;
+    try {
+      const { document, updatedAt } = await storedCarouselRaw(s, head.value.slug);
+      out.push({ carouselId: head.value.slug, updatedAt: typeof document.updatedAt === "string" ? document.updatedAt : updatedAt, libraryRatio: libraryRatioRaw(document) });
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
+  }
+  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** The body of a plan preview, whichever kind of brand built the plan. */
+function planPreviewBody(carouselId: string, templateId: string, plan: CompositionPlan) {
+  return {
+    carouselId,
+    templateId,
+    plan,
+    estimatedCostCents: plan.visualSlots.filter((v) => v.source === "generate").reduce((sum, v) => sum + (v.estimatedCostCents ?? 0), 0),
+    libraryPieces: plan.visualSlots.filter((v) => v.source === "library").length,
+    generatedPieces: plan.visualSlots.filter((v) => v.source === "generate").length,
+  };
+}
+
+/** `POST /carousels?mode=plan` for a stored brand: the same checks and answer as the folder's, over the stored library and templates. Writes nothing; the plan waits in memory for `plan/apply`. */
+async function previewStoredPlan(s: StoredBrand, body: Record<string, unknown>): Promise<SaveOutcome> {
+  const bad = (error: string): SaveOutcome => ({ status: 400, body: { error } });
+  if (body.id !== undefined && typeof body.id !== "string") return bad(`"id" must be a string`);
+  const carouselId = (body.id as string | undefined) ?? `carousel-${Date.now()}`;
+  assertValidCarouselId(carouselId);
+  const exists = await s.storage.carousels.get(s.brandId, carouselId, (b) => b).then(() => true, (error: unknown) => { if (error instanceof NotFoundError) return false; throw error; });
+  if (exists) return { status: 409, body: { error: messages.carouselExists(carouselId) } };
+  if (typeof body.prompt !== "string" || !body.prompt) return bad(`"prompt" is required for a plan preview`);
+  if (body.blank === true && body.templateId !== undefined) return bad(`"blank" and "templateId" cannot be sent together`);
+  const templateId = body.blank === true ? null : body.templateId === undefined ? "explicativo" : body.templateId;
+  if (templateId === null) return bad(`"templateId" cannot be null for a plan preview — planning needs a template's slots`);
+  if (typeof templateId !== "string") return bad(`"templateId" must be a string or null`);
+  if (body.assetIds !== undefined && !(Array.isArray(body.assetIds) && body.assetIds.every((id) => typeof id === "string"))) return bad(`"assetIds" must be a list of strings`);
+  const template = await storedTemplate(s, templateId);
+  const plan = await buildCompositionPlan(storedPlannerSource(s), body.prompt, template, typeof body.slideCount === "number" ? body.slideCount : undefined, body.assetIds as string[] | undefined);
+  if (!registerPlan(`${s.slug}/${carouselId}`, plan)) return { status: 409, body: { error: messages.planInFlight } };
+  return { status: 201, body: planPreviewBody(carouselId, templateId, plan) };
+}
+
+/** `drop`: the plan can never resume (a save landed since its last write), so it is spent. */
+type PlanOutcome = { status: 201 | 202 | 409; body: unknown; drop?: boolean };
+
+/**
+ * Executes a pending plan and persists it, for either kind of brand. `persist` writes a document and returns the token
+ * (folder: revision; stored: row version) the next write must carry. It runs after the copy and library visuals, then
+ * after every generated slot (an image cannot be un-paid, so a throw must not orphan the slots done), each time with the
+ * previous token instead of a re-read, so a write that landed during generation is a conflict, not swallowed. A provider
+ * failure is a 202 with the partial document and the plan stays pending (`planDropped: false`): a retry resumes from the
+ * document and token the last write left in `pending.resume` (never a rebuilt document, and the template is not loaded),
+ * so it skips the slots already persisted as generated and names the version it wrote. A slot whose image was paid for
+ * but whose write then failed (an outage) is generated again on the retry. A conflict (a save landed since) is also a 202
+ * with the partial document, but the plan is dropped (`planDropped: true`): its token is stale for good and the user's
+ * version stays on the row. The first write is create-only; a carousel that appeared since the preview is a 409 and
+ * drops the plan.
+ */
+async function runPlanApply<T>(p: {
+  source: PlannerSource;
+  brand: BrandTokens;
+  /** Loaded only for the first write: a resume never rebuilds the document. */
+  template: () => Parameters<typeof applyCompositionPlan>[2] | Promise<Parameters<typeof applyCompositionPlan>[2]>;
+  templateId: string;
+  pending: PendingPlan;
+  carouselId: string;
+  generator: PieceGenerator;
+  persist: (doc: CarouselDocument, prev?: T) => Promise<T>;
+}): Promise<PlanOutcome> {
+  const { plan } = p.pending;
+  let document: CarouselDocument;
+  let token: T;
+  if (p.pending.resume) {
+    ({ document } = p.pending.resume);
+    token = p.pending.resume.token as T;
+  } else {
+    document = await applyCompositionPlan(p.source, p.brand, await p.template(), p.templateId, plan, p.carouselId, p.generator);
+    try {
+      token = await p.persist(document); // create-only: a carousel that appeared since the preview is never overwritten
+    } catch (error) {
+      if (!(error instanceof VersionConflictError || error instanceof RevisionConflictError)) throw error;
+      return { status: 409, body: { error: messages.carouselExists(p.carouselId), planDropped: true }, drop: true };
+    }
+    p.pending.resume = { document, token };
+  }
+  try {
+    for (const visual of plan.visualSlots) {
+      if (visual.source !== "generate") continue;
+      if (isSlotGenerated(document, visual.slideIndex, visual.slot)) continue;
+      const entry = await generateForSlot(p.source, p.generator, { prompt: `${plan.promptText} — ${visual.slot}`, kind: visual.kind, canvas: { w: 1080, h: 1350 }, carouselId: p.carouselId, slot: visual.slot });
+      document = attachGeneratedAsset(p.brand, document, visual.slideIndex, visual.slot, entry.id);
+      token = await p.persist(document, token);
+      p.pending.resume = { document, token };
+    }
+  } catch (error) {
+    // Only provider failures and version conflicts are partial results; a storage outage or an archived brand is the route's error.
+    if (isStoredError(error) && !(error instanceof VersionConflictError)) throw error;
+    const drop = error instanceof VersionConflictError || error instanceof RevisionConflictError;
+    return { status: 202, body: { error: (error as Error).message, partial: true, document, planDropped: drop }, drop };
+  }
+  return { status: 201, body: document };
+}
+
+/** Regenerates what `target` names (a background, an object, or a slide's unpinned text) and returns the new document and what it cost. Throws `RegenerateBlockedError` (400) for an unusable target. */
+async function regenerateTarget(
+  source: PlannerSource,
+  generator: PieceGenerator,
+  doc: CarouselDocument,
+  slideIndex: number,
+  target: { objectId?: string; scope?: "unpinned" },
+  carouselId: string,
+  brand: BrandTokens,
+  prompt?: string,
+): Promise<RegenerateResult> {
+  if (target.objectId === "background") return regenerateBackground(source, generator, doc, slideIndex, carouselId, brand, prompt);
+  if (target.objectId) return regenerateObject(source, generator, doc, slideIndex, target.objectId, carouselId, brand, prompt);
+  if (target.scope === "unpinned") return { document: await regenerateUnpinned(source, generator, doc, slideIndex, carouselId, brand), costCents: 0 };
+  throw new RegenerateBlockedError(`"target" must name an objectId or set scope: "unpinned"`);
+}
+
 class RegenerateBlockedError extends Error {}
 
 /**
@@ -619,6 +746,8 @@ class RegenerateBlockedError extends Error {}
  * "reload and diff" flow the way the editor PUT route's 409 does.
  */
 function handlePlanError(error: unknown, res: import("express").Response): void {
+  // Storage errors (a stored brand's create) share the profile routes' mapping: 404, 403, 400, 503.
+  if (isStoredError(error)) return handleStoreError(error, res);
   if (
     error instanceof ProfileStoreError ||
     error instanceof DocumentStoreError ||

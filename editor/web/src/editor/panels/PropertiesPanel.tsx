@@ -11,6 +11,8 @@ import type { LocaleKey } from "../../i18n";
 import "./PropertiesPanel.css";
 
 interface PropertiesPanelProps {
+  /** An archived brand: the asset upload is disabled (the server refuses it). */
+  readOnly?: boolean;
   slug: string;
   brand: BrandTokens;
   template: LayoutTemplate;
@@ -79,6 +81,7 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
             doc={doc}
             activeIndex={activeIndex}
             onDocUpdate={props.onDocUpdate}
+            readOnly={props.readOnly}
             stats={props.stats}
           />
         )}

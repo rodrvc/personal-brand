@@ -29,8 +29,8 @@ never published.
 
 ## pnpm, not npm
 
-The repo is a pnpm workspace: `app/` and `system/ig-reel/remotion/` are
-members, and one install at the root mounts all three projects. Installing a
+The repo is a pnpm workspace: `system/ig-reel/remotion/`, `core/`, `storage/` and
+`editor/*` are members, and one install at the root mounts all of them. Installing a
 member on its own builds a second, differently-shaped `node_modules` beside
 the one the workspace links, and resolves a tree the lockfile never
 described.
@@ -41,16 +41,23 @@ the hooks and CI both run is a Python script.
 ## Registering a brand
 
 ```bash
-pnpm init:profile
+BRAND_OWNER_OPT_IN=<slug> pnpm --filter @personal-brand/storage brand create <slug> --name "<display name>" --owner-opt-in <slug>
 ```
 
-An interactive terminal prompt. It copies `profiles/example/` as the starting
-point, asks which of the brand's terms must be watched, appends them to the
-local file, and refuses to finish unless the new folder is genuinely outside
-git.
+A brand lives in storage (`brand create`, owner opt-in required). `pnpm
+init:profile` only prints this pointer and writes nothing. Then add the
+brand's terms (slug, domain, handle, city) to `scripts/brand-denylist.local.txt`
+by hand (git-ignored). A brand made with `brand create` is not renderable by
+today's modules until its cutover (D12; S9a/S10).
 
-Creating a profile by hand instead skips the term registration — and a gate
-with no terms to search for reports success without checking anything.
+Skipping the term registration is the risk: a gate with no terms to search
+for reports success without checking anything.
+
+## Backup drill
+
+A write to a remote database needs a recent verified restore drill (`brand backup drill`).
+Point `DATABASE_URL` at a direct connection, not a pooler: `pg_dump`, the exported
+snapshot and `CREATE DATABASE` need a real session.
 
 ## Running the editor
 
@@ -97,6 +104,7 @@ S3_REGION=us-east-1                   # default
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 S3_PREFIX=profiles/                   # default; every key is <prefix><slug>/...
+LEGACY_BUCKET_TMPDIR=               # where `brand import --from legacy-bucket:<marca>` puts its temporary copy (default: the OS temp folder)
 S3_FORCE_PATH_STYLE=true              # default; MinIO/most self-hosted S3 need this
 PROFILE_CACHE_DIR=/tmp/personal-brand-profile-cache   # default; local mirror root
 ```
@@ -115,6 +123,13 @@ adopted: pulls anonymously, persists data on its named volume across
 `docker compose down && up`, and enforces `If-Match`/`If-None-Match` on
 `PutObject`. The same `S3_*` variables point at a real MinIO deployment,
 Railway bucket, Cloudflare R2 or AWS S3 without any code change.
+
+The shared `@personal-brand/storage` package also keeps a read-only blob
+cache (content-addressed files fetched from the bucket by sha256) under
+`BLOB_CACHE_DIR`, default `~/.cache/personal-brand/blobs`. It is shared by
+every process and brand, never uploads anything, and is always safe to
+`rm -rf` (which also clears `*.tmp` files left by a crashed fill). There is
+no size cap yet.
 
 In `s3` mode the server keeps a local mirror under `PROFILE_CACHE_DIR`
 (`BRAND_PROFILES_DIR`/`BRAND_OUTPUTS_ROOT` are pointed at it automatically)
@@ -204,6 +219,79 @@ a conflict and left untouched, and it's safe to re-run at any time. Run it
 with `BRAND_OUTPUTS_ROOT` unset — that variable is the editor's own
 s3-mode mirror redirect, and the migration needs to read the real local
 output tree, not a mirror.
+
+## Postgres and migrations (`storage/`)
+
+Structured data lives in Postgres (design: `docs/design/storage-foundation.md`).
+Start the local database (Postgres 17 on host port 5442; override with
+`POSTGRES_PORT`), then apply the migrations:
+
+```bash
+docker compose -f docker-compose.storage.yml up -d postgres
+export DATABASE_MIGRATOR_URL=postgres://brand_migrator:local-dev-only@localhost:5442/brands
+pnpm --filter @personal-brand/storage migrate      # idempotent; safe to run concurrently
+```
+
+`migrate` reads `DATABASE_MIGRATOR_URL` and falls back to `DATABASE_URL`;
+run it as `brand_migrator`, which creates and owns the product schema. The port is bound to
+127.0.0.1 only. The container's init SQL creates the roles
+(`brand_migrator`, `brand_owner`, `brand_app`, `brand_reader`,
+`brand_purger`) with local-only placeholder passwords; migrations never
+create roles and only `GRANT` to those that exist. All tables live in
+the Postgres schema `content_platform` (created by the runner; nothing in
+`public`), so the database can be shared with other products: configuration
+is only `DATABASE_URL` / `DATABASE_MIGRATOR_URL` (+ `DATABASE_PREPARE`), and
+`connect()` sets the `search_path`. Behind a transaction-mode pooler, which
+may drop that startup parameter, provision `ALTER ROLE <role> SET search_path
+= content_platform` instead. The storage integration
+tests need a superuser `DATABASE_URL`
+(`postgres://postgres:local-dev-only@localhost:5442/brands`), SKIP when it
+is unset or unreachable, and use a throwaway `test_<random>` schema.
+
+### The `brand` CLI
+
+```bash
+pnpm --filter @personal-brand/storage brand import --from profiles/example --dry-run
+pnpm --filter @personal-brand/storage brand import --from profiles/example
+pnpm --filter @personal-brand/storage brand cutover example --confirm example --partial
+```
+
+`assets/**` are uploaded to the bucket, so a real import needs the same `S3_*`
+variables as the editor (`S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY`, optional `S3_ENDPOINT`, `S3_REGION`,
+`S3_FORCE_PATH_STYLE`). Without them the assets are not imported: they are
+listed under "Omitidos" and a cutover refuses until they are.
+
+These commands only accept the fictional example brands (slug `example` or
+`example-*`). Any other brand is refused, `--dry-run` included, before the
+database or the folder is touched. Only the owner can lift that, by hand and
+for one brand at a time, after approving that brand's source: set
+`BRAND_OWNER_OPT_IN=<slug>` **and** pass `--owner-opt-in <slug>` (same slug,
+never a wildcard). Agents and automation must never set either. This is a
+speed bump against mistakes, not a security boundary.
+
+Run these from the repo root, with `DATABASE_URL` set to a `brand_owner`
+connection (the importer writes guidance and import runs, which are
+owner-only).
+
+- `--from` is the brand's folder; its name is the brand slug. A relative path
+  resolves against where you ran the command (pnpm sets `INIT_CWD`), and a
+  leading `~` is expanded.
+- `--dry-run` reads the folder and the database, prints what would change and
+  writes nothing.
+- Without it, `import` is idempotent: an unchanged source is a no-op, a
+  changed source updates only rows the importer itself wrote last, and anything
+  edited in storage since is reported as a conflict (exit 1) and left alone.
+  The folder is never modified or deleted.
+- Real writes to a non-localhost database are refused until the backup drill
+  exists (S8).
+- `cutover <slug> --confirm <slug>` runs a final import, verifies it and then
+  marks the brand cut over and writes `.storage-cutover` in its folder (the
+  folder is not deleted). It refuses while anything the importer does not carry
+  yet (assets, reels, outputs, flat carousel inputs...) is left in the folder, so
+  nothing is stranded; `--partial` acknowledges that. Until S7b2 lands, the
+  example brands are cut over with `--partial`. Without `--from`, the folder is
+  `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
 
 ## Specs (OpenSpec)
 

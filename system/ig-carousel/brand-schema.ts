@@ -431,6 +431,18 @@ export function loadBrand(profileDir: string, features: BrandFeature[] = []): Br
     throw error;
   }
 
+  return parseBrandTokens(parsed, profileDir, features);
+}
+
+/**
+ * Validates already-parsed tokens, wherever they were read from. `label` names the source in every error: the
+ * profile folder for `loadBrand`, the stored brand for a storage read. Same checks, same messages, one copy.
+ */
+export function parseBrandTokens(parsed: unknown, label: string, features: BrandFeature[] = []): BrandTokens {
+  const profileDir = label;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    fail(profileDir, "the tokens must be a JSON object");
+  }
   const brand = parsed as BrandTokens;
 
   if (!brand.colors || typeof brand.colors !== "object") {

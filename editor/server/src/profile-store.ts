@@ -20,8 +20,8 @@ import { updateManifestEntry } from "./storage/mirror.js";
 
 /**
  * The ONLY module in `editor/server` that touches the filesystem for
- * profile data. Every route handler goes through this, mirroring the
- * Tauri app's `resolver_dentro()` (design.md D12, `app/src-tauri/src/main.rs`)
+ * profile data. Every route handler goes through this, modelled on
+ * the retired Tauri app's path guard (design.md D12, in git history)
  * but with two allowed roots instead of one: a profile's own directory, and
  * that profile's resolved `outputs.base_dir` — which per `resolveOutputBaseDir`
  * may sit entirely outside the repo.

@@ -4,9 +4,6 @@
 > Lee [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) antes de tocar nada:
 > explica las tres capas y las fronteras entre módulos.
 >
-> **¿Vas a tocar el editor de afiches (`app/`)?** Lee además
-> [`app/ESTADO.md`](app/ESTADO.md): decisiones, porqués y trampas conocidas.
->
 > **¿Clon nuevo, o vas a instalar, commitear o dar de alta una marca?** Lee
 > [`docs/SETUP.md`](docs/SETUP.md) primero. Un clon no trae los hooks
 > puestos, y el gestor es pnpm.
@@ -16,11 +13,18 @@
 >    nombres, ni colores, ni ciudades, ni copy real. El repo es el motor;
 >    las marcas viven en `profiles/<marca>/`, fuera de git. Test: quien
 >    clone el repo no debe poder deducir para qué marca se construyó.
-> 2. **Los módulos no se rompen entre sí.** Se comunican por los archivos
->    de `profiles/`, nunca importando código ajeno.
+> 2. **Los módulos no se rompen entre sí.** Nunca importan código ajeno;
+>    comparten datos solo por `@personal-brand/storage` (`BlobStore` +
+>    repositorios). Lógica pura en `core/`, I/O compartido en `storage/`.
+>    Ningún módulo crea tablas fuera de `storage/migrations` ni claves
+>    del bucket fuera de `storage` (esquema de claves en `storage/src/contracts/keys.ts`).
 > 3. **El sistema de markdown y los agentes de `.claude/agents/` deben
->    seguir funcionando igual.** La app es un módulo más y escribe los
->    mismos archivos.
+>    seguir funcionando igual.** Cada módulo (p. ej. `editor/`) escribe
+>    los mismos archivos.
+>
+> Transición: hasta el corte de cada marca (D12 en
+> `docs/design/storage-foundation.md`), los módulos siguen leyendo
+> `profiles/<marca>/` y las reglas 1 y 3 aplican tal cual.
 
 ### EQUIPO
 

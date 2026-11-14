@@ -69,5 +69,26 @@ services:
       aws --endpoint-url http://storage:9000 s3api head-bucket --bucket ${S3_BUCKET:-brand-profiles} && echo 'bucket ready'
       "
 
+  # Postgres for the structured data (`storage/`, see docs/SETUP.md). The
+  # init script creates the cluster-level roles; migrations never do.
+  # Host port 5442 avoids the usual 5432; override with POSTGRES_PORT.
+  postgres:
+    image: postgres:17
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5442}:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-dev-only
+      POSTGRES_DB: brands
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./storage/docker/init-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "brands"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
 volumes:
   storage-data:
+  postgres-data:

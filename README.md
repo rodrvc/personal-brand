@@ -6,7 +6,7 @@ one of them.
 
 The repo is split in two, and the split is the whole design:
 
-- **the engine** — `system/`, `.claude/`, `app/`, `core/` — generic, publishable,
+- **the engine** — `system/`, `.claude/`, `core/` — generic, publishable,
   and free of any real brand's literals.
 - **the brands** — `profiles/<slug>/` — identity, tokens, config, recipes and
   business rules. Git-ignored; they live on disk next to the engine and travel
@@ -27,12 +27,10 @@ It is safe to run again at any time.
 Then register a brand:
 
 ```bash
-pnpm init:profile
+BRAND_OWNER_OPT_IN=<slug> pnpm --filter @personal-brand/storage brand create <slug> --name "<display name>" --owner-opt-in <slug>
 ```
 
-An interactive terminal prompt. It asks for a slug, copies `profiles/example/`
-as the starting point, asks which of the brand's terms must be watched, and
-refuses to finish unless the new folder is genuinely outside git.
+Brands live in storage; `pnpm init:profile` only prints this pointer. See `docs/SETUP.md`.
 
 Everyday commands:
 
@@ -83,10 +81,9 @@ plain list of everything you meant to keep out of sight.
 │  ├─ guides/         operating guides
 │  └─ config/         schemas and config conventions
 ├─ editor/            carousel editor (web) — one module, not the product
-├─ app/               desktop module (Tauri) — deprecated, superseded by editor/
 ├─ core/              shared logic between modules
 ├─ profiles/
-│  ├─ example/        fictional profile, tracked — the template init:profile copies
+│  ├─ example/        fictional profile, tracked — the template for the example brands
 │  └─ example-personal/
 ├─ scripts/           setup, profile registration, the commit gate
 └─ docs/              architecture and rules
@@ -132,4 +129,4 @@ Full guide: [`system/guides/workflow.md`](system/guides/workflow.md).
 - [`CLAUDE.md`](CLAUDE.md) — operating guide for agents in this repo.
 - [`system/config/brand.schema.md`](system/config/brand.schema.md) — the `brand.json` schema.
 - [`editor/README.md`](editor/README.md) / [`editor/ESTADO.md`](editor/ESTADO.md) — the carousel editor: how to run it, decisions, known traps.
-- [`app/ESTADO.md`](app/ESTADO.md) — the deprecated desktop module.
+- The old Tauri desktop app (`app/`) was retired on 2026-10-26; it lives in git history.

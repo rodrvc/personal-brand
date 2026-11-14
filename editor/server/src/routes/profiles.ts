@@ -10,8 +10,9 @@ import { loadBrandStyle } from "../../../../system/ig-carousel/brand-style.js";
 
 import { invalidateAssetIndex } from "../asset-index-cache.js";
 import {
+  assertValidCarouselId,
   documentExists,
-  DocumentStoreError,
+  isStructuralChange,
   listCarousels,
   listVersions,
   readDocumentRaw,
@@ -21,31 +22,34 @@ import {
   writeDocumentIfRevision,
 } from "../document-store.js";
 import { messages } from "../messages.js";
+import { handleStoreError } from "./store-errors.js";
+import {
+  etagOf,
+  guardStorage,
+  storedVersions,
+  resolveStored,
+  storedBrandTokens,
+  storedCarousel,
+  storedCarouselListing,
+  cutOverSlugs,
+  storedStyle,
+  storedTemplate,
+  storedTemplates,
+  StorageFailure,
+  type EditorStorage,
+} from "../stored-read.js";
+import { saveStoredCarousel } from "../stored-write.js";
 import { listProfilesAsync, ProfileStore, ProfileStoreError, RevisionConflictError } from "../profile-store.js";
 import { buildCardSummary } from "../profile-card.js";
 
 /**
- * Turns a rejected path or id into a 400, everything else into a 404/500 as
- * appropriate. Every route below funnels its try/catch through this.
- * `DocumentStoreError` covers the non-slug `carousel-id` case, which
- * specs/carousel-document ("Confined writes") requires to answer 400 — not
- * the 500 an unclassified throw would produce.
+ * `storage` is the stored path: a brand cut over to storage is read through its repositories (S10a) and saved through
+ * them (S10b, `If-Match`), every other brand uses its folder, exactly as before.
  */
-function handleStoreError(error: unknown, res: import("express").Response): void {
-  if (error instanceof ProfileStoreError || error instanceof DocumentStoreError) {
-    res.status(400).json({ error: error.message });
-    return;
-  }
-  const message = (error as Error)?.message ?? String(error);
-  if (/ENOENT|no such file/i.test(message)) {
-    res.status(404).json({ error: message });
-    return;
-  }
-  res.status(500).json({ error: message });
-}
-
-export function profilesRouter(): Router {
+export function profilesRouter(rawStorage?: EditorStorage): Router {
   const router = Router();
+  // Every repository call is classified at the source: an outage or a corrupt row is a StorageFailure (503), never a raw 500.
+  const storage = rawStorage && guardStorage(rawStorage);
 
   /**
    * `card` is computed on top of `listProfilesAsync()`'s cheap slug/hasBrand
@@ -57,15 +61,31 @@ export function profilesRouter(): Router {
    */
   router.get("/api/profiles", async (_req, res) => {
     try {
-      const profiles = (await listProfilesAsync()).map((entry) => {
-        if (!entry.hasBrand) return entry;
-        try {
-          return { ...entry, card: buildCardSummary(entry.slug) };
-        } catch {
-          return entry;
-        }
-      });
-      res.json({ profiles });
+      // A cut-over brand is served from storage: its folder entry (if any) is replaced, never read for a card.
+      let cut: Awaited<ReturnType<typeof cutOverSlugs>>;
+      try {
+        cut = await cutOverSlugs(storage);
+      } catch (error) {
+        // Without the stored list a folder entry could shadow a cut-over brand: fail the listing, never guess.
+        console.error("Storage listing failed:", error);
+        return void res.status(503).json({ error: messages.storageUnavailable });
+      }
+      const folders = (await listProfilesAsync())
+        .filter((entry) => !cut.shadowed.includes(entry.slug))
+        .map((entry) => {
+          if (!entry.hasBrand) return entry;
+          try {
+            return { ...entry, card: buildCardSummary(entry.slug) };
+          } catch {
+            return entry;
+          }
+        });
+      // A stored brand has no card yet (it is built from the folder): it is listed like a profile mid-setup.
+      const stored = cut.listed.map((slug) => ({ slug, hasBrand: true }));
+      const bySlug = (a: { slug: string }, b: { slug: string }) => a.slug.localeCompare(b.slug);
+      // Archived brands come last, flagged: the picker shows them apart and opens them read-only.
+      const archived = cut.archived.map((slug) => ({ slug, hasBrand: true, archived: true })).sort(bySlug);
+      res.json({ profiles: [...[...folders, ...stored].sort(bySlug), ...archived] });
     } catch (error) {
       handleStoreError(error, res);
     }
@@ -79,16 +99,25 @@ export function profilesRouter(): Router {
    * degrades to `card: undefined` for a profile with no/broken brand.json,
    * same as the listing does.
    */
-  router.get("/api/profiles/:slug/card", (req, res) => {
+  router.get("/api/profiles/:slug/card", async (req, res) => {
     try {
+      if (await resolveStored(storage, req.params.slug)) {
+        res.json({});
+        return;
+      }
       res.json({ card: buildCardSummary(req.params.slug) });
     } catch (error) {
       handleStoreError(error, res);
     }
   });
 
-  router.get("/api/profiles/:slug/brand", (req, res) => {
+  router.get("/api/profiles/:slug/brand", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json(await storedBrandTokens(stored));
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       const brand = loadBrand(store.roots.profileDir);
       res.json(brand);
@@ -116,8 +145,13 @@ export function profilesRouter(): Router {
    * a profile with no style files: an all-empty style with `sources: []` is
    * a valid, expected answer (the UI shows "no hay guía todavía" for that).
    */
-  router.get("/api/profiles/:slug/style", (req, res) => {
+  router.get("/api/profiles/:slug/style", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json(await storedStyle(stored));
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json(loadBrandStyle(store.roots.profileDir));
     } catch (error) {
@@ -134,8 +168,13 @@ export function profilesRouter(): Router {
    * ever reading outside the profiles root (a nonexistent slug still
    * resolves to a syntactically valid path under it).
    */
-  router.get("/api/profiles/:slug/templates", (req, res) => {
+  router.get("/api/profiles/:slug/templates", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json({ templates: await storedTemplates(stored), freeTemplateId: FREE_TEMPLATE_ID });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (!existsSync(store.roots.profileDir)) {
         res.status(404).json({ error: `No profile "${req.params.slug}"` });
@@ -158,8 +197,27 @@ export function profilesRouter(): Router {
    * endpoint as any real template. `GET .../templates` still never lists it:
    * it is a choice the UI offers, not a template the brand owns.
    */
-  router.get("/api/profiles/:slug/template/:id", (req, res) => {
+  router.get("/api/profiles/:slug/template/:id", async (req, res) => {
     try {
+      // Parsed only when a template is actually loaded, so the free sentinel never depends on it. Only this parse
+      // maps to a 400: any other SyntaxError (a corrupt engine layout) is a server problem and stays a 500.
+      const paramsRaw = req.query.params;
+      const parseParams = (): Record<string, unknown> | undefined | "invalid" => {
+        if (typeof paramsRaw !== "string" || paramsRaw.length === 0) return undefined;
+        try {
+          return JSON.parse(paramsRaw) as Record<string, unknown>;
+        } catch (error) {
+          res.status(400).json({ error: `"params" is not valid JSON: ${(error as Error).message}` });
+          return "invalid";
+        }
+      };
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        const params = req.params.id === FREE_TEMPLATE_ID ? undefined : parseParams();
+        if (params === "invalid") return;
+        res.json(await storedTemplate(stored, req.params.id, params));
+        return;
+      }
       // Constructing the store validates the slug (400 on a malformed one)
       // without any I/O, so the sentinel inherits the same check as a real id.
       const store = new ProfileStore(req.params.slug);
@@ -167,13 +225,9 @@ export function profilesRouter(): Router {
         res.json(freeLayoutTemplate());
         return;
       }
-      const paramsRaw = req.query.params;
-      const params =
-        typeof paramsRaw === "string" && paramsRaw.length > 0
-          ? (JSON.parse(paramsRaw) as Record<string, unknown>)
-          : undefined;
-      const template = loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params);
-      res.json(template);
+      const params = parseParams();
+      if (params === "invalid") return;
+      res.json(loadLayoutTemplate(store.roots.profileDir, req.params.id, loadBrand(store.roots.profileDir), params));
     } catch (error) {
       if (error instanceof LayoutTemplateError) {
         res.status(400).json({ error: error.message });
@@ -183,8 +237,13 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels", (req, res) => {
+  router.get("/api/profiles/:slug/carousels", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        res.json({ carousels: await storedCarouselListing(stored) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json({ carousels: listCarousels(store) });
     } catch (error) {
@@ -192,8 +251,21 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        assertValidCarouselId(req.params.id);
+        const { result, version } = await storedCarousel(stored, req.params.id);
+        if (!result.valid) {
+          res.status(500).json({ error: "Stored document failed validation", details: result.errors });
+          return;
+        }
+        // The version this copy was read at: S10b's save answers 409 unless `If-Match` still names it.
+        res.setHeader("ETag", etagOf(version));
+        res.json(result.document);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (!documentExists(store, req.params.id)) {
         res.status(404).json({ error: `No carousel "${req.params.id}"` });
@@ -224,6 +296,14 @@ export function profilesRouter(): Router {
    */
   router.put("/api/profiles/:slug/carousels/:id", async (req, res) => {
     try {
+      const stored = await resolveStored(storage, req.params.slug);
+      if (stored) {
+        const snapshot = req.query.snapshot === "true" || (req.body as { snapshot?: boolean })?.snapshot === true;
+        const outcome = await saveStoredCarousel(stored, req.params.id, req.body, req.header("If-Match"), snapshot);
+        if (outcome.etag) res.setHeader("ETag", outcome.etag);
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       if (req.params.id !== (req.body as { id?: string })?.id) {
         res.status(400).json({ error: `Body "id" must match the URL's carousel id "${req.params.id}"` });
@@ -256,18 +336,7 @@ export function profilesRouter(): Router {
           return;
         }
         previousDocForPinDiff = previousRaw;
-        const previousShape = (previousRaw.slides ?? []).map((s) => s.kind).join(",");
-        const nextShape = result.document.slides.map((s) => s.kind).join(",");
-        // Plain inequality over both sides' optional `template?.id` — this
-        // already covers every case: unchanged (equal, both real ids or
-        // both undefined), swapped to another template, or swapped to/from
-        // "no template" (one side undefined). No `!== undefined` guard is
-        // needed since `undefined !== undefined` is `false`.
-        const templateChanged = previousRaw.template?.id !== result.document.template?.id;
-        structuralChange =
-          (previousRaw.slides?.length ?? 0) !== result.document.slides.length ||
-          previousShape !== nextShape ||
-          templateChanged;
+        structuralChange = isStructuralChange(previousRaw, result.document);
       }
 
       // pin false -> true triggers the library's "pinning approves it"
@@ -305,8 +374,13 @@ export function profilesRouter(): Router {
     }
   });
 
-  router.get("/api/profiles/:slug/carousels/:id/versions", (req, res) => {
+  router.get("/api/profiles/:slug/carousels/:id/versions", async (req, res) => {
     try {
+      const found = await resolveStored(storage, req.params.slug);
+      if (found) {
+        res.json({ versions: await storedVersions(found, req.params.id) });
+        return;
+      }
       const store = new ProfileStore(req.params.slug);
       res.json({ versions: listVersions(store, req.params.id) });
     } catch (error) {
@@ -369,5 +443,3 @@ function approveNewlyPinnedAssets(
   });
 }
 
-// Re-exported for other route modules that need the same 400/404/500 mapping.
-export { handleStoreError };

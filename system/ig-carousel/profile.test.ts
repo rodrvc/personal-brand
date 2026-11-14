@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,25 @@ const tests: Array<[string, () => void]> = [
       try {
         assert.equal(resolveProfilesRoot(), root);
         assert.equal(resolveProfileDir(SLUG), profileDir);
+      } finally {
+        delete process.env.BRAND_PROFILES_DIR;
+      }
+    },
+  ],
+  [
+    "resolveProfileDir refuses a cut-over profile (marker present) and names the brand CLI",
+    () => {
+      const cutDir = join(root, "cut-brand");
+      mkdirSync(cutDir, { recursive: true });
+      process.env.BRAND_PROFILES_DIR = root;
+      try {
+        assert.equal(resolveProfileDir("cut-brand"), cutDir);
+        writeFileSync(join(cutDir, ".storage-cutover"), "{}");
+        assert.throws(() => resolveProfileDir("cut-brand"), /cut over to storage.*`brand` CLI/);
+        assert.equal(resolveProfileDir(SLUG), profileDir, "other profiles are unaffected");
+        unlinkSync(join(cutDir, ".storage-cutover"));
+        symlinkSync(join(root, "nowhere"), join(cutDir, ".storage-cutover"));
+        assert.throws(() => resolveProfileDir("cut-brand"), /cut over to storage/, "a dangling-symlink marker still counts");
       } finally {
         delete process.env.BRAND_PROFILES_DIR;
       }

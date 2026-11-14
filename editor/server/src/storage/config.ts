@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { S3ObjectStore } from "./s3-object-store.js";
+import { S3ObjectStore } from "@personal-brand/storage/blob";
 import type { ObjectStore } from "./object-store.js";
 
 export type StorageBackend = "fs" | "s3";

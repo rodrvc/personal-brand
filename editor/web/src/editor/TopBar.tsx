@@ -22,6 +22,8 @@ interface TopBarProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onExport: () => void;
+  /** An archived brand: writes are refused by the server, so the buttons that would write are disabled. */
+  readOnly?: boolean;
 }
 
 /** Document status → its LocaleKey. `t()` is called lazily, in `statusLabel()`, never at module load. */
@@ -51,6 +53,7 @@ export function TopBar({
   theme,
   onToggleTheme,
   onExport,
+  readOnly = false,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -82,12 +85,12 @@ export function TopBar({
         title={t("topbar.tool.deleteObject")}
         aria-label={t("topbar.tool.deleteObject")}
         onClick={onDeleteSelection}
-        disabled={!hasSelection}
+        disabled={readOnly || !hasSelection}
       >
         ⌫
       </button>
       {/* No slide, nothing to put text on (Editor's handler no-ops) — disabled rather than silently inert. */}
-      <button className="topbar-tool" title={t("topbar.tool.addText")} aria-label={t("topbar.tool.addText")} onClick={onAddText} disabled={doc.slides.length === 0}>
+      <button className="topbar-tool" title={t("topbar.tool.addText")} aria-label={t("topbar.tool.addText")} onClick={onAddText} disabled={readOnly || doc.slides.length === 0}>
         T
       </button>
       <button className="topbar-tool" title={t("topbar.tool.addAsset")} aria-label={t("topbar.tool.addAsset")} onClick={onOpenAssets}>
@@ -111,7 +114,7 @@ export function TopBar({
       </button>
       <div className="topbar-sep" />
       {/* An empty deck exports nothing: the queue would produce a v<N> with no PNG in it. */}
-      <button className="ui-btn ui-btn-primary" onClick={onExport} disabled={doc.slides.length === 0}>
+      <button className="ui-btn ui-btn-primary" onClick={onExport} disabled={readOnly || doc.slides.length === 0}>
         {t("topbar.export", { count: doc.slides.length })}
       </button>
     </header>

@@ -19,11 +19,11 @@
  * `profiles/example*` ship one.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { narrationCacheKey } from "@personal-brand/core/narration";
 import { loadDotEnv } from "./env.js";
 import { parseYaml } from "./recipe.js";
 import { resolveScenes, type Scene, type SceneSpec } from "./remotion/src/timeline.js";
@@ -281,38 +281,8 @@ export function loadStoryboard(path: string, itemCount: number): Storyboard {
   return validateStoryboard(parseYaml(text, path), path, itemCount);
 }
 
-/** The recipe's voice with the storyboard's partial override applied. */
-export function effectiveVoice(recipeVoice: VoiceConfig, override?: Partial<VoiceConfig>): VoiceConfig {
-  const merged: VoiceConfig = { ...recipeVoice };
-  for (const [key, value] of Object.entries(override ?? {})) {
-    if (value !== undefined) (merged as unknown as Node)[key] = value;
-  }
-  return merged;
-}
-
-/** Collapses whitespace so a reflowed card does not re-synthesise. */
-export function normaliseNarration(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-/**
- * Content hash of what actually reaches the TTS endpoint: normalised text,
- * the effective voice settings and the model. Same text + same voice = same
- * key, so editing one card re-synthesises only that card.
- */
-export function narrationCacheKey(text: string, voice: VoiceConfig): string {
-  const payload = {
-    text: normaliseNarration(text),
-    model_id: voice.model_id ?? "eleven_multilingual_v2",
-    voice_id: voice.voice_id,
-    stability: voice.stability ?? 0.5,
-    similarity_boost: voice.similarity_boost ?? 0.75,
-    style: voice.style ?? 0,
-    speed: voice.speed ?? 1,
-    use_speaker_boost: voice.use_speaker_boost ?? true,
-  };
-  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-}
+// The hash and the voice merge are shared with the storage importer, so they live in core.
+export { effectiveVoice, narrationCacheKey, normaliseNarration } from "@personal-brand/core/narration";
 
 /** Per-card result of synthesis: the file (if any) and its measured length. */
 export interface CardAudio {

@@ -1,0 +1,839 @@
+import type postgres from "postgres";
+
+import {
+  BrandArchivedError,
+  NotFoundError,
+  AlreadyExistsError,
+  InvalidInputError,
+  VersionConflictError,
+  type Brand,
+  type Asset,
+  type AssetRepository,
+  type CarouselExport,
+  type CarouselHead,
+  type CarouselRepository,
+  type ContentItemHead,
+  type ContentItemRepository,
+  type ChatMessage,
+  type ChatRepository,
+  type RecipeRunHead,
+  type RecipeRunRepository,
+  type RunArtifact,
+  type RunArtifactRepository,
+  type ExportRepository,
+  type ImportRun,
+  type ImportRunRepository,
+  type RestoreDrill,
+  type RestoreDrillRepository,
+  type BrandDocumentRepository,
+  type TtsCacheRepository,
+  type TtsEntry,
+  type BrandRepository,
+  type BrandRule,
+  type BrandRuleRepository,
+  type GuidanceRepository,
+  type ToolRepository,
+  type RecipeRepository,
+  type RuleInput,
+  type Versioned,
+  type Revision,
+  type RevisionRepository,
+  type WriteMeta,
+} from "../contracts/index.ts";
+import { blobKey } from "../contracts/keys.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import type { Sql } from "./connect.ts";
+
+type Tx = postgres.TransactionSql;
+type Row = postgres.Row;
+
+export interface PgRepositories {
+  brands: BrandRepository;
+  documents: BrandDocumentRepository;
+  revisions: RevisionRepository;
+  rules: BrandRuleRepository;
+  guidance: GuidanceRepository;
+  tools: ToolRepository;
+  recipes: RecipeRepository;
+  assets: AssetRepository;
+  tts: TtsCacheRepository;
+  carousels: CarouselRepository;
+  exports: ExportRepository;
+  chat: ChatRepository;
+  content: ContentItemRepository;
+  runs: RecipeRunRepository;
+  runArtifacts: RunArtifactRepository;
+  importRuns: ImportRunRepository;
+  restoreDrills: RestoreDrillRepository;
+}
+
+const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
+const json = (tx: Pick<Tx, "json">, value: unknown) => tx.json(value as postgres.JSONValue);
+
+const toBrand = (r: Row) => ({
+  id: r.id as string,
+  value: { slug: r.slug, displayName: r.display_name, status: r.status, cutoverAt: iso(r.cutover_at) } as Brand,
+  version: r.version as number,
+  updatedAt: iso(r.updated_at)!,
+});
+
+const toRule = (r: Row): Versioned<BrandRule> => ({
+  id: r.id,
+  value: { kind: r.kind, params: r.params, severity: r.severity, appliesTo: r.applies_to, message: r.message, enabled: r.enabled },
+  version: r.version,
+  updatedAt: iso(r.updated_at)!,
+});
+
+const toAsset = (r: Row) => ({
+  id: r.id as string,
+  value: {
+    assetId: r.asset_id, sha256: r.sha256, blobKey: r.blob_key, kind: r.kind, mime: r.mime, width: r.width, height: r.height, bytes: Number(r.bytes),
+    origin: r.origin, status: r.status, tags: r.tags, family: r.family, generation: r.generation, createdAt: iso(r.created_at)!,
+  } as Asset,
+  version: r.version as number,
+  updatedAt: iso(r.updated_at)!,
+});
+
+const toTts = (r: Row): TtsEntry => ({ sha256: r.sha256, seconds: r.seconds, voice: r.voice, createdAt: iso(r.created_at)! });
+
+const toHead = (r: Row): CarouselHead => ({ slug: r.slug, title: r.title, status: r.status, scheduledFor: iso(r.scheduled_for), publishedAt: iso(r.published_at) });
+
+const toContentHead = (r: Row): ContentItemHead => ({
+  slug: r.slug, title: r.title, stage: r.stage, channel: r.channel, format: r.format, derivedFrom: r.derived_from, publishedAt: iso(r.published_at), createdAt: iso(r.created_at)!,
+});
+
+const toRunHead = (r: Row): RecipeRunHead => ({
+  recipe: r.recipe, periodStart: r.period_start, periodEnd: r.period_end, schemaVersion: r.schema_version, createdBy: r.created_by, createdAt: iso(r.created_at)!,
+});
+
+const toArtifact = (r: Row): RunArtifact => ({
+  id: r.id, runId: r.run_id, seq: Number(r.seq), kind: r.kind, cardIndex: r.card_index, cardId: r.card_id, sha256: r.sha256, inputsHash: r.inputs_hash, createdAt: iso(r.created_at)!,
+});
+
+const toExport = (r: Row): CarouselExport => ({
+  id: r.id, carouselId: r.carousel_id, versionNo: r.version_no, carouselVersion: r.carousel_version, status: r.status,
+  manifest: r.manifest, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at),
+});
+
+const toRevision = (r: Row): Revision => ({
+  brandId: r.brand_id,
+  entityType: r.entity_type,
+  entityId: r.entity_id,
+  version: r.version,
+  reason: r.reason,
+  body: r.body,
+  bodyText: r.body_text,
+  author: r.author,
+  source: r.source,
+  ...(r.source_hash ? { sourceHash: r.source_hash } : {}),
+  createdAt: iso(r.created_at)!,
+});
+
+/**
+ * Postgres repositories. Every write is one transaction: row update (optimistic version) + revision per policy.
+ * Timestamps (`updated_at`, revision `created_at`) come from the injected `now` (default: JS `Date`), not the
+ * database clock, so clock skew between processes shifts the 10-minute autosave window.
+ */
+export function createPgRepositories(sql: Sql, now: () => Date = () => new Date()): PgRepositories {
+  async function appendRevision(
+    tx: Tx,
+    r: { brandId: string; entityType: string; entityId: string; version: number; body: unknown; bodyText: string | null },
+    meta: WriteMeta,
+  ): Promise<void> {
+    // The entity row is already locked by this transaction's write, so writers of one entity are serialized here.
+    const [last] = await tx`SELECT author, created_at FROM revisions WHERE entity_type = ${r.entityType} AND entity_id = ${r.entityId} ORDER BY version DESC LIMIT 1`;
+    const at = now();
+    if (!shouldAppendRevision(last && { author: last.author, createdAt: last.created_at.toISOString() }, meta, at)) return;
+    await tx`INSERT INTO revisions (brand_id, entity_type, entity_id, version, reason, body, body_text, author, source, source_hash, created_at)
+             VALUES (${r.brandId}, ${r.entityType}, ${r.entityId}, ${r.version}, ${meta.reason}, ${r.body === null ? null : json(tx, r.body)},
+                     ${r.bodyText}, ${meta.author}, ${meta.source}, ${meta.sourceHash ?? null}, ${at})`;
+  }
+
+  /** Brand lock FOR SHARE, always the first lock of a content write (the same order as `purge`); refuses a missing or archived brand. */
+  async function shareBrand(tx: Tx, brandId: string, what = brandId): Promise<void> {
+    const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
+    if (!brand) throw new NotFoundError(`brand ${brandId}`);
+    if (brand.status === "archived") throw new BrandArchivedError(what);
+  }
+
+  /** Same, for a write that targets a child row: finds its brand, locks the brand, and leaves the child row for the caller to lock. */
+  async function shareBrandOf(tx: Tx, table: "carousels" | "content_items" | "recipe_runs", id: string, notFound: string): Promise<void> {
+    const [head] = isUuid(id) ? await tx`SELECT brand_id FROM ${tx(table)} WHERE id = ${id}` : [];
+    if (!head) throw new NotFoundError(notFound);
+    await shareBrand(tx, head.brand_id, `of ${notFound}`);
+  }
+
+  async function writeBrand(id: string, meta: WriteMeta, patch: { displayName?: string; status?: string; cutoverAt?: Date }) {
+    if (!isUuid(id)) throw new NotFoundError(`brand ${id}`);
+    return sql.begin(async (tx) => {
+      const [row] = await tx`UPDATE brands SET display_name = COALESCE(${patch.displayName ?? null}, display_name),
+                                    status = COALESCE(${patch.status ?? null}, status), cutover_at = COALESCE(cutover_at, ${patch.cutoverAt ?? null}), updated_at = ${now()}, version = version + 1
+                             WHERE id = ${id} AND version = ${meta.expectedVersion} RETURNING *`;
+      if (!row) {
+        const [cur] = await tx`SELECT version FROM brands WHERE id = ${id}`;
+        throw cur ? new VersionConflictError(cur.version) : new NotFoundError(`brand ${id}`);
+      }
+      const brand = toBrand(row);
+      await appendRevision(tx, { brandId: id, entityType: "brand", entityId: id, version: brand.version, body: brand.value, bodyText: null }, meta);
+      return brand;
+    });
+  }
+
+  const brands: BrandRepository = {
+    async list(opts) {
+      const rows = await sql`SELECT * FROM brands WHERE ${opts?.includeArchived ? sql`true` : sql`status = 'active'`} ORDER BY slug COLLATE "C"`;
+      return rows.map(toBrand);
+    },
+    async getBySlug(slug) {
+      const [row] = await sql`SELECT * FROM brands WHERE slug = ${slug}`;
+      if (!row) throw new NotFoundError(`brand "${slug}"`);
+      return toBrand(row);
+    },
+    async create(input, meta) {
+      assertSlug(input.slug);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      return sql.begin(async (tx) => {
+        const [row] = await tx`INSERT INTO brands (slug, display_name, updated_at) VALUES (${input.slug}, ${input.displayName}, ${now()})
+                               ON CONFLICT (slug) DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM brands WHERE slug = ${input.slug}`;
+          throw cur ? new AlreadyExistsError(`brand "${input.slug}"`, cur.version) : new VersionConflictError(null);
+        }
+        const brand = toBrand(row);
+        await appendRevision(tx, { brandId: brand.id, entityType: "brand", entityId: brand.id, version: 1, body: brand.value, bodyText: null }, meta);
+        return brand;
+      });
+    },
+    update: (id, patch, meta) => writeBrand(id, meta, patch),
+    markCutover: (id, meta) => writeBrand(id, meta, { cutoverAt: now() }),
+    archive: (id, meta) => writeBrand(id, meta, { status: "archived" }),
+    unarchive: (id, meta) => writeBrand(id, meta, { status: "active" }),
+  };
+
+  const documents: BrandDocumentRepository = {
+    async get(brandId, kind, name, validate) {
+      const [row] = isUuid(brandId)
+        ? await sql`SELECT * FROM brand_documents WHERE brand_id = ${brandId} AND kind = ${kind} AND name = ${name}`
+        : [];
+      if (!row) throw new NotFoundError(`document ${kind}/${name}`);
+      return { id: row.id, value: validate(row.body_text ?? row.body_json, row.schema_version), version: row.version, updatedAt: iso(row.updated_at)! };
+    },
+    async list(brandId, kind) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT name, version, updated_at FROM brand_documents WHERE brand_id = ${brandId} AND kind = ${kind} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ name: r.name, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async put(brandId, kind, name, body: DocumentBody, meta) {
+      assertEnvelope(body);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      const bodyJson = "json" in body ? body.json : null;
+      const bodyText = "text" in body ? body.text : null;
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const jsonParam = bodyJson === null ? null : json(tx, bodyJson);
+        const [row] =
+          meta.expectedVersion === null
+            ? await tx`INSERT INTO brand_documents (brand_id, kind, name, schema_version, body_json, body_text, updated_at)
+                       VALUES (${brandId}, ${kind}, ${name}, ${body.schemaVersion}, ${jsonParam}, ${bodyText}, ${now()})
+                       ON CONFLICT (brand_id, kind, name) DO NOTHING RETURNING id, version, updated_at`
+            : await tx`UPDATE brand_documents SET schema_version = ${body.schemaVersion}, body_json = ${jsonParam}, body_text = ${bodyText},
+                              updated_at = ${now()}, version = version + 1
+                       WHERE brand_id = ${brandId} AND kind = ${kind} AND name = ${name} AND version = ${meta.expectedVersion}
+                       RETURNING id, version, updated_at`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM brand_documents WHERE brand_id = ${brandId} AND kind = ${kind} AND name = ${name}`;
+          if (cur && meta.expectedVersion === null) throw new AlreadyExistsError(`document ${kind}/${name}`, cur.version);
+          throw new VersionConflictError(cur?.version ?? null);
+        }
+        await appendRevision(tx, { brandId, entityType: "brand_document", entityId: row.id, version: row.version, body: bodyJson, bodyText }, meta);
+        return { id: row.id as string, version: row.version as number, updatedAt: iso(row.updated_at)! };
+      });
+    },
+  };
+
+  const revisions: RevisionRepository = {
+    async list(entityType, entityId) {
+      if (!isUuid(entityId)) return [];
+      return (await sql`SELECT * FROM revisions WHERE entity_type = ${entityType} AND entity_id = ${entityId} ORDER BY version`).map(toRevision);
+    },
+    async listHeads(entityType, entityId, reasons) {
+      if (!isUuid(entityId)) return [];
+      const rows = await sql`SELECT brand_id, entity_type, entity_id, version, reason, author, source, source_hash, created_at FROM revisions
+                             WHERE entity_type = ${entityType} AND entity_id = ${entityId} AND (${reasons === undefined} OR reason = ANY(${reasons ?? []})) ORDER BY version`;
+      return rows.map((row) => { const { body: _body, bodyText: _bodyText, ...head } = toRevision({ ...row, body: null, body_text: null }); return head; });
+    },
+    async get(entityType, entityId, version) {
+      const [row] = isUuid(entityId)
+        ? await sql`SELECT * FROM revisions WHERE entity_type = ${entityType} AND entity_id = ${entityId} AND version = ${version}`
+        : [];
+      if (!row) throw new NotFoundError(`revision ${entityType}/${entityId}@${version}`);
+      return toRevision(row);
+    },
+    async listSince(brandId, entityType, since) {
+      if (!isUuid(brandId)) return [];
+      // The cursor is exclusive at millisecond resolution, like the memory implementation: `created_at` has microseconds, so the rows are those at or after the next millisecond (index-friendly).
+      return (await sql`SELECT * FROM revisions WHERE brand_id = ${brandId} AND entity_type = ${entityType} AND created_at >= ${new Date(Date.parse(since) + 1)}
+                        ORDER BY date_trunc('milliseconds', created_at), entity_id, version`).map(toRevision);
+    },
+  };
+
+  const rules: BrandRuleRepository = {
+    async list(brandId, opts) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM brand_rules WHERE brand_id = ${brandId} AND ${opts?.includeDisabled ? sql`true` : sql`enabled`}
+                             ORDER BY created_at, kind COLLATE "C", message COLLATE "C", id`;
+      return rows.map(toRule);
+    },
+    async create(brandId, input, meta) {
+      const rule = normalizeRule(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        const [row] = await tx`INSERT INTO brand_rules (brand_id, kind, params, severity, applies_to, message, created_at, updated_at)
+                               VALUES (${brandId}, ${rule.kind}, ${json(tx, rule.params)}, ${rule.severity}, ${rule.appliesTo}, ${rule.message}, ${now()}, ${now()}) RETURNING *`;
+        const created = toRule(row);
+        await appendRevision(tx, { brandId, entityType: "brand_rule", entityId: created.id, version: 1, body: created.value, bodyText: null }, meta);
+        return created;
+      });
+    },
+    update: (id, patch, meta) => writeRule(id, patch, meta),
+    disable: (id, meta) => writeRule(id, {}, meta, false),
+    enable: (id, meta) => writeRule(id, {}, meta, true),
+  };
+
+  async function writeRule(id: string, patch: Partial<RuleInput>, meta: WriteMeta, enabled?: boolean) {
+    if (!isUuid(id)) throw new NotFoundError(`rule ${id}`);
+    return sql.begin(async (tx) => {
+      const [cur] = await tx`SELECT * FROM brand_rules WHERE id = ${id} FOR UPDATE`;
+      if (!cur) throw new NotFoundError(`rule ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const { enabled: wasEnabled, ...base } = toRule(cur).value;
+      const next = normalizeRule({ ...base, ...patch });
+      const [row] = await tx`UPDATE brand_rules SET kind = ${next.kind}, params = ${json(tx, next.params)}, severity = ${next.severity},
+                                    applies_to = ${next.appliesTo}, message = ${next.message}, enabled = ${enabled ?? wasEnabled},
+                                    updated_at = ${now()}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      const updated = toRule(row);
+      await appendRevision(tx, { brandId: cur.brand_id, entityType: "brand_rule", entityId: id, version: updated.version, body: updated.value, bodyText: null }, meta);
+      return updated;
+    });
+  }
+
+  /** Insert-or-update of one row keyed by (brand, key), with the same version semantics as documents. */
+  async function putKeyed(
+    table: "brand_guidance" | "brand_tools" | "brand_recipes",
+    keyColumn: "name" | "recipe",
+    entityType: string,
+    brandId: string,
+    key: string,
+    values: Record<string, unknown>,
+    revision: { body: unknown; bodyText: string | null },
+    meta: WriteMeta,
+  ) {
+    if (table === "brand_tools") assertToolName(key);
+    else assertSlug(key, keyColumn);
+    if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+    return sql.begin(async (tx) => {
+      const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
+      if (!brand) throw new NotFoundError(`brand ${brandId}`);
+      const [row] =
+        meta.expectedVersion === null
+          ? await tx`INSERT INTO ${tx(table)} ${tx({ brand_id: brandId, [keyColumn]: key, ...values, updated_at: now() })}
+                     ON CONFLICT (brand_id, ${tx(keyColumn)}) DO NOTHING RETURNING id, version, updated_at`
+          : await tx`UPDATE ${tx(table)} SET ${tx({ ...values, updated_at: now() })}, version = version + 1
+                     WHERE brand_id = ${brandId} AND ${tx(keyColumn)} = ${key} AND version = ${meta.expectedVersion} RETURNING id, version, updated_at`;
+      if (!row) {
+        const [cur] = await tx`SELECT version FROM ${tx(table)} WHERE brand_id = ${brandId} AND ${tx(keyColumn)} = ${key}`;
+        if (cur && meta.expectedVersion === null) throw new AlreadyExistsError(`${entityType} ${key}`, cur.version);
+        throw new VersionConflictError(cur?.version ?? null);
+      }
+      await appendRevision(tx, { brandId, entityType, entityId: row.id, version: row.version, ...revision }, meta);
+      return { id: row.id as string, version: row.version as number, updatedAt: iso(row.updated_at)! };
+    });
+  }
+
+  const guidance: GuidanceRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT id, name, description, version, updated_at FROM brand_guidance WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async get(brandId, name) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_guidance WHERE brand_id = ${brandId} AND name = ${name}` : [];
+      if (!r) throw new NotFoundError(`guidance ${name}`);
+      return { trust: "brand-data", id: r.id, name: r.name, description: r.description, body: r.body_md, version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, name, input, meta) {
+      assertGuidance(input);
+      return putKeyed("brand_guidance", "name", "brand_guidance", brandId, name, { description: input.description, body_md: input.body },
+        { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const tools: ToolRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT id, name, description, version, updated_at FROM brand_tools WHERE brand_id = ${brandId} ORDER BY name COLLATE "C"`;
+      return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async get(brandId, name) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_tools WHERE brand_id = ${brandId} AND name = ${name}` : [];
+      if (!r) throw new NotFoundError(`tool ${name}`);
+      return { trust: "brand-data", id: r.id, name: r.name, description: r.description, body: r.body, version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, name, input, meta) {
+      assertTool(name, input);
+      return putKeyed("brand_tools", "name", "brand_tool", brandId, name, { description: input.description, body: input.body },
+        { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const recipes: RecipeRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT recipe, version, updated_at FROM brand_recipes WHERE brand_id = ${brandId} ORDER BY recipe COLLATE "C"`;
+      return rows.map((r) => ({ recipe: r.recipe, version: r.version, updatedAt: iso(r.updated_at)! }));
+    },
+    async get(brandId, recipe, validate) {
+      const [r] = isUuid(brandId) ? await sql`SELECT * FROM brand_recipes WHERE brand_id = ${brandId} AND recipe = ${recipe}` : [];
+      if (!r) throw new NotFoundError(`recipe ${recipe}`);
+      return { id: r.id, value: validate(r.params, r.schema_version), version: r.version, updatedAt: iso(r.updated_at)! };
+    },
+    async put(brandId, recipe, input, meta) {
+      assertParams(input.params, input.schemaVersion);
+      return putKeyed("brand_recipes", "recipe", "brand_recipe", brandId, recipe, { schema_version: input.schemaVersion, params: sql.json(input.params as postgres.JSONValue) },
+        { body: input.params, bodyText: null }, meta);
+    },
+  };
+
+  const assets: AssetRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM assets WHERE brand_id = ${brandId}
+                             ${filter?.kind ? sql`AND kind = ${filter.kind}` : sql``} ${filter?.status ? sql`AND status = ${filter.status}` : sql``}
+                             ${filter?.origin ? sql`AND origin = ${filter.origin}` : sql``} ORDER BY created_at, asset_id COLLATE "C"`;
+      return rows.map(toAsset);
+    },
+    async get(brandId, assetId) {
+      const [row] = isUuid(brandId) && isAssetId(assetId) ? await sql`SELECT * FROM assets WHERE brand_id = ${brandId} AND asset_id = ${assetId}` : [];
+      if (!row) throw new NotFoundError(`asset ${assetId}`);
+      return toAsset(row);
+    },
+    async register(brandId, input, meta) {
+      assertAsset(input);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        if (brand.status === "archived") throw new BrandArchivedError(`${brandId}`);
+        const [row] = await tx`INSERT INTO assets (brand_id, asset_id, sha256, blob_key, kind, mime, width, height, bytes, origin, status, tags, family, generation, created_at, updated_at)
+                               VALUES (${brandId}, ${input.sha256.slice(0, 16)}, ${input.sha256}, ${blobKey(brandId, input.sha256)}, ${input.kind}, ${input.mime},
+                                       ${input.width ?? null}, ${input.height ?? null}, ${input.bytes}, ${input.origin}, ${input.status}, ${input.tags ?? []},
+                                       ${input.family ?? null}, ${input.generation ? json(tx, input.generation) : null}, ${now()}, ${now()})
+                               ON CONFLICT DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version, sha256 FROM assets WHERE brand_id = ${brandId} AND asset_id = ${input.sha256.slice(0, 16)}`;
+          if (cur && cur.sha256 !== input.sha256) throw new InvalidInputError(`asset id ${input.sha256.slice(0, 16)} collides with a different sha256`);
+          throw cur ? new AlreadyExistsError(`asset ${input.sha256.slice(0, 16)}`, cur.version) : new VersionConflictError(null);
+        }
+        const asset = toAsset(row);
+        await appendRevision(tx, { brandId, entityType: "brand_asset", entityId: asset.id, version: 1, body: asset.value, bodyText: null }, meta);
+        return asset;
+      });
+    },
+    async update(brandId, assetId, patch, meta) {
+      assertAsset(patch, false);
+      if (!isUuid(brandId) || !isAssetId(assetId)) throw new NotFoundError(`asset ${assetId}`);
+      return sql.begin(async (tx) => {
+        await shareBrand(tx, brandId);
+        const [row] = await tx`UPDATE assets SET kind = COALESCE(${patch.kind ?? null}, kind), status = COALESCE(${patch.status ?? null}, status),
+                                      tags = COALESCE(${patch.tags ?? null}, tags), family = COALESCE(${patch.family ?? null}, family),
+                                      updated_at = ${now()}, version = version + 1
+                               WHERE brand_id = ${brandId} AND asset_id = ${assetId} AND version = ${meta.expectedVersion} RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM assets WHERE brand_id = ${brandId} AND asset_id = ${assetId}`;
+          throw cur ? new VersionConflictError(cur.version) : new NotFoundError(`asset ${assetId}`);
+        }
+        const asset = toAsset(row);
+        await appendRevision(tx, { brandId, entityType: "brand_asset", entityId: asset.id, version: asset.version, body: asset.value, bodyText: null }, meta);
+        return asset;
+      });
+    },
+  };
+
+  const tts: TtsCacheRepository = {
+    async get(brandId, narrationHash) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} ORDER BY seq DESC LIMIT 1` : [];
+      if (!row) throw new NotFoundError(`tts ${narrationHash}`);
+      return toTts(row);
+    },
+    async takes(brandId, narrationHash) {
+      if (!isUuid(brandId)) return [];
+      return (await sql`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} ORDER BY seq`).map(toTts);
+    },
+    async record(brandId, narrationHash, entry) {
+      assertTts(narrationHash, entry);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        await shareBrand(tx, brandId);
+        const [row] = await tx`INSERT INTO tts_cache (brand_id, narration_hash, sha256, seconds, voice, created_at)
+                               VALUES (${brandId}, ${narrationHash}, ${entry.sha256}, ${entry.seconds}, ${json(tx, entry.voice)}, ${now()})
+                               ON CONFLICT (brand_id, narration_hash, sha256) DO NOTHING RETURNING *`;
+        if (row) return toTts(row);
+        const [cur] = await tx`SELECT * FROM tts_cache WHERE brand_id = ${brandId} AND narration_hash = ${narrationHash} AND sha256 = ${entry.sha256}`;
+        return toTts(cur);
+      });
+    },
+  };
+
+  /** Revision body of a carousel: the head plus the stored document (which never holds `status`). */
+  const carouselBody = (r: Row) => ({ ...toHead(r), document: r.document });
+  const carouselVersioned = (r: Row) => ({ id: r.id as string, value: toHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+
+  async function readCarousel<T>(row: Row | undefined, what: string, validate: (body: unknown, schemaVersion: number) => T) {
+    if (!row) throw new NotFoundError(what);
+    const value = { ...toHead(row), document: validate({ ...row.document, status: row.status }, row.document_schema_version) };
+    return { id: row.id as string, value, version: row.version as number, updatedAt: iso(row.updated_at)! };
+  }
+
+  /** Locks the row, checks the version, applies `change` to its columns and appends a revision. */
+  async function writeCarousel(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
+    if (!isUuid(id)) throw new NotFoundError(`carousel ${id}`);
+    return sql.begin(async (tx) => {
+      // Lock order: brand (FOR SHARE) then carousel, the same as `purge`, so an `archive` or a purge cannot commit in between.
+      await shareBrandOf(tx, "carousels", id, `carousel ${id}`);
+      const [cur] = await tx`SELECT * FROM carousels WHERE id = ${id} FOR NO KEY UPDATE`;
+      if (!cur) throw new NotFoundError(`carousel ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const [row] = await tx`UPDATE carousels SET ${tx({ ...change(cur), updated_at: now() })}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      await appendRevision(tx, { brandId: row.brand_id, entityType: "carousel", entityId: id, version: row.version, body: carouselBody(row), bodyText: null }, meta);
+      return carouselVersioned(row);
+    });
+  }
+
+  const carousels: CarouselRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT * FROM carousels WHERE brand_id = ${brandId} ${filter?.status ? sql`AND status = ${filter.status}` : sql``} ORDER BY slug COLLATE "C"`;
+      return rows.map(carouselVersioned);
+    },
+    async get(brandId, slug, validate) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM carousels WHERE brand_id = ${brandId} AND slug = ${slug}` : [];
+      return readCarousel(row, `carousel "${slug}"`, validate);
+    },
+    async getById(id, validate) {
+      const [row] = isUuid(id) ? await sql`SELECT * FROM carousels WHERE id = ${id}` : [];
+      return readCarousel(row, `carousel ${id}`, validate);
+    },
+    async create(brandId, input, meta) {
+      assertCarousel(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        const [brand] = await tx`SELECT status FROM brands WHERE id = ${brandId} FOR SHARE`;
+        if (!brand) throw new NotFoundError(`brand ${brandId}`);
+        if (brand.status === "archived") throw new BrandArchivedError(`${brandId}`);
+        const at = now();
+        const [row] = await tx`INSERT INTO carousels (brand_id, slug, title, status, document, document_schema_version, created_at, updated_at)
+                               VALUES (${brandId}, ${input.slug}, ${input.title}, ${input.status ?? "draft"}, ${json(tx, stripStatus(input.document.json))},
+                                       ${input.document.schemaVersion}, ${at}, ${at})
+                               ON CONFLICT (brand_id, slug) DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM carousels WHERE brand_id = ${brandId} AND slug = ${input.slug}`;
+          throw cur ? new AlreadyExistsError(`carousel "${input.slug}"`, cur.version) : new VersionConflictError(null);
+        }
+        await appendRevision(tx, { brandId, entityType: "carousel", entityId: row.id, version: 1, body: carouselBody(row), bodyText: null }, meta);
+        return carouselVersioned(row);
+      });
+    },
+    async save(id, input, meta) {
+      assertCarousel(input);
+      return writeCarousel(id, meta, (cur) => ({
+        title: input.title ?? cur.title, document: json(sql, stripStatus(input.document.json)), document_schema_version: input.document.schemaVersion,
+      }));
+    },
+    async setStatus(id, patch, meta) {
+      assertNotAutosave(meta);
+      assertCarousel({ status: patch.status });
+      const scheduled = parseInstant(patch.scheduledFor, "scheduledFor");
+      const published = parseInstant(patch.publishedAt, "publishedAt");
+      return writeCarousel(id, meta, (cur) => ({
+        status: patch.status,
+        scheduled_for: patch.scheduledFor === undefined ? cur.scheduled_for : scheduled,
+        published_at: patch.publishedAt === undefined ? cur.published_at : published,
+      }));
+    },
+  };
+
+  /** Revision body of a content item: the head plus the stored meta (which never holds `stage`). */
+  const contentBody = (r: Row) => ({ ...toContentHead(r), meta: r.meta });
+  const contentVersioned = (r: Row) => ({ id: r.id as string, value: toContentHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+  const readContent = (row: Row | undefined, what: string) => {
+    if (!row) throw new NotFoundError(what);
+    return { ...contentVersioned(row), value: { ...toContentHead(row), bodyMd: row.body_md as string, meta: { ...row.meta, stage: row.stage }, metaSchemaVersion: row.meta_schema_version as number } };
+  };
+
+  /** Locks the row, checks the version, applies `change` to its columns and appends a revision. */
+  async function writeContent(id: string, meta: WriteMeta, change: (cur: Row) => Record<string, unknown>) {
+    if (!isUuid(id)) throw new NotFoundError(`content item ${id}`);
+    return sql.begin(async (tx) => {
+      await shareBrandOf(tx, "content_items", id, `content item ${id}`);
+      const [cur] = await tx`SELECT * FROM content_items WHERE id = ${id} FOR NO KEY UPDATE`;
+      if (!cur) throw new NotFoundError(`content item ${id}`);
+      if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+      const [row] = await tx`UPDATE content_items SET ${tx({ ...change(cur), updated_at: now() })}, version = version + 1 WHERE id = ${id} RETURNING *`;
+      await appendRevision(tx, { brandId: row.brand_id, entityType: "content_item", entityId: id, version: row.version, body: contentBody(row), bodyText: row.body_md }, meta);
+      return contentVersioned(row);
+    });
+  }
+
+  const content: ContentItemRepository = {
+    async list(brandId, filter) {
+      if (!isUuid(brandId) || (filter?.derivedFrom !== undefined && !isUuid(filter.derivedFrom))) return [];
+      const rows = await sql`SELECT * FROM content_items WHERE brand_id = ${brandId} ${filter?.stage ? sql`AND stage = ${filter.stage}` : sql``}
+                             ${filter?.channel ? sql`AND channel = ${filter.channel}` : sql``} ${filter?.derivedFrom ? sql`AND derived_from = ${filter.derivedFrom}` : sql``} ORDER BY slug COLLATE "C"`;
+      return rows.map(contentVersioned);
+    },
+    async get(brandId, slug) {
+      const [row] = isUuid(brandId) ? await sql`SELECT * FROM content_items WHERE brand_id = ${brandId} AND slug = ${slug}` : [];
+      return readContent(row, `content item "${slug}"`);
+    },
+    async getById(id) {
+      const [row] = isUuid(id) ? await sql`SELECT * FROM content_items WHERE id = ${id}` : [];
+      return readContent(row, `content item ${id}`);
+    },
+    async create(brandId, input, meta) {
+      assertContentItem(input, true);
+      const stage = input.stage ?? "idea";
+      const publishedAt = resolvePublishedAt(null, stage, input.publishedAt, null);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        await shareBrand(tx, brandId);
+        if (input.derivedFrom) {
+          const [parent] = await tx`SELECT 1 FROM content_items WHERE id = ${input.derivedFrom} AND brand_id = ${brandId}`;
+          if (!parent) throw new InvalidInputError("derivedFrom must be an item of the same brand");
+        }
+        const at = now();
+        const [row] = await tx`INSERT INTO content_items (brand_id, slug, title, stage, channel, format, body_md, meta, meta_schema_version, derived_from, published_at, created_at, updated_at)
+                               VALUES (${brandId}, ${input.slug}, ${input.title}, ${stage}, ${input.channel ?? null}, ${input.format ?? null}, ${input.bodyMd ?? ""},
+                                       ${json(tx, stripStage(input.meta ?? {}))}, ${input.metaSchemaVersion ?? 1}, ${input.derivedFrom ?? null}, ${publishedAt}, ${at}, ${at})
+                               ON CONFLICT (brand_id, slug) DO NOTHING RETURNING *`;
+        if (!row) {
+          const [cur] = await tx`SELECT version FROM content_items WHERE brand_id = ${brandId} AND slug = ${input.slug}`;
+          throw cur ? new AlreadyExistsError(`content item "${input.slug}"`, cur.version) : new VersionConflictError(null);
+        }
+        await appendRevision(tx, { brandId, entityType: "content_item", entityId: row.id, version: 1, body: contentBody(row), bodyText: row.body_md }, meta);
+        return contentVersioned(row);
+      });
+    },
+    async save(id, patch, meta) {
+      assertContentItem(patch);
+      return writeContent(id, meta, (cur) => ({
+        title: patch.title ?? cur.title, channel: patch.channel === undefined ? cur.channel : patch.channel, format: patch.format === undefined ? cur.format : patch.format,
+        body_md: patch.bodyMd ?? cur.body_md, meta_schema_version: patch.metaSchemaVersion ?? cur.meta_schema_version, meta: patch.meta === undefined ? json(sql, cur.meta) : json(sql, stripStage(patch.meta)),
+      }));
+    },
+    async setStage(id, patch, meta) {
+      assertNotAutosave(meta);
+      assertContentItem({ stage: patch.stage });
+      return writeContent(id, meta, (cur) => ({
+        stage: patch.stage, published_at: resolvePublishedAt(cur.stage, patch.stage, patch.publishedAt, iso(cur.published_at)),
+      }));
+    },
+  };
+
+  /**
+   * Serializes writers of one carousel's counter (export versions, chat seq). An advisory lock, not a row lock, so it
+   * never blocks saves; keyed by schema so schemas sharing a database do not contend.
+   */
+  const lockCounter = (tx: Tx, scope: string, carouselId: string) => tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || ${scope} || ':' || ${carouselId}, 0))`;
+  const requireCarousel = (tx: Tx, carouselId: string) => shareBrandOf(tx, "carousels", carouselId, `carousel ${carouselId}`);
+
+  const exports: ExportRepository = {
+    async reserveNextVersion(carouselId, carouselVersion, opts) {
+      if (!Number.isInteger(carouselVersion) || carouselVersion < 1) throw new InvalidInputError("invalid carouselVersion");
+      return sql.begin(async (tx) => {
+        await requireCarousel(tx, carouselId);
+        await lockCounter(tx, "exports", carouselId);
+        const at = now();
+        const cutoff = new Date(at.getTime() - (opts?.staleAfterMs ?? DEFAULT_EXPORT_STALE_MS));
+        await tx`UPDATE exports SET status = 'failed', finished_at = ${at} WHERE carousel_id = ${carouselId} AND status = 'running' AND started_at < ${cutoff}`;
+        const [row] = await tx`INSERT INTO exports (carousel_id, version_no, carousel_version, started_at)
+                               SELECT ${carouselId}, COALESCE(MAX(version_no), 0) + 1, ${carouselVersion}, ${at} FROM exports WHERE carousel_id = ${carouselId} RETURNING *`;
+        return toExport(row);
+      });
+    },
+    async complete(id, manifest) {
+      assertJsonObject(manifest, "manifest");
+      if (!isUuid(id)) throw new NotFoundError(`export ${id}`);
+      return sql.begin(async (tx) => {
+        const [parent] = await tx`SELECT c.brand_id FROM exports e JOIN carousels c ON c.id = e.carousel_id WHERE e.id = ${id}`;
+        if (!parent) throw new NotFoundError(`export ${id}`);
+        await shareBrand(tx, parent.brand_id, `of export ${id}`);
+        return finishExport(tx, id, "done", manifest);
+      });
+    },
+    fail: (id) => finishExport(sql, id, "failed"),
+    async list(carouselId) {
+      if (!isUuid(carouselId)) return [];
+      return (await sql`SELECT * FROM exports WHERE carousel_id = ${carouselId} ORDER BY version_no`).map(toExport);
+    },
+  };
+
+  async function finishExport(q: Tx | Sql, id: string, status: "done" | "failed", manifest?: Record<string, unknown>): Promise<CarouselExport> {
+    if (!isUuid(id)) throw new NotFoundError(`export ${id}`);
+    const [row] = await q`UPDATE exports SET status = ${status}, manifest = ${manifest ? sql.json(manifest as postgres.JSONValue) : null}, finished_at = ${now()}
+                            WHERE id = ${id} AND status = 'running' RETURNING *`;
+    if (row) return toExport(row);
+    const [cur] = await q`SELECT * FROM exports WHERE id = ${id}`;
+    if (!cur) throw new NotFoundError(`export ${id}`);
+    if (status === "failed") return toExport(cur);
+    throw new InvalidInputError(`export ${id} is ${cur.status}, not running`);
+  }
+
+  const chat: ChatRepository = {
+    async append(carouselId, body) {
+      assertJsonObject(body, "chat body");
+      return sql.begin(async (tx) => {
+        await requireCarousel(tx, carouselId);
+        await lockCounter(tx, "chat", carouselId);
+        const [row] = await tx`INSERT INTO chat_messages (carousel_id, seq, body, created_at)
+                               SELECT ${carouselId}, COALESCE(MAX(seq), 0) + 1, ${json(tx, body)}, ${now()} FROM chat_messages WHERE carousel_id = ${carouselId} RETURNING seq`;
+        return row.seq as number;
+      });
+    },
+    async list(carouselId, opts) {
+      assertChatPage(opts);
+      if (!isUuid(carouselId)) return [];
+      const rows = await sql`SELECT seq, body, created_at FROM chat_messages WHERE carousel_id = ${carouselId} AND seq > ${opts?.afterSeq ?? 0}
+                             ORDER BY seq ${opts?.limit === undefined ? sql`` : sql`LIMIT ${opts.limit}`}`;
+      return rows.map((r): ChatMessage => ({ seq: r.seq, body: r.body, createdAt: iso(r.created_at)! }));
+    },
+  };
+
+  // Dates are read as text so a `date` column never shifts with the server time zone.
+  const runCols = sql`id, brand_id, recipe, period_start::text AS period_start, period_end::text AS period_end, input, storyboard, schema_version, created_by, created_at, updated_at, version`;
+  const runBody = (r: Row) => ({ ...toRunHead(r), input: r.input, storyboard: r.storyboard });
+  const runVersioned = (r: Row) => ({ id: r.id as string, value: toRunHead(r), version: r.version as number, updatedAt: iso(r.updated_at)! });
+
+  const runs: RecipeRunRepository = {
+    async create(brandId, input, meta) {
+      assertRecipeRun(input, true);
+      if (meta.expectedVersion !== null) throw new VersionConflictError(null);
+      if (!isUuid(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      return sql.begin(async (tx) => {
+        await shareBrand(tx, brandId);
+        const at = now();
+        const [row] = await tx`INSERT INTO recipe_runs (brand_id, recipe, period_start, period_end, input, storyboard, schema_version, created_by, created_at, updated_at)
+                               VALUES (${brandId}, ${input.recipe}, ${input.periodStart}, ${input.periodEnd}, ${json(tx, input.input.json)},
+                                       ${input.storyboard === undefined ? null : json(tx, input.storyboard)}, ${input.input.schemaVersion}, ${meta.author}, ${at}, ${at})
+                               RETURNING ${runCols}`;
+        await appendRevision(tx, { brandId, entityType: "recipe_run", entityId: row.id, version: 1, body: runBody(row), bodyText: null }, meta);
+        return runVersioned(row);
+      });
+    },
+    async get(id, validate) {
+      const [row] = isUuid(id) ? await sql`SELECT ${runCols} FROM recipe_runs WHERE id = ${id}` : [];
+      if (!row) throw new NotFoundError(`recipe run ${id}`);
+      return { ...runVersioned(row), value: { ...toRunHead(row), input: validate(row.input, row.schema_version), storyboard: row.storyboard } };
+    },
+    async list(brandId, filter) {
+      if (filter?.periodStart !== undefined) assertDate(filter.periodStart, "periodStart");
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT ${runCols} FROM recipe_runs WHERE brand_id = ${brandId} ${filter?.recipe ? sql`AND recipe = ${filter.recipe}` : sql``}
+                             ${filter?.periodStart ? sql`AND period_start = ${filter.periodStart}` : sql``} ORDER BY period_start DESC, created_at DESC, id ASC`;
+      return rows.map(runVersioned);
+    },
+    async save(id, patch, meta) {
+      assertRecipeRun(patch);
+      if (!isUuid(id)) throw new NotFoundError(`recipe run ${id}`);
+      return sql.begin(async (tx) => {
+        await shareBrandOf(tx, "recipe_runs", id, `recipe run ${id}`);
+        const [cur] = await tx`SELECT version FROM recipe_runs WHERE id = ${id} FOR NO KEY UPDATE`;
+        if (!cur) throw new NotFoundError(`recipe run ${id}`);
+        if (cur.version !== meta.expectedVersion) throw new VersionConflictError(cur.version);
+        const [row] = await tx`UPDATE recipe_runs SET input = COALESCE(${patch.input ? json(tx, patch.input.json) : null}, input),
+                                 schema_version = COALESCE(${patch.input?.schemaVersion ?? null}, schema_version),
+                                 storyboard = ${patch.storyboard === undefined ? tx`storyboard` : patch.storyboard === null ? null : json(tx, patch.storyboard)},
+                                 updated_at = ${now()}, version = version + 1 WHERE id = ${id} RETURNING ${runCols}`;
+        await appendRevision(tx, { brandId: row.brand_id, entityType: "recipe_run", entityId: id, version: row.version, body: runBody(row), bodyText: null }, meta);
+        return runVersioned(row);
+      });
+    },
+  };
+
+  const runArtifacts: RunArtifactRepository = {
+    async record(runId, input) {
+      assertRunArtifact(input);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        await shareBrandOf(tx, "recipe_runs", runId, `recipe run ${runId}`);
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':run-artifact:' || ${runId}::text || ':' || ${input.kind}::text || ':' || coalesce(${input.cardIndex}::int::text, ''), 0))`;
+        const [last] = await tx`SELECT * FROM run_artifacts WHERE run_id = ${runId} AND kind = ${input.kind} AND card_index IS NOT DISTINCT FROM ${input.cardIndex}::int ORDER BY seq DESC LIMIT 1`;
+        if (last && last.sha256 === input.sha256 && last.inputs_hash === input.inputsHash) return toArtifact(last);
+        const [row] = await tx`INSERT INTO run_artifacts (run_id, kind, card_index, card_id, sha256, inputs_hash, created_at)
+                               VALUES (${runId}, ${input.kind}, ${input.cardIndex}, ${input.cardId}, ${input.sha256}, ${input.inputsHash}, ${now()}) RETURNING *`;
+        return toArtifact(row);
+      });
+    },
+    async current(runId, filter) {
+      if (filter?.kind) assertArtifactKind(filter.kind);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
+        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        const rows = await tx`SELECT DISTINCT ON (kind, card_index) * FROM run_artifacts WHERE run_id = ${runId} ${filter?.kind ? tx`AND kind = ${filter.kind}` : tx``}
+                              ORDER BY kind, card_index, seq DESC`;
+        return rows.map(toArtifact);
+      });
+    },
+    async history(runId, kind, cardIndex) {
+      assertRunArtifact({ kind, cardIndex }, false);
+      if (!isUuid(runId)) throw new NotFoundError(`recipe run ${runId}`);
+      return sql.begin(async (tx) => {
+        const [run] = await tx`SELECT 1 FROM recipe_runs WHERE id = ${runId}`;
+        if (!run) throw new NotFoundError(`recipe run ${runId}`);
+        return (await tx`SELECT * FROM run_artifacts WHERE run_id = ${runId} AND kind = ${kind} AND card_index IS NOT DISTINCT FROM ${cardIndex}::int ORDER BY seq`).map(toArtifact);
+      });
+    },
+  };
+
+  const toImportRun = (r: Row): ImportRun => ({
+    id: r.id, brandId: r.brand_id, sourceKind: r.source_kind, sourceRootHash: r.source_root_hash, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, report: r.report,
+  });
+  const importRuns: ImportRunRepository = {
+    async record(input) {
+      if (!isUuid(input.brandId)) throw new NotFoundError(`brand ${input.brandId}`);
+      const [row] = await sql`INSERT INTO import_runs (brand_id, source_kind, source_root_hash, started_at, finished_at, report)
+                              VALUES (${input.brandId}, ${input.sourceKind}, ${input.sourceRootHash}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.report)}) RETURNING *`
+        .catch((e) => Promise.reject((e as { code?: string }).code === "23503" ? new NotFoundError(`brand ${input.brandId}`) : e));
+      return toImportRun(row);
+    },
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      return (await sql`SELECT * FROM import_runs WHERE brand_id = ${brandId} ORDER BY started_at DESC, finished_at DESC, id`).map(toImportRun);
+    },
+  };
+
+  const toDrill = (r: Row): RestoreDrill => ({ id: r.id, databaseName: r.database_name, status: r.status, startedAt: iso(r.started_at)!, finishedAt: iso(r.finished_at)!, recordedAt: iso(r.recorded_at)!, ageMs: Number(r.age_ms), detail: r.detail });
+  const restoreDrills: RestoreDrillRepository = {
+    async record(input) {
+      const [row] = await sql`INSERT INTO restore_drills (database_name, status, started_at, finished_at, detail)
+                              VALUES (${input.databaseName}, ${input.status}, ${input.startedAt}, ${input.finishedAt}, ${json(sql, input.detail)})
+                              RETURNING *, (extract(epoch FROM now() - recorded_at) * 1000)::float8 AS age_ms`;
+      return toDrill(row);
+    },
+    // Equal recorded_at (two rows in one transaction share now()) is broken by the random uuid: not insertion order. Drills are separate commands, so a tie does not arise in practice.
+    async latest() {
+      const [row] = await sql`SELECT *, (extract(epoch FROM now() - recorded_at) * 1000)::float8 AS age_ms FROM restore_drills WHERE database_name = current_database()
+                          ORDER BY recorded_at DESC, id LIMIT 1`;
+      return row ? toDrill(row) : null;
+    },
+  };
+
+  return { brands, documents, revisions, rules, guidance, tools, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
+}

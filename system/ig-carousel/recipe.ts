@@ -165,7 +165,7 @@ export function parseRecipeImageHosts(
  * Dropping it silently would leave them with a narrower allowlist than they
  * wrote and no way to find out.
  */
-function classify(items: string[]): string[] | "malformed" | "wildcard" {
+export function classify(items: string[]): string[] | "malformed" | "wildcard" {
   if (items.length === 0) {
     return "malformed";
   }

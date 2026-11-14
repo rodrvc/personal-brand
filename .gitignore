@@ -62,18 +62,14 @@ docs/PLAN-skills-agnosticas.md
 # scripts/brand-denylist.txt y manual_terms() en el validador). Nunca trackeado:
 # publicar un denylist es publicar la lista de lo que se quiso ocultar.
 scripts/brand-denylist.local.txt
+# Generated from storage by `brand denylist --write` (same reason: it lists what to hide).
+scripts/brand-denylist.generated.txt*
 
 # Borradores de contenido de una persona real (briefs con audiencia, objetivo,
 # CTA y posicionamiento). docs/public-repo-rules.md los prohíbe explícitamente:
 # "real drafts for a specific person", "local working cards", "content
 # describing a real person's audience, objectives, voice, CTA, or positioning".
 docs/pi-local-card-*.md
-
-# app/: artefactos de build y copias generadas. Sin esto un `cargo build`
-# ensucia el repo con el target de Rust y el proyecto generado por Tauri.
-app/src/core/
-app/src-tauri/target/
-app/src-tauri/gen/
 
 # Local secrets (API keys). Never tracked; Orca copies it into each worktree via .worktreeinclude.
 .env

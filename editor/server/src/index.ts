@@ -6,8 +6,8 @@ import { messages } from "./messages.js";
 loadRepoRootEnv();
 
 import { checkChromiumAvailable, closeSharedBrowser } from "./browser.js";
-import { listProfilesAsync, ProfileStore } from "./profile-store.js";
-import { readAssetFile } from "./chat/chat-references.js";
+import { listProfilesAsync } from "./profile-store.js";
+import { assetResolverFor } from "./chat/chat-references.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { assetsRouter } from "./routes/assets.js";
 import { renderRouter } from "./routes/render.js";
@@ -18,6 +18,9 @@ import { NonePieceGenerator } from "./ai/none.js";
 import { OpenAiPieceGenerator } from "./ai/openai.js";
 import type { PieceGenerator } from "./ai/piece-generator.js";
 import { initStorageRuntime, storageSyncMiddleware } from "./storage/runtime.js";
+import { openEditorStorage } from "./stored-open.js";
+import { storedBrandGuard } from "./stored-read.js";
+import { runShutdown } from "./shutdown.js";
 
 /**
  * Selects the storage backend (issue #99: `fs` default, `s3` opt-in via
@@ -66,19 +69,24 @@ function getGenerator(slug: string): PieceGenerator {
   // One instance is enough today (no per-profile provider config exists),
   // but routes ask by slug so a future per-brand override has a seam to
   // land in without changing every call site.
-  return apiKey ? new OpenAiPieceGenerator(apiKey, (id) => readAssetFile(new ProfileStore(slug), id)) : new NonePieceGenerator();
+  return apiKey ? new OpenAiPieceGenerator(apiKey, assetResolverFor(opened?.storage, slug)) : new NonePieceGenerator();
 }
+
+// Brands cut over to storage are read through its repositories (S10a); `DATABASE_URL` unset keeps every brand a folder.
+const opened = openEditorStorage();
+console.log(opened ? "Read path: storage for cut-over brands, folders for the rest" : "Read path: folders (DATABASE_URL not set)");
 
 const app = express();
 app.use(express.json({ limit: "40mb" }));
+app.use("/api/profiles/:slug", storedBrandGuard(opened?.storage));
 app.use(storageSyncMiddleware());
 
-app.use(profilesRouter());
-app.use(assetsRouter());
-app.use(renderRouter());
-app.use(composeRouter(getGenerator));
-app.use(exportRouter());
-app.use(chatRouter(getGenerator));
+app.use(profilesRouter(opened?.storage));
+app.use(assetsRouter(opened?.storage));
+app.use(renderRouter(opened?.storage));
+app.use(composeRouter(getGenerator, opened?.storage));
+app.use(exportRouter(opened?.storage));
+app.use(chatRouter(getGenerator, { storage: opened?.storage }));
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
@@ -103,9 +111,35 @@ const server = app.listen(port, bind, async () => {
   console.log(chromiumProblem ? `Chromium check: ${chromiumProblem}` : "Chromium check: ok");
 });
 
+let shuttingDown = false;
+const DRAIN_TIMEOUT_MS = 10_000;
+const CLOSE_TIMEOUT_MS = 5_000;
+
+/** Stop accepting and drain (bounded), then close the browser, then end the pool, each bounded: no in-flight request meets a closed client and no close can hang the exit. */
 async function shutdown(): Promise<void> {
-  await closeSharedBrowser();
-  server.close(() => process.exit(0));
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const code = await runShutdown(
+    [
+      {
+        name: "http server",
+        maxMs: DRAIN_TIMEOUT_MS + 1_000,
+        close: () =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, DRAIN_TIMEOUT_MS);
+            server.close(() => {
+              clearTimeout(timer);
+              resolve();
+            });
+            server.closeIdleConnections?.();
+          }),
+      },
+      { name: "browser", close: closeSharedBrowser },
+      { name: "storage pool", close: () => opened?.close() },
+    ],
+    { stepMs: CLOSE_TIMEOUT_MS },
+  );
+  process.exit(code);
 }
 
 process.on("SIGINT", shutdown);

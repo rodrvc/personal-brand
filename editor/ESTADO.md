@@ -142,8 +142,8 @@ the image is generated leaving free space, and the text is measured against
 its box and adjusted until it fits — plain auto-fit, measurable in the
 browser, no AI needed.
 
-**Verified finding — nothing to salvage from the deprecated desktop app
-regarding fonts.** Investigation of `app/` found: three hardcoded generic
+**Verified finding — nothing to salvage from the retired desktop app
+regarding fonts.** Investigation of the old `app/` (since retired, in git history) found: three hardcoded generic
 system font stacks, no custom font file loading at all, a fixed per-role
 type-scale table, and a hand-rolled greedy canvas `measureText` word-wrap
 (which prevents words overflowing horizontally but does not make a block
@@ -189,8 +189,8 @@ Un editor web local para armar carruseles de Instagram con la identidad
 visual de cada marca: se describe la pieza en un prompt, la IA arma un plan
 por lámina y por hueco (fondo, textos, figuras), y cada pieza se puede fijar,
 regenerar o reemplazar por una del bucket de la marca sin tocar el resto.
-Reemplaza en esa función a `app/` (el editor de escritorio), que queda
-deprecado — ver más abajo.
+Reemplaza en esa función a `app/` (el editor de escritorio), que se retiró
+el 2026-10-26 (vive en el historial de git).
 
 La meta de fondo no es "generar más rápido con IA": es que cada pieza
 aprobada (fondo, personaje, logo, foto, tipografía) entra a una biblioteca
@@ -212,8 +212,8 @@ servidor que toca disco para datos de perfil. Rechaza cualquier ruta con
 `..`, absoluta, o cuyo `realpath` (siguiendo symlinks) caiga fuera de las dos
 raíces permitidas — así se detecta tanto un `../` explícito como un symlink
 dentro de `assets/` apuntando a `system/`. Cubierto por tests
-(`editor/server/src/profile-store.test.ts`), igual que `resolver_dentro()` en
-`app/src-tauri/src/main.rs` lo estaba para la app de escritorio.
+(`editor/server/src/profile-store.test.ts`), igual que lo estaba en la app de escritorio
+retirada (historial de git).
 
 ## Cómo arrancar
 
@@ -332,7 +332,7 @@ system/assets/    biblioteca de piezas de marca (compartida con el motor de reel
 
 `core/` es ahora un paquete del workspace pnpm (`@personal-brand/core`) que
 `editor/server` importa directo — ya no hay copia sincronizada tipo
-`sync-core.mjs` para este módulo (eso sigue existiendo solo dentro de `app/`).
+`sync-core.mjs` para este módulo (eso solo existía dentro de la app retirada, `app/`).
 
 ## Qué funciona hoy
 
