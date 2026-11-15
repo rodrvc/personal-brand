@@ -1132,7 +1132,7 @@ Known limits of `brand run`: `run save` cannot clear a storyboard (the repositor
 
 **Decided in S11b2.**
 
-1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`docs/CONTEXTO-HANDOFF.md`, `openspec/changes/**`) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.
+1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`openspec/changes/**`, and git history for removed handoff docs) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.
 
 **Decided in P1.**
 
