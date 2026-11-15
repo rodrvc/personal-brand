@@ -15,12 +15,12 @@ guard let image = NSImage(contentsOf: url), let cg = image.cgImage(forProposedRe
 let request = VNRecognizeTextRequest()
 request.recognitionLevel = .accurate
 // Optional second argument: comma-separated recognition languages, already mapped to supported tags by the caller
-// (the brand's locale first, English as a fallback). Detection is always on, so unmatched text is still read;
-// automaticallyDetectsLanguage needs macOS 13+, older systems fall back to the listed languages.
+// (the brand's locale first, English as a fallback). With known languages, detection stays off: forcing it on
+// measurably degraded accented poster text. Without them, detection picks the language
+// (automaticallyDetectsLanguage needs macOS 13+; older systems use Vision's default language).
 if CommandLine.arguments.count > 2 {
   request.recognitionLanguages = CommandLine.arguments[2].split(separator: ",").map(String.init)
-}
-if #available(macOS 13.0, *) {
+} else if #available(macOS 13.0, *) {
   request.automaticallyDetectsLanguage = true
 }
 request.usesLanguageCorrection = true
