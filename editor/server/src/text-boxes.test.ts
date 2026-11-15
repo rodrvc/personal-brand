@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 
 import { chromium } from "playwright";
 
-import { readTextLines } from "./text-boxes.js";
+import { matchRecognitionLanguages, readTextLines } from "./text-boxes.js";
+
+const supported = ["en-US", "es-ES", "fr-FR", "pt-BR"];
+assert.deepEqual(matchRecognitionLanguages(["es-XX"], supported), ["es-ES", "en-US"], "a regional tag maps by language, English follows");
+assert.deepEqual(matchRecognitionLanguages(["pt_BR"], supported), ["pt-BR", "en-US"], "an exact tag is kept");
+assert.deepEqual(matchRecognitionLanguages(["en-GB"], supported), ["en-US"], "English is not repeated");
+assert.deepEqual(matchRecognitionLanguages(["xx"], supported), ["en-US"], "an unknown language leaves English");
+assert.deepEqual(matchRecognitionLanguages(["xx"], []), [], "nothing supported leaves detection alone");
+console.log("ok - matchRecognitionLanguages");
 
 if (process.platform !== "darwin") {
   console.log("skip - local OCR needs macOS");

@@ -335,7 +335,9 @@ const lines = [
   assert.deepEqual(dataKinds("21 hrs"), ["time"]);
   assert.deepEqual(dataKinds("20.10 hrs"), ["time"], "a time with a dot is not a date");
   assert.deepEqual(dataKinds("€5.000"), ["price"], "thousands are not a time");
-  assert.deepEqual(dataKinds("5.000 EUR"), ["price"]);
+  assert.deepEqual(dataKinds("5.000 EUR"), ["price"], "an upper-case ISO code after the amount is a price");
+  assert.deepEqual(dataKinds("2 all"), [], "a lower-case word that is also an ISO code is not a price");
+  assert.deepEqual(dataKinds("3 top"), [], "TOP-like words are not prices");
   assert.deepEqual(dataKinds("26.09"), ["date"]);
   assert.deepEqual(dataKinds("SÁB 26 SEP"), ["date"]);
   assert.deepEqual(dataKinds("26.09.2026 A LAS 21:30HRS"), ["date", "time"]);

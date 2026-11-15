@@ -87,14 +87,14 @@ const LEGACY_POSTER_ROUTE: PosterRoute = "editable";
  * The layout reference's proportion, read before the model is asked; for an editable poster also its measured text
  * lines and framed picture. A poster made as one image needs no OCR and no frame.
  */
-async function readLayout(ws: ChatWorkspace, references: ChatReference[], wordmark: string, route: PosterRoute): Promise<LayoutRead> {
+async function readLayout(ws: ChatWorkspace, references: ChatReference[], wordmark: string, route: PosterRoute, locale: string): Promise<LayoutRead> {
   const layout = references.find((r) => r.role === "layout");
   const file = layout ? await ws.readAsset(layout.id) : undefined;
   if (!file) return {};
   const size = detectImage(file.bytes, "reference");
   if (route === "image") return size.w && size.h ? { aspect: size.w / size.h } : {};
   const picture = whereImageToolRuns(() => findPicture(file.bytes));
-  const lines = readTextLines(file.bytes);
+  const lines = readTextLines(file.bytes, [locale]);
   const ink = lines ? whereImageToolRuns(() => inkReader(toPng(file.bytes))) : undefined;
   return {
     ...(lines ? { lines, kinds: classifyLines(lines, picture, wordmark) } : {}),
@@ -269,7 +269,7 @@ type GenerationRequest = Omit<Parameters<typeof generateForSlot>[2], "canvas" | 
 
 type PlacedTexts = Map<string, PlacedText[]>;
 
-async function generationFor(ws: ChatWorkspace, action: ChatAction, canvas: CarouselDocument["canvas"], placed: PlacedTexts): Promise<GenerationRequest | undefined> {
+async function generationFor(ws: ChatWorkspace, action: ChatAction, canvas: CarouselDocument["canvas"], placed: PlacedTexts, locale: string): Promise<GenerationRequest | undefined> {
   if (action.type === "compose_from_reference") {
     const layout = action.referenceIds?.[0] ? await ws.readAsset(action.referenceIds[0]) : undefined;
     const pad = layout ? whereImageToolRuns(() => edgeColor(layout.bytes)) : undefined;
@@ -284,7 +284,7 @@ async function generationFor(ws: ChatWorkspace, action: ChatAction, canvas: Caro
       mode: "reproduce",
       ...(pad ? { padColor: pad } : {}),
       postProcess: (image) => {
-        const drawn = readTextLines(image);
+        const drawn = readTextLines(image, [locale]);
         const size = detectImage(image, "generated");
         const expected = size.w && size.h ? letterbox(size.w / size.h, canvas.w / canvas.h) : undefined;
         const registration = register(anchors, drawn, expected);
@@ -428,7 +428,7 @@ async function runProposalBody(
         results.push({ actionId: action.id, slideIds: [], assetIds: [composition.backgroundId], costCents: 0 });
         continue;
       }
-      const spec = await generationFor(ws, action, canvas, placed);
+      const spec = await generationFor(ws, action, canvas, placed, brand.locale);
       if (!spec) continue;
       const entry = await generateForSlot(ws.planner, generator, { ...spec, canvas, carouselId });
       generated.set(action.id, entry.id);
@@ -568,7 +568,7 @@ export function chatRouter(getGenerator: (slug: string) => PieceGenerator, optio
       const ctx = withReferences((await ws.open()).ctx, references);
       const generator = getGenerator(req.params.slug);
       const images = await loadReferenceImages((id) => ws.readAsset(id), references.map((r) => r.id));
-      const layoutRead = await readLayout(ws, references, ctx.brand.copy.wordmark, route);
+      const layoutRead = await readLayout(ws, references, ctx.brand.copy.wordmark, route, ctx.brand.locale);
       const completion = await generator.completeJson({
         instructions: chatInstructions(route),
         input: chatInput(ctx, history, text, references.map((r) => ({ name: r.name, role: r.role ?? "content" })), numberedLines(layoutRead.lines, layoutRead.kinds)),

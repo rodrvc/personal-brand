@@ -72,23 +72,23 @@ Two different sentences:
 
 Only the first is ever yours to say.
 
-## Starting point: Chilean Spanish female voices
+## Recording candidates (any locale)
 
-A **starting point, not a closed list.** These were returned by
-`shared-voices?gender=female&language=es&search=chilean` and are recorded here
-so the next agent does not repeat the search from zero — and, more to the
-point, does not assert that voices for an accent do not exist without asking.
+The accent and language come from the **brand's own data** (its locale and, if
+it declares one, a preferred accent or region), never from this reference. Read
+them first, then query with `language=<iso>` and `search=<accent>` as above.
+Nothing here is specific to one market.
+
+Record the candidates you shortlisted so the next agent does not repeat the
+search from zero, and does not assert that voices for an accent do not exist
+without asking. Keep the record next to the brand's data, not in the engine.
+Shape of a record (fictitious values):
 
 | Voice ID | Name | Age | Character | Model verified with | Verified |
 |---|---|---|---|---|---|
-| `lLsDvdl6OjtZfLJPM2HA` | Olivia Pro — Strategic Business & Tech | middle_aged | professional, vibrant | `eleven_multilingual_v2` | 2026-09-08 |
-| `GJid0jgRsqjUy21Avuex` | Emma — Authoritative, Assured and Clear | middle_aged | the most formal of the set | `eleven_multilingual_v2` | 2026-09-08 |
-| `prblQcKOdF08ozhxP2mk` | Angela — Warm, Calm and Assured | middle_aged | warm and calm, but **noticeably slower** — see the note below | `eleven_multilingual_v2` | 2026-09-08 |
-| `6Gr4AVmTax1pMJO0lHRK` | Catalina — Chilean Spanish | young | "connects, does not just recite"; closer, less formal | `eleven_multilingual_v2` | 2026-09-08 |
-| `oJIuRMopN0sojGjwD6rQ` | Camila | young | customer service and sales | `eleven_multilingual_v2` | 2026-09-08 |
-| `Fd38GRHtJllY0CuguAy9` | Victoria | young | clear and confident | `eleven_multilingual_v2` | 2026-09-08 |
-| `NxmJt7aR0FMgBqiYrcc0` | Esperanza | young | relaxed | `eleven_multilingual_v2` | 2026-09-08 |
-| `JM2A9JbRp8XUJ7bdCXJc` | Fernanda Olea — Cheerful and Powerful | young | powerful, conversational | `eleven_multilingual_v2` | 2026-09-08 |
+| `<voice_id>` | Example Voice A | middle_aged | formal, clear | `eleven_multilingual_v2` | YYYY-MM-DD |
+| `<voice_id>` | Example Voice B | young | relaxed, conversational | `eleven_multilingual_v2` | YYYY-MM-DD |
+| `<voice_id>` | Example Voice C | middle_aged | warm and calm, but **noticeably slower** — see the note below | `eleven_multilingual_v2` | YYYY-MM-DD |
 
 **The last two columns are the point of the table, not decoration.** A
 `voice_id` can leave the catalog or change hands, and the model it was judged
@@ -96,16 +96,15 @@ with can be superseded. Without a date, a silently stale row looks exactly
 like a fresh one. When a row stops resolving, fix the row and move its date —
 do not delete the column.
 
-**Pace is a casting criterion, not just tone.** On the same sentence, Angela
-ran 2.6s longer than Emma. In this pipeline every clip is as long as its own
+**Pace is a casting criterion, not just tone.** On the same sentence, a slow,
+calm voice can run seconds longer than a formal one. In this pipeline every clip is as long as its own
 narration, so a slower voice does not desynchronize anything — it makes the
 whole video longer. On a multi-minute deck that difference compounds into
 minutes. Judge candidates on pace as well as warmth.
 
-**For any other accent or language, query the endpoint** — change `search=`
-and `language=`. This table covers one accent because that is what has been
-looked up so far; it is not a statement about what the catalog contains.
-Extend it when useful voices for other accents turn up.
+**Always query the endpoint** for the brand's locale — set `search=` and
+`language=`. A record is a note of what was looked up, not a statement about
+what the catalog contains.
 
 ### A known-good settings baseline
 
@@ -121,7 +120,7 @@ is not a comparison.
 
 ### No audio file is ever committed
 
-What goes in version control is the table above — the ids, the character
+What goes in version control is the record of shortlisted voices — the ids, the character
 notes, the settings. That is the expensive knowledge: the hard part was never
 generating audio, it was deciding which voices are worth listening to.
 
@@ -141,7 +140,7 @@ not retried as though it had been an oversight:
    chooses, and synthesis then fails or silently uses a different voice. A
    cache that cannot tell it is out of date is a trap, not an optimization.
 3. **It would hardcode a language assumption into the engine.** An
-   `es-cl-*.mp3` under `.claude/` is a production literal, sibling to the
+   `<lang>-<region>-*.mp3` under `.claude/` is a production literal, sibling to the
    brand literal `CLAUDE.md` forbids. Which voices to cast is a production
    decision, not an engine capability. This skill is transportable precisely
    because it carries no catalog of one language and one vendor.
@@ -234,7 +233,7 @@ cd "$OUT/casting"   # outside the repo
 # The REAL first paragraph of the script, already normalized.
 TXT='<first paragraph of the script>'
 
-# The four your query returned — ids and dates live in the table above.
+# The four your query returned — ids and dates live in the casting record.
 for pair in "<name>:<voice-id>" \
             "<name>:<voice-id>" \
             "<name>:<voice-id>" \

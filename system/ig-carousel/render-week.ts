@@ -77,10 +77,10 @@ function parseArgs(argv: string[]): {
   const eventsPerSlideIndex = argv.indexOf("--events-per-slide");
   const outIndex = argv.indexOf("--out");
   // `--date YYYY-MM-DD` renders the calendar week containing that date, so a
-  // week other than the current one (e.g. "la próxima semana") can be built
+  // week other than the current one (e.g. "next week") can be built
   // without waiting for it to arrive. Parsed as local time — a bare
   // `new Date("2026-07-27")` is UTC midnight, which lands on the previous day
-  // in Chile and would shift the whole week back.
+  // in a UTC-negative timezone and would shift the whole week back.
   const dateIndex = argv.indexOf("--date");
   let reference = new Date();
   if (dateIndex !== -1) {
