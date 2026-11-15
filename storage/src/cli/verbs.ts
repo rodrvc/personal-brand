@@ -9,7 +9,7 @@ import { stringify as stringifyYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
-import { AlreadyExistsError, BrandArchivedError, MAX_ASSET_TAG_CHARS, MAX_ASSET_TAGS, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { AlreadyExistsError, BrandArchivedError, ThemeOverlapError, MAX_ASSET_TAG_CHARS, MAX_ASSET_TAGS, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
 import { contentRefusal, nameRefusal, portabilityWarning, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
@@ -17,7 +17,7 @@ import { found } from "../import/shared.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
 import { brandTerms } from "./denylist.ts";
 import { downloadFonts, FontPolicyError, MAX_FAMILY_CHARS, type FontFile } from "./fonts.ts";
-import { toCheckRules } from "../revision-policy.ts";
+import { assertDate, toCheckRules } from "../revision-policy.ts";
 
 export interface CliResult {
   lines: string[];
@@ -104,6 +104,7 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   doc: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 4] },
   guidance: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   tool: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  theme: { values: ["from", "to", "tokens", "guidance", "date", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   recipe: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 3] },
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
@@ -119,14 +120,14 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
 
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
-  doc: ["get", "put"], guidance: ["list", "get", "put"], tool: ["list", "get", "put"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
+  doc: ["get", "put"], guidance: ["list", "get", "put"], tool: ["list", "get", "put"], theme: ["list", "get", "put", "active"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
   rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], content: ["list", "get", "put", "stage"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"], workspace: "*" };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], theme: ["get", "list", "active"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"], workspace: "*" };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -155,6 +156,8 @@ export const VERB_USAGE = [
   "  brand doc get|put <marca> <tokens|config|identity|spec|template> [<nombre>] [--file <ruta>] [--if-version <n>]",
   "  brand guidance list|get|put <marca> [<nombre>] [--file <ruta> --description <texto>] [--if-version <n>]",
   "  brand tool list|get|put <marca> [<nombre>] [--file <ruta>] [--description <texto>] [--if-version <n>]   (scripts de la marca; escribirlos exige --owner-opt-in aun tras el corte; solo se ejecutan cuando el dueño lo pide)",
+  "  brand theme list <marca> | get <marca> <tema> | active <marca> [--date <AAAA-MM-DD>]   (temas por temporada; sin --date usa hoy)",
+  "  brand theme put <marca> <tema> --from <AAAA-MM-DD> --to <AAAA-MM-DD> [--tokens <archivo.json>] [--guidance <archivo.md>] [--if-version <n>]   (escribirlos exige --owner-opt-in; dos temas de una marca no pueden compartir un día)",
   "  brand recipe get|put <marca> <receta> [--file <ruta>] [--if-version <n>]",
   "  brand rules add <marca> --file <regla.json> | update <marca> <id> --file <cambios.json> --if-version <n> | disable <marca> <id> --if-version <n>",
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
@@ -287,15 +290,17 @@ async function show(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
   }
   const recipes = await repos.recipes.list(brand.id);
   const tools = await repos.tools.list(brand.id);
+  const themes = await repos.themes.list(brand.id);
   const documents = [];
   for (const kind of DOC_KINDS) for (const d of await repos.documents.list(brand.id, kind)) documents.push({ kind, ...d });
   const rules = await repos.rules.list(brand.id, { includeDisabled: true });
-  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, tools, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
+  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, tools, themes, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
   return out(args, value, trusted([
     `Marca "${slug}" (${brand.value.displayName}), ${brand.value.status}, versión ${brand.version}${brand.value.cutoverAt ? `, cortada a storage el ${brand.value.cutoverAt}` : ""}`,
     ...documents.map((d) => `  documento ${d.kind}${d.name ? `/${d.name}` : ""} v${d.version}`),
     ...guidance.map((g) => `  guidance ${g.name} v${g.version}: ${g.description}`),
     ...tools.map((t) => `  script ${t.name} v${t.version}`),
+    ...themes.map((t) => `  tema ${t.name} v${t.version}: ${t.startsOn} a ${t.endsOn}`),
     ...recipes.map((r) => `  receta ${r.recipe} v${r.version}`),
     ...rules.map((r) => `  regla ${r.value.kind} (${r.value.severity})${r.value.enabled ? "" : " desactivada"}`),
   ]));
@@ -440,7 +445,9 @@ async function guidance(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   const file = args.values.get("file");
   const description = args.values.get("description");
   if (!file || description === undefined || expected === undefined) return usage();
-  const put = await ctx.repos.guidance.put(brand.id, name, { description, body: ctx.read(file) }, meta(ctx, expected));
+  const body = ctx.read(file);
+  if (contentRefusal("guidance.md", Buffer.from(body))) return refused("El texto de la guidance parece contener un secreto (credencial, clave o asignación literal): no se guardó.");
+  const put = await ctx.repos.guidance.put(brand.id, name, { description, body }, meta(ctx, expected));
   return wrote(args, put, [`Guidance ${name} guardada (versión ${put.version}).`]);
 }
 
@@ -467,6 +474,78 @@ async function tool(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promis
   const put = await ctx.repos.tools.put(brand.id, name, { description, body }, meta(ctx, expected));
   const warning = portabilityWarning(name, body);
   return wrote(args, put, [`Herramienta ${name} guardada (versión ${put.version}).`, ...(warning ? [`Aviso: ${warning}`] : [])]);
+}
+
+/** Seasonal themes: dated token overrides plus guidance text. Read like guidance (brand data), written only with the owner's opt-in. */
+async function theme(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  const range = (t: { startsOn: string; endsOn: string }) => `${t.startsOn} a ${t.endsOn}`;
+  if (sub === "list" && !name) {
+    const list = await ctx.repos.themes.list(brand.id);
+    return out(args, { trust: "brand-data", items: list }, trusted(list.length ? list.map((t) => `${t.name} v${t.version}: ${range(t)}`) : ["Sin temas."]));
+  }
+  if (sub === "active" && !name) {
+    const given = args.values.get("date");
+    const today = given === undefined ? await brandToday(ctx, brand.id) : null;
+    const date = given ?? today!.day;
+    try { assertDate(date, "date"); } catch { return { lines: [`Fecha inválida "${date}": usa AAAA-MM-DD.`], exitCode: EXIT.USAGE }; }
+    const t = await ctx.repos.themes.activeOn(brand.id, date);
+    return out(args, { trust: "brand-data", date, theme: t }, trusted([t ? `Tema activo el ${date}: ${t.name} (${range(t)}).` : `Sin tema activo para ${date}.`, ...(today?.warning ? [today.warning] : [])]));
+  }
+  if (!name) return usage();
+  if (sub === "get") {
+    const t = await ctx.repos.themes.get(brand.id, name);
+    return out(args, t, trusted([`${t.name} v${t.version}: ${range(t)}`, "tokens:", JSON.stringify(t.tokenOverrides, null, 2), "guidance:", t.guidance]));
+  }
+  if (sub !== "put") return usage();
+  const expected = ifVersion(args);
+  if (expected === undefined) return usage();
+  // A create names both dates; a save keeps whatever the command leaves out, so a new text alone never erases the dates.
+  const cur = expected === null ? null : await ctx.repos.themes.get(brand.id, name);
+  const startsOn = args.values.get("from") ?? cur?.startsOn;
+  const endsOn = args.values.get("to") ?? cur?.endsOn;
+  if (!startsOn || !endsOn) return { lines: ["Falta la vigencia del tema: indica --from <AAAA-MM-DD> y --to <AAAA-MM-DD>."], exitCode: EXIT.USAGE };
+  for (const [flag, v] of [["--from", startsOn], ["--to", endsOn]]) {
+    try { assertDate(v, flag); } catch { return { lines: [`Fecha inválida "${v}" en ${flag}: usa AAAA-MM-DD.`], exitCode: EXIT.USAGE }; }
+  }
+  if (endsOn < startsOn) return { lines: [`La fecha final (${endsOn}) es anterior a la inicial (${startsOn}).`], exitCode: EXIT.USAGE };
+  const tokensFile = args.values.get("tokens");
+  const guidanceFile = args.values.get("guidance");
+  const tokensText = tokensFile === undefined ? null : ctx.read(tokensFile);
+  const guidanceText = guidanceFile === undefined ? null : ctx.read(guidanceFile);
+  // The same secret scan as imported text: a hit is never stored.
+  for (const [file, text] of [["tokens.json", tokensText], ["guidance.md", guidanceText]] as const) {
+    if (text !== null && contentRefusal(file, Buffer.from(text))) return refused("El texto del tema parece contener un secreto (credencial, clave o asignación literal): no se guardó.");
+  }
+  const tokenOverrides = tokensText === null ? (cur?.tokenOverrides ?? {}) : tokensText.trim() === "" ? {} : parseJson(tokensText);
+  if (typeof tokenOverrides !== "object" || tokenOverrides === null || Array.isArray(tokenOverrides)) return { lines: ["Entrada inválida: --tokens debe ser un archivo JSON con un objeto."], exitCode: EXIT.USAGE };
+  try {
+    const put = await ctx.repos.themes.put(brand.id, name, { startsOn, endsOn, tokenOverrides: tokenOverrides as Record<string, unknown>, guidance: guidanceText ?? cur?.guidance ?? "" }, meta(ctx, expected));
+    return wrote(args, put, [`Tema ${name} guardado (versión ${put.version}): ${startsOn} a ${endsOn}.`]);
+  } catch (error) {
+    if (error instanceof ThemeOverlapError) return { lines: [`Las fechas se cruzan con el tema ${error.other.name} (${range(error.other)}): cambia las fechas de uno de los dos. No se guardó nada.`], exitCode: EXIT.USAGE };
+    throw error;
+  }
+}
+
+/** Whether `zone` is an IANA time zone name the runtime knows. */
+const validZone = (zone: unknown): zone is string => {
+  if (typeof zone !== "string" || !zone) return false;
+  try { new Intl.DateTimeFormat("en-CA", { timeZone: zone }); return true; } catch { return false; }
+};
+
+/**
+ * "Today" for a brand: the day it is now in the brand's time zone (optional `timezone`, an IANA name, in its config document),
+ * else on the machine. An unset zone is silent; a set but invalid one falls back to the machine with a Spanish warning, so a typo never blocks a command.
+ */
+export async function brandToday(ctx: { repos: ImportRepos; now(): Date }, brandId: string): Promise<{ day: string; warning?: string }> {
+  const config = await ctx.repos.documents.get(brandId, "config", "", (b) => b).then((d) => d.value as { timezone?: unknown }, (e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
+  const set = config?.timezone !== undefined && config.timezone !== null;
+  const zone = config && validZone(config.timezone) ? config.timezone : undefined;
+  const d = ctx.now();
+  if (zone) return { day: new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d) };
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return set ? { day, warning: `Aviso: la zona horaria ${JSON.stringify(String(config!.timezone))} de la configuración no es válida (usa un nombre IANA como Pacific/Auckland); se usó la del equipo.` } : { day };
 }
 
 async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -876,9 +955,9 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
   }
   const count = (prefix: string) => Object.keys(items).filter((k) => k.startsWith(prefix)).length;
   return out(args, manifest!, trusted([
-    `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} script(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
+    `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} herramienta(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
     `Raíz del motor (engineRoot): ${ctx.repoRoot}`,
-    engineModules ? "Los scripts pueden importar las librerías del motor (por ejemplo playwright) sin rutas fijas." : linkFailed ? "Aviso: no se pudo enlazar node_modules del motor (en Windows requiere el Modo desarrollador o permisos de administrador); los scripts no podrán importar sus librerías por nombre." : "Aviso: el motor no tiene node_modules instalado (ejecuta pnpm install en el repo); los scripts no podrán importar sus librerías.",
+    engineModules ? "Los scripts pueden importar las librerías del motor (por ejemplo playwright) sin rutas fijas." : linkFailed ? "Aviso: no se pudo enlazar node_modules del motor (el sistema rechazó el enlace); las herramientas no podrán importar sus librerías por nombre." : "Aviso: el motor no tiene node_modules instalado (ejecuta pnpm install en el repo); los scripts no podrán importar sus librerías.",
     ...tools.flatMap((t) => { const w = portabilityWarning(t.name, String(files.get(`scripts/${t.name}`))); return w ? [`Aviso: ${w}`] : []; }),
     "Es una copia de solo lectura de storage: no autoriza nada y no se importa. Las salidas van a otra carpeta.",
   ]));
@@ -1043,6 +1122,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "doc": return doc(ctx, args, p);
     case "guidance": return guidance(ctx, args, p);
     case "tool": return tool(ctx, args, p);
+    case "theme": return theme(ctx, args, p);
     case "recipe": return recipe(ctx, args, p);
     case "rules": return rules(ctx, args, p);
     case "carousel": return carousel(ctx, args, p);

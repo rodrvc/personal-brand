@@ -39,7 +39,12 @@ function readOutputsConfig(dir: string): { config: Record<string, string>; fromL
   for (const file of ["config.yaml", "config.local.yaml"]) {
     try {
       const section = (parseYaml(readFileSync(join(dir, file), "utf-8")) as { outputs?: Record<string, unknown> } | null)?.outputs;
-      for (const [key, value] of Object.entries(section ?? {})) if (typeof value === "string" && value.trim()) (merged[key] = value.trim(), file === "config.local.yaml" ? fromLocal.add(key) : fromLocal.delete(key));
+      for (const [key, value] of Object.entries(section ?? {})) {
+        if (typeof value !== "string" || !value.trim()) continue;
+        merged[key] = value.trim();
+        if (file === "config.local.yaml") fromLocal.add(key);
+        else fromLocal.delete(key);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") problem ??= `${file} ${error instanceof YAMLParseError ? "could not be parsed" : "could not be read"}: outputs root unknown`;
     }

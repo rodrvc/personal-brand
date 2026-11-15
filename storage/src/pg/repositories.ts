@@ -4,6 +4,7 @@ import {
   BrandArchivedError,
   NotFoundError,
   AlreadyExistsError,
+  ThemeOverlapError,
   InvalidInputError,
   VersionConflictError,
   type Brand,
@@ -33,6 +34,8 @@ import {
   type BrandRuleRepository,
   type GuidanceRepository,
   type ToolRepository,
+  type ThemeRepository,
+  type ThemeEnvelope,
   type RecipeRepository,
   type RuleInput,
   type Versioned,
@@ -41,7 +44,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, MAX_GUIDANCE_BYTES, MAX_THEME_TOKENS_BYTES, assertTheme, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, isUuid, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 import type { Sql } from "./connect.ts";
 
 type Tx = postgres.TransactionSql;
@@ -54,6 +57,7 @@ export interface PgRepositories {
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
   tools: ToolRepository;
+  themes: ThemeRepository;
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
@@ -323,7 +327,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
 
   /** Insert-or-update of one row keyed by (brand, key), with the same version semantics as documents. */
   async function putKeyed(
-    table: "brand_guidance" | "brand_tools" | "brand_recipes",
+    table: "brand_guidance" | "brand_tools" | "seasonal_themes" | "brand_recipes",
     keyColumn: "name" | "recipe",
     entityType: string,
     brandId: string,
@@ -331,6 +335,8 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     values: Record<string, unknown>,
     revision: { body: unknown; bodyText: string | null },
     meta: WriteMeta,
+    /** Runs inside the write transaction, after the brand is known to exist and before the row is written. */
+    guard?: (tx: Tx) => Promise<void>,
   ) {
     if (table === "brand_tools") assertToolName(key);
     else assertSlug(key, keyColumn);
@@ -338,6 +344,7 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     return sql.begin(async (tx) => {
       const [brand] = await tx`SELECT 1 FROM brands WHERE id = ${brandId}`;
       if (!brand) throw new NotFoundError(`brand ${brandId}`);
+      await guard?.(tx);
       const [row] =
         meta.expectedVersion === null
           ? await tx`INSERT INTO ${tx(table)} ${tx({ brand_id: brandId, [keyColumn]: key, ...values, updated_at: now() })}
@@ -387,6 +394,45 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
       assertTool(name, input);
       return putKeyed("brand_tools", "name", "brand_tool", brandId, name, { description: input.description, body: input.body },
         { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const themeCols = sql`id, name, starts_on::text AS starts_on, ends_on::text AS ends_on, token_overrides, guidance_md, version, updated_at`;
+  const themeOf = (r: Row): ThemeEnvelope => ({ trust: "brand-data", id: r.id, name: r.name, startsOn: r.starts_on, endsOn: r.ends_on, tokenOverrides: r.token_overrides, guidance: r.guidance_md, version: r.version, updatedAt: iso(r.updated_at)! });
+
+  const themes: ThemeRepository = {
+    async list(brandId) {
+      if (!isUuid(brandId)) return [];
+      const rows = await sql`SELECT ${themeCols} FROM seasonal_themes WHERE brand_id = ${brandId} ORDER BY starts_on, name COLLATE "C"`;
+      return rows.map((r) => { const { id, name, startsOn, endsOn, version, updatedAt } = themeOf(r); return { id, name, startsOn, endsOn, version, updatedAt }; });
+    },
+    async get(brandId, name) {
+      const [r] = isUuid(brandId) ? await sql`SELECT ${themeCols} FROM seasonal_themes WHERE brand_id = ${brandId} AND name = ${name}` : [];
+      if (!r) throw new NotFoundError(`theme ${name}`);
+      return themeOf(r);
+    },
+    async put(brandId, name, input, meta) {
+      assertTheme(name, input);
+      return putKeyed("seasonal_themes", "name", "seasonal_theme", brandId, name,
+        { starts_on: input.startsOn, ends_on: input.endsOn, token_overrides: sql.json(input.tokenOverrides as postgres.JSONValue), guidance_md: input.guidance },
+        { body: { startsOn: input.startsOn, endsOn: input.endsOn, tokenOverrides: input.tokenOverrides }, bodyText: input.guidance }, meta,
+        async (tx) => {
+          // The overlap is checked before the version on purpose (the memory repository does the same): a clashing put reports the clash, not a stale version.
+          // Serializes the theme writes of one brand, so two concurrent puts cannot both pass the overlap check.
+          await tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ${`:seasonal_themes:${brandId}`}, 0))`;
+          const [clash] = await tx`SELECT name, starts_on::text AS starts_on, ends_on::text AS ends_on FROM seasonal_themes
+                                   WHERE brand_id = ${brandId} AND name <> ${name} AND starts_on <= ${input.endsOn} AND ends_on >= ${input.startsOn} ORDER BY starts_on LIMIT 1`;
+          if (clash) throw new ThemeOverlapError({ name: clash.name, startsOn: clash.starts_on, endsOn: clash.ends_on });
+        }).catch((error) => {
+        // The size rule is the app's; the table CHECK is only a backstop, but a hit must still read as invalid input, never a raw database error.
+        if ((error as { code?: string }).code === "23514" && (error as { table_name?: string }).table_name === "seasonal_themes") throw new InvalidInputError(`theme rejected by a storage limit (tokenOverrides at most ${MAX_THEME_TOKENS_BYTES} bytes, guidance at most ${MAX_GUIDANCE_BYTES})`);
+        throw error;
+      });
+    },
+    async activeOn(brandId, date) {
+      assertDate(date, "date");
+      const [r] = isUuid(brandId) ? await sql`SELECT ${themeCols} FROM seasonal_themes WHERE brand_id = ${brandId} AND starts_on <= ${date} AND ends_on >= ${date}` : [];
+      return r ? themeOf(r) : null;
     },
   };
 
@@ -835,5 +881,5 @@ export function createPgRepositories(sql: Sql, now: () => Date = () => new Date(
     },
   };
 
-  return { brands, documents, revisions, rules, guidance, tools, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
+  return { brands, documents, revisions, rules, guidance, tools, themes, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }

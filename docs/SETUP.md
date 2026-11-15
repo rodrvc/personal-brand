@@ -293,6 +293,32 @@ owner-only).
   example brands are cut over with `--partial`. Without `--from`, the folder is
   `$BRAND_PROFILES_DIR/<slug>` (default `<repo>/profiles/<slug>`).
 
+### Temas por temporada
+
+Un tema por temporada cambia colores o fuentes de una marca durante unas fechas (por ejemplo, una
+liquidación de invierno) y trae un texto corto de criterio. Los temas se crean con un solo comando; no
+hay carpeta ni archivo que importar:
+
+```bash
+pnpm --filter @personal-brand/storage brand theme put <marca> winter-sale --from 2026-12-01 --to 2026-12-31 --tokens cambios.json --guidance criterio.md
+pnpm --filter @personal-brand/storage brand theme list <marca>
+pnpm --filter @personal-brand/storage brand theme active <marca> --date 2026-12-15   # sin --date usa hoy
+```
+
+- `cambios.json` es un objeto JSON solo con lo que cambia de los tokens (`{"colors":{"ink":"#112233"}}`).
+- Dos temas de una marca no pueden compartir un día: así siempre hay un solo tema activo por fecha. Si se
+  cruzan, el comando dice con cuál y no guarda nada.
+- Para cambiar un tema usa `--if-version <n>`; lo que no indiques se conserva. Para vaciar los cambios o el
+  criterio de un tema, pasa un archivo vacío (`{}` para los cambios).
+- No se borra: para retirarlo, muévelo a un día ya pasado con `--from`/`--to`.
+- `theme active` sin `--date` usa el día de hoy en la zona horaria de la marca: la clave opcional `timezone`
+  (nombre IANA, por ejemplo `Pacific/Auckland`) del documento `config`; sin ella, la del equipo. Un nombre
+  inválido se ignora con un aviso. Los automatismos deben pasar `--date` para no depender de ninguna zona.
+- Todo texto de marca que guardas por la CLI (criterio y temas) se revisa en busca de secretos: si parece
+  una credencial, no se guarda.
+- Escribirlos exige `--owner-opt-in` como las herramientas y el criterio. Aún no cambian ningún render:
+  eso llega en el siguiente paso.
+
 ### Herramientas de una marca
 
 Cada marca trae sus propias herramientas de render en `scripts/` (se guardan con
