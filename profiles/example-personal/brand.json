@@ -40,7 +40,7 @@
 
   "copy": {
     "wordmark": "Jordan Avery",
-    "site": "jordanavery.dev",
+    "site": "example.test",
     "brandMessage": { "footerCta": "More at" }
   }
 }

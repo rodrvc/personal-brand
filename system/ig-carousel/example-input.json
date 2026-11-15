@@ -6,74 +6,74 @@
   "slides": [
     {
       "image": "https://picsum.photos/id/1015/1080/1350",
-      "title": "Feria de Lollapalooza Chile",
+      "title": "Harbor Lights Music Fair",
       "subtitle": "Vie 21 Mar, 20:00",
-      "meta": "Parque O'Higgins",
+      "meta": "Meadow Park",
       "category": "Music"
     },
     {
       "image": "https://picsum.photos/id/1035/1080/1350",
-      "title": "Noche de Jazz en el GAM",
+      "title": "Jazz Night at the Arts Hall",
       "subtitle": "Jue 17 Jul, 21:00",
-      "meta": "Centro Cultural GAM",
+      "meta": "Riverside Arts Hall",
       "category": "Arts"
     },
     {
       "image": "https://picsum.photos/id/1025/1080/1350",
-      "title": "Feria Artesanal de Providencia",
+      "title": "Craft Fair of North Ward",
       "subtitle": "Sab 12 Jul, 10:00",
-      "meta": "Providencia",
+      "meta": "North Ward",
       "category": "Community"
     },
     {
       "image": "https://picsum.photos/id/1045/1080/1350",
-      "title": "Mercado Gastronomico Ñuñoa",
+      "title": "Food Market East Ward",
       "subtitle": "Dom 20 Jul, 12:00",
-      "meta": "Ñuñoa",
+      "meta": "East Ward",
       "category": "Community"
     },
     {
       "image": "https://picsum.photos/id/1055/1080/1350",
-      "title": "Cine al Aire Libre: Clasicos",
+      "title": "Open-Air Cinema: Classics",
       "subtitle": "Vie 25 Jul, 19:30",
-      "meta": "Parque Bustamante",
+      "meta": "Willow Park",
       "category": "Featured"
     },
     {
       "image": "https://picsum.photos/id/1074/1080/1350",
-      "title": "Maraton de Santiago 2026",
+      "title": "Exampleton Marathon 2026",
       "subtitle": "Dom 5 Abr, 08:00",
-      "meta": "Plaza Baquedano",
+      "meta": "Central Square",
       "category": "Sports"
     },
     {
       "image": "https://picsum.photos/id/1084/1080/1350",
-      "title": "Clasico Universitario de Rugby",
+      "title": "University Rugby Derby",
       "subtitle": "Sab 11 Abr, 15:00",
-      "meta": "Estadio Nacional",
+      "meta": "Municipal Stadium",
       "category": "Sports"
     },
     {
       "image": "https://picsum.photos/id/1080/1080/1350",
-      "title": "Ciclotour Nocturno por Santiago",
+      "title": "Night Cycle Tour of Exampleton",
       "subtitle": "Vie 17 Abr, 21:00",
-      "meta": "Parque Forestal",
+      "meta": "Old Grove Park",
       "category": "Sports"
     },
     {
       "image": "https://picsum.photos/id/1062/1080/1350",
-      "title": "Fiesta de la Vendimia Barrio Italia",
+      "title": "Harvest Festival Old Ward",
       "subtitle": "Sab 25 Abr, 18:00",
-      "meta": "Barrio Italia",
+      "meta": "Old Ward",
       "category": "Music"
     },
     {
       "image": "https://picsum.photos/id/1070/1080/1350",
-      "title": "Carnaval de Verano Bellavista",
+      "title": "Summer Carnival Lake Ward",
       "subtitle": "Vie 1 May, 20:00",
-      "meta": "Barrio Bellavista",
+      "meta": "Lake Ward",
       "category": "Music"
     }
   ],
-  "city": "Springfield"
+  "city": "Exampleton"
 }

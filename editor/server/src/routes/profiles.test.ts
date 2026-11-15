@@ -43,7 +43,7 @@ mkdirSync(brandedDir, { recursive: true });
 writeFileSync(
   join(brandedDir, "brand.json"),
   JSON.stringify({
-    locale: "es-CL",
+    locale: "es",
     colors: { ink: "#111111", paper: "#fafafa" },
     roles: {
       accent: "ink",
@@ -91,7 +91,7 @@ mkdirSync(coverDir, { recursive: true });
 writeFileSync(
   join(coverDir, "brand.json"),
   JSON.stringify({
-    locale: "es-CL",
+    locale: "es",
     colors: { ink: "#222222", paper: "#eeeeee" },
     roles: {
       accent: "ink",

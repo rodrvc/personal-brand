@@ -203,8 +203,8 @@ const lines = [
   assert.equal(withWeekday("Thu 26 Sep", "2026-09-26", "en-US"), "Sat 26 Sep");
   assert.equal(withWeekday("26 SEP", "2026-09-26", "en-US"), "26 SEP", "no leading word: nothing to rewrite");
   assert.equal(withWeekday("THU 27 SEP", "2026-09-26", "en-US"), "THU 27 SEP", "a text for another day is left alone");
-  assert.equal(withWeekday("VIE 25 SEP", "2026-09-26", "es-CL"), "VIE 25 SEP");
-  assert.match(withWeekday("VIE 26 SEP", "2026-09-26", "es-CL"), /^S\u00c1B 26 SEP$/, "in the profile's locale");
+  assert.equal(withWeekday("VIE 25 SEP", "2026-09-26", "es"), "VIE 25 SEP");
+  assert.match(withWeekday("VIE 26 SEP", "2026-09-26", "es"), /^S\u00c1B 26 SEP$/, "in the profile's locale");
 
 
   assert.deepEqual([0.1, 0.15, 0.2].map(weightFor), [400, 600, 700]);
@@ -328,17 +328,16 @@ const lines = [
   assert.match(prompt, /wins over the first image[^\n]*make the title bigger/, "the owner's request wins");
   assert.ok(!prompt.includes('"Place"'), "labels are kept by the layout, not restated");
   assert.equal(longDate("2026-02-30x", "en-US"), undefined);
-  assert.equal(longDate("2026-09-26", "es-CL"), "sábado, 26 de septiembre de 2026", "in the profile's locale");
+  assert.equal(longDate("2026-09-26", "es"), "sábado, 26 de septiembre de 2026", "in the profile's locale");
 }
 {
   assert.deepEqual(dataKinds("Apertura desde las 21:00 hrs"), ["time"]);
   assert.deepEqual(dataKinds("21 hrs"), ["time"]);
   assert.deepEqual(dataKinds("20.10 hrs"), ["time"], "a time with a dot is not a date");
-  assert.deepEqual(dataKinds("$5.000 CLP"), ["price"], "thousands are not a time");
+  assert.deepEqual(dataKinds("€5.000"), ["price"], "thousands are not a time");
   assert.deepEqual(dataKinds("5.000 EUR"), ["price"], "an upper-case ISO code after the amount is a price");
   assert.deepEqual(dataKinds("2 all"), [], "a lower-case word that is also an ISO code is not a price");
   assert.deepEqual(dataKinds("3 top"), [], "TOP-like words are not prices");
-  assert.deepEqual(dataKinds("5.000 CLP"), ["price"]);
   assert.deepEqual(dataKinds("26.09"), ["date"]);
   assert.deepEqual(dataKinds("SÁB 26 SEP"), ["date"]);
   assert.deepEqual(dataKinds("26.09.2026 A LAS 21:30HRS"), ["date", "time"]);
@@ -347,8 +346,8 @@ const lines = [
   assert.ok(statedByOwner("The hall", ["this poster, at the hall please"]), "case-insensitive");
   assert.ok(statedByOwner("Sala Ñandú", ["en la sala nandu"]), "accent-insensitive");
   assert.ok(statedByOwner("21:00 hrs", ["empieza a las 21"]), "minutes of zero need not be written");
-  assert.ok(statedByOwner("$5.000", ["cuesta 5000"]), "thousands with or without separator");
-  assert.ok(!statedByOwner("$5.000", ["cuesta 4000"]));
+  assert.ok(statedByOwner("€5.000", ["cuesta 5000"]), "thousands with or without separator");
+  assert.ok(!statedByOwner("€5.000", ["cuesta 4000"]));
   assert.ok(!statedByOwner("North presenta el mejor tributo a The Sample Band", ["genera este afiche pero con este evento"]), "invented copy");
 
   // The case seen in acceptance: one body holding place, time and price, claimed from an owner who said none of it.
@@ -358,9 +357,9 @@ const lines = [
       { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner", original: "Old subtitle" },
       {
         zone: "body",
-        text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 hrs\n\nEntrada General\n$5.000 CLP",
+        text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 h\n\nEntrada General\n5.000 EUR",
         from: "owner",
-        original: "Ubicación\nOld bar\n\nHorario\nApertura desde las 20:00 hrs\n\nEntrada General\n$4.000 CLP",
+        original: "Ubicación\nOld bar\n\nHorario\nApertura desde las 20:00 h\n\nEntrada General\n4.000 EUR",
       },
       { zone: "chip", text: "BAR", from: "content" },
     ],
@@ -380,17 +379,17 @@ const lines = [
   assert.deepEqual(missingData(merged).map((m) => m.zone), ["price", "time"], "so the owner is asked for data only, nothing is generated");
 
   // The owner's answer in that conversation: the time keeps the layout's wording around the owner's digits.
-  const owner = ["genera este afiche pero con este evento", "abre a las 21:00 y la entrada general cuesta $5.000"];
-  assert.ok(statedByOwner("Apertura desde las 21:00 hrs", owner), "a time needs only its digits from the owner");
-  assert.ok(statedByOwner("$5.000 CLP", owner), "a price too");
-  assert.ok(!statedByOwner("Apertura desde las 22:00 hrs", owner), "but the right digits");
+  const owner = ["genera este afiche pero con este evento", "abre a las 21:00 y la entrada general cuesta €5.000"];
+  assert.ok(statedByOwner("Apertura desde las 21:00 h", owner), "a time needs only its digits from the owner");
+  assert.ok(statedByOwner("5.000 EUR", owner), "a price too");
+  assert.ok(!statedByOwner("Apertura desde las 22:00 h", owner), "but the right digits");
   assert.ok(!statedByOwner("North Bar", owner), "a place needs its words");
   const answered = checkSources(
     [
       { zone: "title", text: "Echo! A Tribute Night", from: "content" },
       { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
-      { zone: "time", text: "Apertura desde las 21:00 hrs", from: "owner" },
-      { zone: "price", text: "$5.000 CLP", from: "owner" },
+      { zone: "time", text: "Apertura desde las 21:00 h", from: "owner" },
+      { zone: "price", text: "5.000 EUR", from: "owner" },
       { zone: "body", text: "", from: "missing", original: "Old line of copy" },
       { zone: "subtitle", text: "A Tribute Night", from: "content" },
     ],
@@ -404,9 +403,9 @@ const lines = [
 
   const checked = checkSources(
     [
-      { zone: "body", text: "21:30 hrs", from: "layout" },
+      { zone: "body", text: "21:30 h", from: "layout" },
       { zone: "body", text: "Doors open early", from: "content" },
-      { zone: "time", text: "21:30 hrs", from: "owner" },
+      { zone: "time", text: "21:30 h", from: "owner" },
       { zone: "place", text: "The hall", from: "owner" },
       { zone: "label", text: "Horario", from: "layout" },
     ],
@@ -441,16 +440,16 @@ const lines = [
   assert.deepEqual(checkSources([{ zone: "time", text: "", from: "absent" }], ["this one has no time"]).map((t) => t.from), ["absent"], "or when the owner says so");
 
   assert.equal(dataZoneOf("Old Hall Theatre Bar · Av. Ejemplo 123"), "place", "an address line is a place");
-  assert.equal(dataZoneOf("Apertura desde las 20:00 hrs"), "time");
-  assert.equal(dataZoneOf("$4.000 CLP"), "price");
+  assert.equal(dataZoneOf("Apertura desde las 20:00 h"), "time");
+  assert.equal(dataZoneOf("4.000 EUR"), "price");
   assert.equal(dataZoneOf("Tributo Oficial a The Other Band"), undefined);
-  const moved = checkSources([{ zone: "body", text: "", from: "absent", original: "$4.000 CLP" }], ["hi"]);
+  const moved = checkSources([{ zone: "body", text: "", from: "absent", original: "4.000 EUR" }], ["hi"]);
   assert.deepEqual(moved.map((t) => [t.zone, t.from]), [["price", "missing"]], "a line whose original is a price is the price, whatever zone the model gave it");
   assert.deepEqual(checkSources([{ zone: "chip", text: "SERIES 01 · CLUB", from: "layout" }], []).map((t) => t.text), [""], "a chip copied from the layout is inferred instead");
 
   const forbidden = forbiddenTexts([...replay, { zone: "place", text: "", from: "missing", original: "Old Hall Theatre Bar · Av. Ejemplo 123" }]);
   assert.deepEqual(forbidden, ["JUEVES 24 SEP", "Thursday Club Night", "A tribute and a stand-up set", "Old Hall Theatre Bar · Av. Ejemplo 123"], "every old event text, labels aside");
-  const prompt = posterPrompt({ texts: answered, request: "", contentAttached: true, locale: "es-CL" });
+  const prompt = posterPrompt({ texts: answered, request: "", contentAttached: true, locale: "es" });
   assert.ok(prompt.includes('- "Thursday Club Night"'), "the provider is told what must not appear");
   assert.match(prompt, /label, icon and row/, "an absent element goes entirely");
   assert.match(prompt, /header or chip wording[^\n]*never kept/);

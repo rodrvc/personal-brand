@@ -1,5 +1,7 @@
 # Setup
 
+> Dueño de marca (no desarrollador): empieza por la [guía del dueño](GUIA.md).
+
 What a fresh clone does not give you, and how to get it.
 
 ## One command
