@@ -1,6 +1,6 @@
-import { resolveBrandSource } from "@personal-brand/storage";
+import { activeTheme, brandDay, resolveBrandSource } from "@personal-brand/storage";
 import type { BlobCache } from "@personal-brand/storage/blob";
-import { BrandArchivedError, InvalidInputError, NotFoundError, ObjectNotFoundError, PreconditionFailedError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ChatRepository, type ExportRepository, type RevisionRepository } from "@personal-brand/storage/contracts";
+import { BrandArchivedError, InvalidInputError, NotFoundError, ObjectNotFoundError, PreconditionFailedError, VersionConflictError, type AssetRepository, type BlobStore, type BrandDocumentRepository, type BrandRepository, type CarouselRepository, type ChatRepository, type ExportRepository, type RevisionRepository, type ThemeRepository } from "@personal-brand/storage/contracts";
 
 import type { BrandTokens } from "../../../system/ig-carousel/brand-schema.js";
 import { validateDocument, type CarouselDocument, type ValidateDocumentResult } from "../../../system/ig-carousel/carousel-document.js";
@@ -22,6 +22,8 @@ import { messages } from "./messages.js";
 export interface EditorStorage {
   brands: Pick<BrandRepository, "getBySlug" | "list">;
   documents: Pick<BrandDocumentRepository, "get" | "list">;
+  /** Seasonal themes: the one active today is laid over the tokens the editor shows. Absent: no themes. */
+  themes?: Pick<ThemeRepository, "activeOn">;
   assets: Pick<AssetRepository, "list" | "get" | "update" | "register">;
   carousels: Pick<CarouselRepository, "list" | "get" | "save" | "setStatus" | "create">;
   exports: Pick<ExportRepository, "reserveNextVersion" | "complete" | "fail" | "list">;
@@ -111,8 +113,26 @@ export function etagOf(version: number): string {
   return `"${version}"`;
 }
 
-export const storedBrandTokens = (s: StoredBrand): Promise<BrandTokens> => loadStoredBrand(s.storage.documents, s.brandId, s.slug);
-export const storedStyle = (s: StoredBrand) => loadStoredBrandStyle(s.storage.documents, s.brandId);
+/**
+ * The theme for a carousel: the one active on its own `scheduledFor` day, else on the brand's today (a draft has no date).
+ * A timestamp is read in the brand's time zone, so a late-evening post keeps its local day. The timezone warning is logged like the render scripts do.
+ */
+const storedTheme = async (s: StoredBrand, scheduledFor?: string | null) => {
+  if (!s.storage.themes) return null;
+  const ctx = { repos: { documents: s.storage.documents, themes: s.storage.themes }, now: () => new Date() };
+  let date: string | undefined = /^\d{4}-\d{2}-\d{2}$/.exec(scheduledFor ?? "")?.[0];
+  const instant = date || !scheduledFor ? null : new Date(scheduledFor);
+  if (instant && !Number.isNaN(instant.getTime())) {
+    const local = await brandDay(ctx, s.brandId, instant);
+    date = local.day;
+    if (local.warning) console.warn(local.warning);
+  }
+  const { theme, warning } = await activeTheme(ctx, s.brandId, date);
+  if (warning) console.warn(warning);
+  return theme;
+};
+export const storedBrandTokens = async (s: StoredBrand, scheduledFor?: string | null): Promise<BrandTokens> => loadStoredBrand(s.storage.documents, s.brandId, s.slug, [], await storedTheme(s, scheduledFor));
+export const storedStyle = async (s: StoredBrand, scheduledFor?: string | null) => loadStoredBrandStyle(s.storage.documents, s.brandId, await storedTheme(s, scheduledFor));
 export const storedTemplates = (s: StoredBrand): Promise<LayoutTemplateSummary[]> => listStoredLayoutTemplates(s.storage.documents, s.brandId);
 
 /** `GET .../template/:id`: the free sentinel is answered without storage, as for a folder. */
@@ -125,22 +145,22 @@ export async function storedTemplate(s: StoredBrand, id: string, params?: Record
 export const editorStatus = (status: string): CarouselDocument["status"] => (status === "scheduled" ? "exported" : (status as CarouselDocument["status"]));
 
 /** The raw stored document with the columns that own `title` and `status` overlaid, plus its row version. */
-export async function storedCarouselRaw(s: StoredBrand, id: string): Promise<{ rowId: string; document: Record<string, unknown>; version: number; updatedAt: string }> {
+export async function storedCarouselRaw(s: StoredBrand, id: string): Promise<{ rowId: string; document: Record<string, unknown>; version: number; updatedAt: string; scheduledFor: string | null }> {
   const row = await s.storage.carousels.get(s.brandId, id, (body) => body as Record<string, unknown>);
   const { document, title, status } = row.value;
-  return { rowId: row.id, document: { ...document, id, title, status: editorStatus(status) }, version: row.version, updatedAt: row.updatedAt };
+  return { rowId: row.id, document: { ...document, id, title, status: editorStatus(status) }, version: row.version, updatedAt: row.updatedAt, scheduledFor: row.value.scheduledFor };
 }
 
 /** Validates a stored document against the brand's stored tokens and asset library, as `validateAgainstProfile` does for a folder. */
-export async function validateStored(s: StoredBrand, document: unknown): Promise<ValidateDocumentResult> {
+export async function validateStored(s: StoredBrand, document: unknown, scheduledFor?: string | null): Promise<ValidateDocumentResult> {
   const known = new Set((await s.storage.assets.list(s.brandId)).map((row) => row.value.assetId));
-  return validateDocument(document, { brand: await storedBrandTokens(s), assetExists: (assetId) => known.has(assetId) });
+  return validateDocument(document, { brand: await storedBrandTokens(s, scheduledFor), assetExists: (assetId) => known.has(assetId) });
 }
 
 /** A carousel as the editor reads it: the validated document and the version it was read at (the `ETag`). */
-export async function storedCarousel(s: StoredBrand, id: string): Promise<{ result: ValidateDocumentResult; version: number; rowId: string }> {
-  const { document, version, rowId } = await storedCarouselRaw(s, id);
-  return { result: await validateStored(s, document), version, rowId };
+export async function storedCarousel(s: StoredBrand, id: string): Promise<{ result: ValidateDocumentResult; version: number; rowId: string; scheduledFor: string | null }> {
+  const { document, version, rowId, scheduledFor } = await storedCarouselRaw(s, id);
+  return { result: await validateStored(s, document, scheduledFor), version, rowId, scheduledFor };
 }
 
 /** The listing: raw and shape-checked only (no asset or colour validation), newest first, like `listCarousels`. */
@@ -266,8 +286,8 @@ export function storedBrandGuard(storage: EditorStorage | undefined) {
  * by `resolve` out of the blob cache. For the browser preview (the iframe) they are this server's own
  * `/assets/files/<id>` URLs instead, because a browser cannot reach `render.local`.
  */
-export async function storedSlideHtml(s: StoredBrand, doc: CarouselDocument, n: number, preview: boolean): Promise<{ html: string; brand: BrandTokens; template: LayoutTemplate; resolve: AssetResolve }> {
-  const { brand, template, base, resolve } = await storedRenderParts(s, doc);
+export async function storedSlideHtml(s: StoredBrand, doc: CarouselDocument, n: number, preview: boolean, scheduledFor?: string | null): Promise<{ html: string; brand: BrandTokens; template: LayoutTemplate; resolve: AssetResolve }> {
+  const { brand, template, base, resolve } = await storedRenderParts(s, doc, scheduledFor);
   const fileUrl = (assetId: string): string => `/api/profiles/${encodeURIComponent(s.slug)}/assets/files/${assetId}`;
   const ctx: FreeLayoutRenderContext = preview
     ? { ...base, assetUrl: (assetId) => (base.assetUrl(assetId), fileUrl(assetId)), fontFaces: (base.fontFaces ?? []).map((face) => ({ ...face, url: fileUrl(assetIdOfPath(face.url)) })) }
@@ -276,8 +296,8 @@ export async function storedSlideHtml(s: StoredBrand, doc: CarouselDocument, n: 
 }
 
 /** What rendering a stored carousel needs, for a slide's HTML and for an export alike: the brand, the document's template, the render context and the asset resolver. */
-export async function storedRenderParts(s: StoredBrand, doc: CarouselDocument) {
-  const brand = await storedBrandTokens(s);
+export async function storedRenderParts(s: StoredBrand, doc: CarouselDocument, scheduledFor?: string | null) {
+  const brand = await storedBrandTokens(s, scheduledFor);
   const template = doc.template ? await loadStoredLayoutTemplate(s.storage.documents, s.brandId, doc.template.id, brand, doc.template.params) : freeLayoutTemplate();
   const base = await buildStoredRenderContext(s.storage.assets, s.brandId);
   return { brand, template, base, resolve: storedAssetResolver(s.storage.assets, s.storage.blobs(s.brandId), s.brandId) };

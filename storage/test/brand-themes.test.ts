@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../src/cli/brand.ts";
-import { brandToday } from "../src/cli/verbs.ts";
+import { brandToday } from "../src/themes.ts";
 import { createMemoryRepositories } from "../src/memory/index.ts";
 
 // Seasonal themes through the CLI. Fictional brand, memory storage, temp folder only.
@@ -88,6 +88,8 @@ assert.equal(zoned.warning, undefined, "an unset zone is silent");
 assert.equal((await brandToday({ repos, now: () => instant }, posters.id)).warning, 'Aviso: la zona horaria "Not/AZone" de la configuración no es válida (usa un nombre IANA como Pacific/Auckland); se usó la del equipo.');
 assert.match(await inner("theme", "active", "example-posters"), /\nAviso: la zona horaria "Not\/AZone"/);
 assert.doesNotMatch(await inner("theme", "active", "example-posters", "--date", "2027-06-01"), /Aviso/, "an explicit date needs no zone");
+await repos.documents.put(posters.id, "config", "", { json: { timezone: { zone: "Pacific/Auckland" } }, schemaVersion: 1 }, { expectedVersion: 3, author: "t", source: "cli", reason: "save" });
+assert.equal((await brandToday({ repos, now: () => instant }, posters.id)).warning, "Aviso: la zona horaria de la configuración no es texto (usa un nombre IANA como Pacific/Auckland); se usó la del equipo.");
 
 
 // Bad inputs: tokens must be a JSON object; text with a secret is never stored.

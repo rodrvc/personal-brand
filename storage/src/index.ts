@@ -4,3 +4,4 @@ export * from "./blob/index.ts";
 export * from "./pg/index.ts";
 export * from "./memory/index.ts";
 export { toCheckRules } from "./revision-policy.ts";
+export { activeTheme, applyThemeOverrides, brandDay, brandToday, missingThemeFonts } from "./themes.ts";

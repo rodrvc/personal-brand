@@ -205,6 +205,21 @@ const tests: Array<[string, () => Promise<void>]> = [
       assert.equal(ended, 2);
     });
   }],
+  ["a stored brand's active theme is laid over its tokens by the content date, ends included", async () => {
+    const { repos, brandId } = await storedExample();
+    await repos.themes.put(brandId, "winter-sale", { startsOn: "2026-12-01", endsOn: "2026-12-31", tokenOverrides: { colors: { ink: "#abcdef" } }, guidance: "" }, meta);
+    const source = await resolveRenderSource(SLUG, repos);
+    const original = loadBrand(EXAMPLE);
+    for (const day of ["2026-12-01", "2026-12-31"]) {
+      const themed = await source.loadBrand([], day);
+      assert.equal(themed.colors.ink, "#abcdef", day);
+      assert.equal(themed.colors.paper, original.colors.paper, "the rest of the tokens is untouched");
+    }
+    for (const day of ["2026-11-30", "2027-01-01"]) assert.deepEqual(await source.loadBrand([], day), original, day);
+    // An overlay that breaks the brand's shape names the theme, not just the brand.
+    await repos.themes.put(brandId, "broken", { startsOn: "2027-02-01", endsOn: "2027-02-02", tokenOverrides: { roles: 5 }, guidance: "" }, meta);
+    await assert.rejects(source.loadBrand([], "2027-02-01"), /storage:example \+ theme broken/);
+  }],
 ];
 
 let failed = 0;

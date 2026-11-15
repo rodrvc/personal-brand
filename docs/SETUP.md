@@ -316,8 +316,19 @@ pnpm --filter @personal-brand/storage brand theme active <marca> --date 2026-12-
   inválido se ignora con un aviso. Los automatismos deben pasar `--date` para no depender de ninguna zona.
 - Todo texto de marca que guardas por la CLI (criterio y temas) se revisa en busca de secretos: si parece
   una credencial, no se guarda.
-- Escribirlos exige `--owner-opt-in` como las herramientas y el criterio. Aún no cambian ningún render:
-  eso llega en el siguiente paso.
+- Escribirlos exige `--owner-opt-in` como las herramientas y el criterio.
+- Se aplican solos, según la fecha del contenido: en una marca ya en storage, todo render (carruseles,
+  reels, `brand workspace`) pone los cambios del tema encima de los tokens si su fecha cae dentro de las
+  fechas del tema (los extremos cuentan); fuera de ellas nada cambia. La fecha de un contenido semanal es el
+  primer día (lunes) de la semana que se publica, no el día en que corre el render; la de un carrusel del
+  editor es su `scheduledFor` (en el editor, vista previa y exportación). Sin fecha propia, el render usa el
+  día de hoy de la marca. Si los cambios del tema rompen la forma de los tokens, el siguiente render lo dice
+  como `storage:<marca> + theme <nombre>`. `brand fonts fetch` baja también las fuentes de `googleFontsHref`
+  de cada tema, y `brand workspace` avisa si el tema usa una fuente que la marca no tiene como asset. El nombre
+  de criterio `tema-…` está reservado para el criterio de los temas. `brand workspace <marca> --out <carpeta> --date AAAA-MM-DD` deja `brand.json` ya con
+  el tema de ese día, su criterio en `skills/tema-<nombre>/` y el tema en `workspace.json` (`theme`). Para
+  comprobar cuál se aplicará: `brand theme active <marca> --date AAAA-MM-DD`. Las marcas que aún son carpeta
+  no tienen temas.
 
 ### Herramientas de una marca
 
