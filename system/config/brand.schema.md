@@ -157,7 +157,7 @@ completo y ficticio de las cuatro secciones.
 
 ```json
 {
-  "locale": "es-CL",
+  "locale": "<locale>",
   "colors":  { "<nombre>": "#rrggbb" },
   "roles":   { "accent": "<nombre>", "wordmark": "...", "surface": "...",
                "onSurface": "...", "onSurfaceMuted": "...",
@@ -334,10 +334,10 @@ Lo que describe **el contenido** (no la marca) viaja acá:
   "slides": [
     {
       "image": "https://...",
-      "title": "Cerati Sinfónico",
+      "title": "Orchestra Night",
       "subtitle": "Vie 7 Ago, 20:00",
       "time": "20:00",
-      "meta": "Teatro Municipal",
+      "meta": "Example Concert Hall",
       "category": "Música",
       "date": "2026-08-07"
     }

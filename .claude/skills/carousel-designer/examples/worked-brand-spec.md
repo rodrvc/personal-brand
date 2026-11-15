@@ -49,7 +49,7 @@ and a designer downstream needs to know which one they are reading.
 
 Example of the one real graphic asset a small brand often does have:
 `public/favicon.svg` — a square icon, ~100px corner radius on a 512px frame,
-filled with a two-stop warm gradient, with a white initial centered on it.
+filled with a two-stop cool gradient, with a white initial centered on it.
 
 ---
 
@@ -62,15 +62,15 @@ a single named usage and a verifiable source.
 
 | Color | Hex | Usage | Source |
 |---|---|---|---|
-| Primary | `#1f6f8b` | Brand/logo primary | `globals.css` |
-| Accent | `#e0603f` | Accent / CTA | `globals.css` |
-| Highlight A | `#f2b13c` | Favicon gradient stop; featured-category stop | `globals.css`, `favicon.svg` |
-| Highlight B | `#ff7f6d` | Favicon gradient stop | `globals.css`, `favicon.svg` |
-| Text dark | `#2d3436` | Primary text | `globals.css` |
-| Text secondary | `#6b7280` | Secondary/meta text | `globals.css` |
-| Background light | `#f8f6f3` | Default page/canvas background | `globals.css` |
+| Primary | `#4a3f8f` | Brand/logo primary | `globals.css` |
+| Accent | `#2fa38a` | Accent / CTA | `globals.css` |
+| Highlight A | `#d9c24a` | Favicon gradient stop; featured-category stop | `globals.css`, `favicon.svg` |
+| Highlight B | `#8fd1c4` | Favicon gradient stop | `globals.css`, `favicon.svg` |
+| Text dark | `#1c2230` | Primary text | `globals.css` |
+| Text secondary | `#667085` | Secondary/meta text | `globals.css` |
+| Background light | `#f4f6fa` | Default page/canvas background | `globals.css` |
 | Category 1…N | varies | One color per content category | `globals.css` |
-| Category fallback | `#555555` | Unrecognized/missing category | `globals.css` |
+| Category fallback | `#7a7f8a` | Unrecognized/missing category | `globals.css` |
 
 Two conventions worth copying from this example:
 
@@ -100,9 +100,9 @@ single weight cannot take `font-weight: 900`, and often needs a looser
 
 ### Vibe keywords
 
-`Warm`, `local`, `discovery-driven`, `informative-not-corporate`. Written as
-a *proposal* derived from the verified palette and type (warm accents rather
-than corporate blue, an informal wordmark rather than a geometric logotype) —
+`Calm`, `local`, `discovery-driven`, `informative-not-corporate`. Written as
+a *proposal* derived from the verified palette and type (indigo-and-mint accents rather
+than corporate grey, an informal wordmark rather than a geometric logotype) —
 and explicitly marked as needing confirmation before being treated as final.
 
 That distinction is the point: palette and type were *verified*; the vibe was

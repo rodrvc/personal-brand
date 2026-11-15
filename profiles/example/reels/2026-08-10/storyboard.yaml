@@ -17,20 +17,20 @@ version: 1
 cards:
   - id: cover
     visual: cover
-    narration: "Three plans for the week, around the bay."
+    narration: "Three plans for the week, around the lake."
   - id: item-1
     visual: item
     item: 0
-    narration: "On Tuesday, live music on the waterfront at Plaza Sotomayor — bring a jacket, the wind picks up."
+    narration: "On Tuesday, live music by the lake at Fountain Square — bring a jacket, the wind picks up."
   - id: item-2
     visual: item
     item: 1
-    narration: "On Thursday the print fair fills Plaza Aníbal Pinto, with prints straight from the artists' hands."
+    narration: "On Thursday the print fair fills Clock Square, with prints straight from the artists' hands."
     min_seconds: 6
   - id: item-3
     visual: item
     item: 2
-    narration: "And on Saturday, the neighbourhood final on Avenida Argentina — loud, local, and free."
+    narration: "And on Saturday, the neighbourhood final on Maple Avenue — loud, local, and free."
   - id: closing
     visual: closing
     narration: "Save this reel and see you there."
