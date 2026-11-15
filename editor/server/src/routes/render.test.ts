@@ -40,7 +40,7 @@ mkdirSync(profileDir, { recursive: true });
 writeFileSync(
   join(profileDir, "brand.json"),
   JSON.stringify({
-    locale: "es-CL",
+    locale: "es",
     colors: { ink: "#111111", paper: "#fafafa" },
     roles: {
       accent: "ink",
