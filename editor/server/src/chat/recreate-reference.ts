@@ -133,8 +133,16 @@ export function missingData(texts: PosterText[]): Array<{ zone: Zone; replaces?:
   return named.filter((m, i) => named.findIndex((n) => n.zone === m.zone && n.replaces === m.replaces) === i);
 }
 
+// Time, date and label vocabularies below are multi-language engine defaults (English plus a second language); extend per locale.
 const TIME = /\b\d{1,2}\s*[:.h]\s*\d{2}\b|\b\d{1,2}\s*(?:hrs?|horas?|h)\b|\b\d{1,2}\s*(?:am|pm)\b/i;
-const PRICE = /[$€£]\s*\d[\d.,]*|\b\d[\d.,]*\s*(?:clp|usd|eur|ars|mxn|pesos?|dollars?|euros?)\b/i;
+// Any currency symbol, or an amount followed by an ISO 4217 code (the runtime's own list, not a regional one) or a
+// common currency word.
+// ISO codes are matched upper-case only, directly after the amount, so words such as "all" or "top" are not prices.
+const CURRENCY_CODES = Intl.supportedValuesOf("currency").join("|");
+const PRICE_SYMBOLS_AND_WORDS = /\p{Sc}\s*\d[\d.,]*|\b\d[\d.,]*\s*(?:pesos?|dollars?|euros?|pounds?)\b/iu;
+const PRICE_ISO_CODE = new RegExp(`\\b\\d[\\d.,]*\\s*(?:${CURRENCY_CODES})\\b`, "u");
+/** The patterns that make a price; each is read once. */
+const PRICE_PATTERNS = [PRICE_SYMBOLS_AND_WORDS, PRICE_ISO_CODE];
 const DATE =
   /\b\d{1,2}\s*[/.-]\s*(?:0?[1-9]|1[0-2])(?:\s*[/.-]\s*\d{2,4})?\b(?!\s*(?:hrs?|horas?|h)\b)|\b\d{1,2}\s+(?:de\s+)?(?:ene|feb|mar|abr|apr|may|jun|jul|ago|aug|sep|set|oct|nov|dic|dec|jan)[a-z]*\b/i;
 
@@ -145,10 +153,10 @@ export function dataKinds(text: string): Array<"time" | "price" | "date"> {
   // number followed by "hrs" is a time, never a date.
   const kinds: Array<"time" | "price" | "date"> = [];
   let rest = plain;
-  for (const [kind, pattern] of [["price", PRICE], ["date", DATE], ["time", TIME]] as const) {
-    if (new RegExp(pattern.source, "i").test(rest)) {
+  for (const [kind, patterns] of [["price", PRICE_PATTERNS], ["date", [DATE]], ["time", [TIME]]] as const) {
+    if (patterns.some((pattern) => new RegExp(pattern.source, pattern.flags).test(rest))) {
       kinds.push(kind);
-      rest = rest.replace(new RegExp(pattern.source, "gi"), " ");
+      for (const pattern of patterns) rest = rest.replace(new RegExp(pattern.source, `${pattern.flags}g`), " ");
     }
   }
   return kinds;
@@ -180,8 +188,9 @@ export function statedByOwner(value: string, ownerMessages: string[]): boolean {
 }
 
 /**
- * Field labels a poster writes over a datum, and street words of an address line, in the languages profiles use
- * today. Generic vocabulary, no brand data: they only say which kind of datum a layout line is.
+ * Field labels a poster writes over a datum, and street words of an address line, in the languages the engine
+ * ships with (English plus a second, widely used one). An engine default, not a brand setting: other locales extend
+ * these lists. Generic vocabulary, no brand data: they only say which kind of datum a layout line is.
  */
 const LABEL_ZONES: Array<[Zone, RegExp]> = [
   ["place", /^(ubicacion|lugar|direccion|donde|recinto|location|place|venue|where|address)$/],
