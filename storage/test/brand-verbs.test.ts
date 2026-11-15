@@ -39,6 +39,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   assert.equal(await code("guidance", "frob", "example-nope"), 2);
   assert.equal(await code("recipe", "frob", "example-nope", "x"), 2);
   assert.equal(await code("tool", "frob", "example-nope"), 2);
+  assert.equal(await code("theme", "frob", "example-nope"), 2);
   assert.equal(await code("constructor"), 2, "inherited object keys are not verbs");
   assert.deepEqual(await repos.brands.list({ includeArchived: true }), []);
   assert.deepEqual(await inner("list"), ["No hay marcas."]);
@@ -205,7 +206,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
 
   // Owner guard: writes to a non-example brand exit 6 and write nothing; reads stay open. A remote database refuses every write.
   const before = (await repos.brands.list({ includeArchived: true })).length;
-  for (const argv of [["create", "acme-real", "--name", "Real"], ["doc", "put", "acme-real", "identity", "--file", "id.md"], ["guidance", "put", "acme-real", "tone", "--file", "tone.md", "--description", "x"], ["recipe", "put", "acme-real", "weekly", "--file", "recipe.json"], ["tool", "put", "acme-real", "render.mjs", "--file", "id.md"], ["rules", "add", "acme-real"], ["archive", "acme-real"], ["unarchive", "acme-real"], ["purge", "acme-real", "--confirm", "acme-real"]]) {
+  for (const argv of [["create", "acme-real", "--name", "Real"], ["doc", "put", "acme-real", "identity", "--file", "id.md"], ["guidance", "put", "acme-real", "tone", "--file", "tone.md", "--description", "x"], ["recipe", "put", "acme-real", "weekly", "--file", "recipe.json"], ["tool", "put", "acme-real", "render.mjs", "--file", "id.md"], ["theme", "put", "acme-real", "winter-sale", "--from", "2026-12-01", "--to", "2026-12-31"], ["rules", "add", "acme-real"], ["archive", "acme-real"], ["unarchive", "acme-real"], ["purge", "acme-real", "--confirm", "acme-real"]]) {
     const refusedWrite = await run(...argv);
     assert.deepEqual([refusedWrite.exitCode, /aprobación explícita del dueño/.test(refusedWrite.lines[0])], [6, true], argv.join(" "));
   }
@@ -349,7 +350,7 @@ async function contentWrites(repos: MemoryRepositories, env: NodeJS.ProcessEnv, 
   const stored = (await repos.assets.list(real.id))[0].value;
   assert.deepEqual([stored.kind, stored.status, stored.origin, stored.mime, stored.tags], ["logo", "candidate", "manual", "image/png", ["a", "b"]]);
   assert.equal((await blobs.get(stored.blobKey)).body.equals(png), true, "the bytes went through the blob store");
-  for (const argv of [["rules", "add", "acme-real", "--file", file("rule.json", "{}")], ["doc", "put", "acme-real", "tokens", "--file", cJson], ["guidance", "put", "acme-real", "t", "--file", cJson, "--description", "x"], ["recipe", "put", "acme-real", "r", "--file", cJson], ["tool", "put", "acme-real", "r.mjs", "--file", cJson], ["archive", "acme-real"]]) {
+  for (const argv of [["rules", "add", "acme-real", "--file", file("rule.json", "{}")], ["doc", "put", "acme-real", "tokens", "--file", cJson], ["guidance", "put", "acme-real", "t", "--file", cJson, "--description", "x"], ["recipe", "put", "acme-real", "r", "--file", cJson], ["tool", "put", "acme-real", "r.mjs", "--file", cJson], ["theme", "put", "acme-real", "t", "--from", "2026-12-01", "--to", "2026-12-31"], ["archive", "acme-real"]]) {
     assert.equal((await w(...argv)).exitCode, 6, `${argv.join(" ")}: identity writes stay guarded after cutover`);
   }
   assert.deepEqual(await repos.rules.list(real.id, { includeDisabled: true }), []);
@@ -665,6 +666,7 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
       await repos.rules.update(rule.id, { message: "Shorter." }, { ...meta, expectedVersion: 1 });
       await repos.guidance.put(b.id, "tone", { description: "d", body: "Warm." }, meta);
       await repos.tools.put(b.id, "render.mjs", { description: "d", body: "x" }, meta);
+      await repos.themes.put(b.id, "winter-sale", { startsOn: "2026-12-01", endsOn: "2026-12-31", tokenOverrides: { colors: { ink: "#111111" } }, guidance: "Cold tones." }, meta);
       await repos.recipes.put(b.id, "weekly", { params: {}, schemaVersion: 1 }, meta);
       const c = await repos.carousels.create(b.id, { slug: "c1", title: "C", document: { json: { slides: [] }, schemaVersion: 1 } }, meta);
       const exp = await repos.exports.reserveNextVersion(c.id, c.version);
@@ -687,7 +689,7 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const doomed = await seed("example-doomed");
     const kept = await seed("example-kept");
     const keptBefore = await counts(kept.id);
-    assert.equal(PURGE_TABLES.length, 16);
+    assert.equal(PURGE_TABLES.length, 17);
     assert.ok(Object.values(await counts(doomed.id)).every((n) => (n as number) >= 1), "every table has a row to purge");
     const bundle = join(home, "bundle");
     const argv = ["purge", "example-doomed", "--confirm", "example-doomed", "--bundle", bundle];
@@ -746,8 +748,8 @@ async function purgeExecutor(admin: postgres.Sql, url: string, schema: string): 
     const files = readdirSync(bundle).sort();
     assert.equal(files.length, earlier + 1, "a re-run needs no cleanup: the bundle name carries a timestamp, so the final run adds exactly one file");
     const written = JSON.parse(readFileSync(join(bundle, files.at(-1)!), "utf-8"));
-    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0010_brand_tools.sql", before, doomed.id, 3, 1]);
-    assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 16 tables are empty for the purged brand");
+    assert.deepEqual([written.format, written.migrations.head, written.counts, written.tables.revisions[0].brand_id, written.blobs.length, written.bucketKeys.length], ["brand-bundle/1", "0011_seasonal_themes.sql", before, doomed.id, 3, 1]);
+    assert.deepEqual(Object.values(await counts(doomed.id)), PURGE_TABLES.map(() => 0), "all 17 tables are empty for the purged brand");
     assert.deepEqual(await counts(kept.id), keptBefore, "another brand is untouched");
     assert.equal((await blobs.list("brands/")).length, 2, "the bucket never loses an object");
     assert.equal((await runCli(argv, env, repos, blobs, open("brand_purger"))).exitCode, 4, "the brand is gone");

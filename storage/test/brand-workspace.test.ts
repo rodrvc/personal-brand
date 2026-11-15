@@ -73,7 +73,7 @@ assert.deepEqual(readdirSync(work).filter((f) => f.endsWith(".tmp")), [], "no te
 mkdirSync(outside);
 const made = await run("workspace", "example-posters", "--out", outside);
 assert.equal(made.exitCode, 0, made.lines.join("\n"));
-assert.match(made.lines.join("\n"), /3 documento\(s\), 1 script\(s\), 1 guidance, 1 receta\(s\), 2 asset\(s\)/);
+assert.match(made.lines.join("\n"), /3 documento\(s\), 1 herramienta\(s\), 1 guidance, 1 receta\(s\), 2 asset\(s\)/);
 assert.match(made.lines.join("\n"), new RegExp(`engineRoot\\): ${repoRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 assert.deepEqual(readdirSync(work).filter((f) => f.endsWith(".tmp")), []);
 const at = (rel: string) => readFileSync(join(outside, rel));

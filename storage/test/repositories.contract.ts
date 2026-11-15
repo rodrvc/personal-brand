@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 
 import { runChecks } from "@personal-brand/core/checks";
 import { toCheckRules } from "../src/revision-policy.ts";
-import { AlreadyExistsError, BrandArchivedError, InvalidInputError, NotFoundError, VersionConflictError, type AssetInput, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
+import { AlreadyExistsError, BrandArchivedError, InvalidInputError, NotFoundError, ThemeOverlapError, VersionConflictError, type AssetInput, type RuleInput, type WriteMeta } from "../src/contracts/index.ts";
 import type { MemoryRepositories } from "../src/memory/index.ts";
 
 export interface Harness {
@@ -200,6 +200,49 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       assert.equal((await o.put(a.id, "build.sh", { description: "v2", body: "echo 2" }, meta({ expectedVersion: 1 }))).version, 2);
       const revs = await r.revisions.list("brand_tool", (await r.tools.get(a.id, "build.sh")).id);
       assert.deepEqual(revs.map((x) => [x.version, x.bodyText]), [[1, "echo"], [2, "echo 2"]]);
+    },
+
+    async "themes: dates, no overlap per brand, activeOn, versions, revisions"(r, _clock, h) {
+      const o = h.owner.themes;
+      const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
+      const b = await r.brands.create({ slug: "acme-tea", displayName: "B" }, meta());
+      const input = (startsOn: string, endsOn: string, over: Record<string, unknown> = {}) => ({ startsOn, endsOn, tokenOverrides: { colors: { ink: "#111111" } }, guidance: "Cold tones.", ...over });
+      const winter = await o.put(a.id, "winter-sale", input("2026-12-01", "2026-12-31"), meta());
+      assert.deepEqual(await r.themes.get(a.id, "winter-sale"), { trust: "brand-data", id: winter.id, name: "winter-sale", startsOn: "2026-12-01", endsOn: "2026-12-31", tokenOverrides: { colors: { ink: "#111111" } }, guidance: "Cold tones.", version: 1, updatedAt: winter.updatedAt });
+      await o.put(a.id, "autumn", input("2026-03-01", "2026-05-31", { tokenOverrides: {}, guidance: "" }), meta());
+      assert.deepEqual((await r.themes.list(a.id)).map((x) => [x.name, x.startsOn, x.endsOn]), [["autumn", "2026-03-01", "2026-05-31"], ["winter-sale", "2026-12-01", "2026-12-31"]], "ordered by start date");
+      // One answer per day: ranges are inclusive, so touching ends overlap; another brand is independent.
+      for (const [from, to] of [["2026-12-31", "2027-01-05"], ["2026-11-20", "2026-12-01"], ["2026-12-10", "2026-12-12"], ["2026-11-01", "2027-02-01"]]) {
+        await assert.rejects(() => o.put(a.id, "clash", input(from, to), meta()), (e) => e instanceof ThemeOverlapError && e.other.name === "winter-sale" && e.other.startsOn === "2026-12-01" && e.other.endsOn === "2026-12-31", `${from}..${to}`);
+      }
+      await o.put(a.id, "january", input("2027-01-01", "2027-01-31"), meta());
+      await o.put(b.id, "winter-sale", input("2026-12-01", "2026-12-31"), meta());
+      // A theme never clashes with itself: its own dates can move or grow.
+      assert.equal((await o.put(a.id, "winter-sale", input("2026-12-05", "2026-12-31"), meta({ expectedVersion: 1 }))).version, 2);
+      await assert.rejects(() => o.put(a.id, "winter-sale", input("2026-12-05", "2027-01-01"), meta({ expectedVersion: 2 })), ThemeOverlapError);
+      assert.deepEqual([(await r.themes.activeOn(a.id, "2026-12-04")), (await r.themes.activeOn(a.id, "2026-12-05"))?.name, (await r.themes.activeOn(a.id, "2026-12-31"))?.name, (await r.themes.activeOn(a.id, "2027-01-01"))?.name, await r.themes.activeOn(a.id, "2026-06-15")], [null, "winter-sale", "winter-sale", "january", null]);
+      assert.equal((await r.themes.activeOn(b.id, "2026-12-01"))?.name, "winter-sale");
+      await assert.rejects(() => r.themes.activeOn(a.id, "2026-02-30"), InvalidInputError);
+      await assert.rejects(() => o.put(a.id, "winter-sale", input("2026-12-05", "2026-12-31"), meta()), (e) => e instanceof AlreadyExistsError && e.currentVersion === 2);
+      await assert.rejects(() => o.put(a.id, "winter-sale", input("2026-12-05", "2026-12-31"), meta({ expectedVersion: 9 })), (e) => e instanceof VersionConflictError && e.currentVersion === 2);
+      for (const [name, bad] of [["Bad Name", input("2027-02-01", "2027-02-02")], ["x", input("2027-02-30", "2027-03-02")], ["x", input("2027-03-05", "2027-03-01")], ["x", input("2027-03-01", "2027-03-01", { tokenOverrides: [] })], ["x", input("2027-03-01", "2027-03-01", { tokenOverrides: { big: "x".repeat(64 * 1024) } })], ["x", input("2027-03-01", "2027-03-01", { guidance: "x".repeat(32 * 1024 + 1) })]] as const) {
+        await assert.rejects(() => o.put(a.id, name, bad, meta()), InvalidInputError, name);
+      }
+      // Two overlapping puts racing: exactly one wins (Postgres serializes them per brand).
+      const race = await Promise.allSettled([o.put(a.id, "race-a", input("2028-01-01", "2028-01-10"), meta()), o.put(a.id, "race-b", input("2028-01-05", "2028-01-15"), meta())]);
+      assert.deepEqual(race.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
+      // The 64 KiB rule is measured on the compact JSON: ~4,500 small keys just under it must store on every backend (jsonb text is longer).
+      const many: Record<string, string> = {};
+      for (let i = 0; JSON.stringify(many).length + 14 < 64 * 1024; i++) many[`k${String(i).padStart(5, "0")}`] = "x";
+      assert.ok(Object.keys(many).length > 3000 && JSON.stringify(many).length <= 64 * 1024);
+      await o.put(a.id, "many-keys", input("2029-01-01", "2029-01-02", { tokenOverrides: many }), meta());
+      assert.equal(Object.keys((await r.themes.get(a.id, "many-keys")).tokenOverrides).length, Object.keys(many).length);
+      await o.put(a.id, "one-day", input("2027-03-01", "2027-03-01"), meta());
+      await assert.rejects(() => o.put("00000000-0000-4000-8000-000000000000", "x", input("2027-03-01", "2027-03-01"), meta()), NotFoundError);
+      await assert.rejects(() => r.themes.get(a.id, "nope"), NotFoundError);
+      assert.deepEqual(await r.guidance.list(a.id), [], "themes do not leak into guidance");
+      const revs = await r.revisions.list("seasonal_theme", winter.id);
+      assert.deepEqual(revs.map((x) => [x.version, x.bodyText, (x.body as { startsOn: string }).startsOn]), [[1, "Cold tones.", "2026-12-01"], [2, "Cold tones.", "2026-12-05"]]);
     },
 
     async "guidance: trust envelope, versions, names, revisions"(r, _clock, h) {
@@ -689,13 +732,14 @@ export async function runRepositoryContract(label: string, factory: Factory): Pr
       await assert.rejects(() => h.owner.importRuns.record({ ...run(3), brandId: "00000000-0000-4000-8000-000000000000" }), NotFoundError);
     },
 
-    async "least privilege: the app role cannot write rules, guidance, tools or import runs"(r, _clock, h) {
+    async "least privilege: the app role cannot write rules, guidance, tools, themes or import runs"(r, _clock, h) {
       if (!h.restricted) return;
       const a = await r.brands.create({ slug: "acme-coffee", displayName: "A" }, meta());
       const rule: RuleInput = { kind: "slide_count", params: { max: 5 }, severity: "error", appliesTo: ["carousel"], message: "m" };
       await assert.rejects(() => r.rules.create(a.id, rule, meta()), /permission denied/);
       await assert.rejects(() => r.guidance.put(a.id, "x", { description: "", body: "b" }, meta()), /permission denied/);
       await assert.rejects(() => r.tools.put(a.id, "x.mjs", { description: "", body: "b" }, meta()), /permission denied/);
+      await assert.rejects(() => r.themes.put(a.id, "x", { startsOn: "2026-12-01", endsOn: "2026-12-02", tokenOverrides: {}, guidance: "" }, meta()), /permission denied/);
       for (const statement of ["UPDATE import_runs SET report = '{}'", "DELETE FROM import_runs"]) {
         await assert.rejects(() => h.rawSql!.unsafe(statement), /permission denied/, `app role: ${statement}`);
       }

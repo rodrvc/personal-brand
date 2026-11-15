@@ -105,7 +105,7 @@ assert.equal(JSON.parse(readFileSync(join(work, "ws-bare", "workspace.json"), "u
 mkdirSync(join(bare, "node_modules"));
 const refusedLink = await runCli(["workspace", "example-posters", "--out", join(work, "ws-eperm")], env, exRepos, exBlobs, { repoRoot: bare, link: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); } });
 assert.equal(refusedLink.exitCode, 0, refusedLink.lines.join("\n"));
-assert.match(refusedLink.lines.join("\n"), /Aviso: no se pudo enlazar node_modules del motor/);
+assert.match(refusedLink.lines.join("\n"), /Aviso: no se pudo enlazar node_modules del motor \(el sistema rechazó el enlace\); las herramientas no podrán/);
 assert.equal(existsSync(join(work, "ws-eperm", "node_modules")), false);
 assert.equal(JSON.parse(readFileSync(join(work, "ws-eperm", "workspace.json"), "utf-8")).engineModules, null);
 assert.deepEqual(readdirSync(work).filter((f) => f.endsWith(".tmp")), []);

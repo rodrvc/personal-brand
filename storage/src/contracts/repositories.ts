@@ -62,7 +62,7 @@ export interface BrandDocumentRepository {
   ): Promise<{ id: string; version: number; updatedAt: string }>;
 }
 
-export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_tool" | "brand_recipe" | "brand_asset" | "carousel" | "content_item" | "recipe_run";
+export type RevisionEntity = "brand" | "brand_document" | "brand_rule" | "brand_guidance" | "brand_tool" | "seasonal_theme" | "brand_recipe" | "brand_asset" | "carousel" | "content_item" | "recipe_run";
 
 export interface Revision {
   brandId?: string;
@@ -137,6 +137,23 @@ export interface ToolRepository {
   list(brandId: string): Promise<Array<{ id: string; name: string; description: string; version: number; updatedAt: string }>>;
   get(brandId: string, name: string): Promise<ToolEnvelope>;
   put(brandId: string, name: string, input: { description: string; body: string }, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
+}
+
+/** A dated overlay of brand tokens plus guidance text. Dates are inclusive `YYYY-MM-DD` days. Same envelope as guidance: brand data. */
+export interface ThemeInput { startsOn: string; endsOn: string; tokenOverrides: Record<string, unknown>; guidance: string }
+export type ThemeEnvelope = ThemeInput & { trust: "brand-data"; id: string; name: string; version: number; updatedAt: string };
+
+/**
+ * Writes need the owner role. Names are slugs. A brand's themes never share a day (`ThemeOverlapError`), so `activeOn` has one answer.
+ * There is no removal: to retire a theme, move its dates (put with `expectedVersion`).
+ */
+export interface ThemeRepository {
+  /** Ordered by start date, then name. */
+  list(brandId: string): Promise<Array<{ id: string; name: string; startsOn: string; endsOn: string; version: number; updatedAt: string }>>;
+  get(brandId: string, name: string): Promise<ThemeEnvelope>;
+  put(brandId: string, name: string, input: ThemeInput, meta: WriteMeta): Promise<{ id: string; version: number; updatedAt: string }>;
+  /** The one theme whose range contains `date`, or null. */
+  activeOn(brandId: string, date: string): Promise<ThemeEnvelope | null>;
 }
 
 export interface RecipeRepository {

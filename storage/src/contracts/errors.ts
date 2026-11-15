@@ -54,6 +54,14 @@ export class InvalidInputError extends Error {
   }
 }
 
+/** A theme put whose dates share a day with another theme of the brand; `other` is that theme. */
+export class ThemeOverlapError extends InvalidInputError {
+  constructor(readonly other: { name: string; startsOn: string; endsOn: string }) {
+    super(`dates overlap theme "${other.name}" (${other.startsOn} to ${other.endsOn})`);
+    this.name = "ThemeOverlapError";
+  }
+}
+
 /** A content write reached an archived brand; archived brands take no content writes (design §8). */
 export class BrandArchivedError extends Error {
   constructor(what: string) {

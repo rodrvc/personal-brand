@@ -303,9 +303,6 @@ class HandleLookbehindTest(GateCase):
         self.assertIn('after_dot', gate.derive_terms())
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class ExampleFoldersTest(GateCase):
     """Example folders are tracked, so the .gitignore rule admits them and the content scan covers them."""
@@ -331,3 +328,7 @@ class ExampleFoldersTest(GateCase):
         leaks = gate.check_brand_leaks(files)
         self.assertEqual(len(leaks), 1)
         self.assertIn('profiles/example-shop/profile.md:1', leaks[0])
+
+
+if __name__ == '__main__':
+    unittest.main()
