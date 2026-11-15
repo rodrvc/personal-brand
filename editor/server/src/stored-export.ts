@@ -21,18 +21,18 @@ import { storedCarouselRaw, storedRenderParts, validateStored, type EditorStorag
 export async function enqueueStoredExport(s: StoredBrand, id: string, render: RenderFn, options?: { allowPending?: boolean }): Promise<ExportJob> {
   if ((await s.storage.brands.getBySlug(s.slug)).value.status === "archived") throw new BrandArchivedError(s.slug);
   const raw = await storedCarouselRaw(s, id);
-  const result = await validateStored(s, raw.document);
+  const result = await validateStored(s, raw.document, raw.scheduledFor);
   if (!result.valid) throw new InvalidInputError(`Carousel "${id}" is not a valid document: ${result.errors[0]?.message}`);
   const doc = result.document;
   if (!options?.allowPending && hasUnfinishedPieces(doc)) {
     throw new ExportHasPendingPiecesError(`Carousel "${id}" still has pending or awaiting-image pieces — export refused unless "allowPending" is set.`);
   }
   const job: ExportJob = { id: randomUUID(), slug: s.slug, carouselId: id, status: "queued", totalSlides: doc.slides.length, renderedSlides: 0 };
-  queueExportJob(job, () => runStoredExport(s, doc, raw.rowId, raw.version, job, render));
+  queueExportJob(job, () => runStoredExport(s, doc, raw.rowId, raw.version, job, render, raw.scheduledFor));
   return job;
 }
 
-async function runStoredExport(s: StoredBrand, doc: CarouselDocument, rowId: string, carouselVersion: number, job: ExportJob, render: RenderFn): Promise<void> {
+async function runStoredExport(s: StoredBrand, doc: CarouselDocument, rowId: string, carouselVersion: number, job: ExportJob, render: RenderFn, scheduledFor: string | null): Promise<void> {
   job.status = "running";
   // Scratch first, reservation inside the try: whatever fails after a version is reserved marks that row failed.
   const scratch = mkdtempSync(join(tmpdir(), "editor-stored-export-"));
@@ -40,7 +40,7 @@ async function runStoredExport(s: StoredBrand, doc: CarouselDocument, rowId: str
   let completed = false;
   try {
     reserved = await s.storage.exports.reserveNextVersion(rowId, carouselVersion);
-    const { brand, template, base, resolve } = await storedRenderParts(s, doc);
+    const { brand, template, base, resolve } = await storedRenderParts(s, doc, scheduledFor);
     const library = await s.storage.assets.list(s.brandId);
     const known = new Set(library.map((row) => row.value.assetId));
     const paths = await render({ brand, template, doc, ctx: base, outputDir: scratch, assetExists: (assetId) => known.has(assetId), resolve });

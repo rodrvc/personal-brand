@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { featuresOf, interpolate, type BrandTokens } from "./brand-schema.js";
 import { openRenderSource, type RenderSource } from "./render-source.js";
+import { mondayOf, weekContentDay } from "./week.js";
 import { chunkSlides, renderSlides } from "./render-batch.js";
 import { renderListFormat } from "./templates/list-format.js";
 import type { CarouselInput } from "./types.js";
@@ -32,10 +33,7 @@ function weekLabel(
   reference: Date,
   dates: BrandDates,
 ): { label: string; monday: Date; sunday: Date } {
-  const day = reference.getDay(); // 0 = Sunday
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  const monday = new Date(reference);
-  monday.setDate(reference.getDate() + mondayOffset);
+  const monday = mondayOf(reference);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
 
@@ -137,7 +135,8 @@ async function renderWeek(
   // Whatever the list-format template declares it reads, plus "dates": this
   // script builds the week label itself (weekLabel below), so that one is the
   // script's own requirement rather than the template's.
-  const brand = await source.loadBrand(featuresOf([renderListFormat], "dates"));
+  // The first day of the published week (its Monday, like a reel's periodStart) is the content's date: it picks the seasonal theme of a stored brand.
+  const brand = await source.loadBrand(featuresOf([renderListFormat], "dates"), weekContentDay(reference));
 
   const inputPath = source.inputPath(input, "week-input.json");
   const parsed = JSON.parse(readFileSync(inputPath, "utf-8")) as CarouselInput;

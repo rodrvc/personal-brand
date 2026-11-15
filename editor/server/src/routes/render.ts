@@ -83,9 +83,12 @@ async function resolveSlide(storage: EditorStorage | undefined, slug: string, id
   const found = await resolveStored(storage, slug);
   const stored = found && { ...found, storage: guardStorage(found.storage) };
   let doc: CarouselDocument;
+  let scheduledFor: string | null = null;
   if (stored) {
     assertValidCarouselId(id);
-    const { result } = await storedCarousel(stored, id);
+    const loaded = await storedCarousel(stored, id);
+    const { result } = loaded;
+    scheduledFor = loaded.scheduledFor;
     if (!result.valid) return bad(400, { error: "Invalid document", details: result.errors });
     doc = result.document;
   } else {
@@ -98,7 +101,7 @@ async function resolveSlide(storage: EditorStorage | undefined, slug: string, id
   if (n >= doc.slides.length) return bad(404, { error: `Slide index ${n} out of range (${doc.slides.length} slides)` });
 
   if (stored) {
-    const { html, brand, template, resolve } = await storedSlideHtml(stored, doc, n, preview);
+    const { html, brand, template, resolve } = await storedSlideHtml(stored, doc, n, preview, scheduledFor);
     const load = (page: Page) => loadStoredSlide(page, html, resolve);
     return { slide: { html, brand, doc, template, n, load } };
   }

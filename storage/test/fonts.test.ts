@@ -154,6 +154,13 @@ try {
   clearTimeout(keepAlive);
   assert.ok(Date.now() - t1 < 5000, "the deadline cut the request");
 
+  // A seasonal theme's own stylesheet is fetched too, even when the brand's tokens declare none.
+  const themed = await setup("example-themed");
+  writeFileSync(join(home, "theme.json"), JSON.stringify({ googleFontsHref: HREF }));
+  assert.equal((await run({ fetch: none.doFetch }, "theme", "put", "example-themed", "winter-sale", "--from", "2026-12-01", "--to", "2026-12-31", "--tokens", "theme.json")).exitCode, 0);
+  const viaTheme = network({ [HREF]: () => new Response(css(a)), [a]: () => new Response(woff2("t")) });
+  assert.deepEqual([(await fonts("example-themed", viaTheme.doFetch)).exitCode, viaTheme.seen, (await repos.assets.list(themed)).length], [0, [HREF, a], 1]);
+
   const noHref = await setup("example-plain");
   assert.deepEqual([(await fonts("example-plain", none.doFetch)).exitCode, none.seen, (await repos.assets.list(noHref)).length], [0, [], 0], "no googleFontsHref: nothing to fetch");
   assert.equal((await run({ fetch: none.doFetch }, "fonts", "frob", "example-ok")).exitCode, 2);

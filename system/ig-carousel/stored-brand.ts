@@ -1,3 +1,4 @@
+import { applyThemeOverrides } from "@personal-brand/storage";
 import { NotFoundError, type BrandDocumentRepository } from "@personal-brand/storage/contracts";
 
 import { parseBrandTokens, type BrandFeature, type BrandTokens } from "./brand-schema.js";
@@ -20,20 +21,23 @@ async function optional(documents: BrandDocuments, brandId: string, kind: "token
   }
 }
 
+/** A seasonal theme as the loaders take it: only what the overlay and its error message need. */
+export interface ThemeOverlay { name: string; tokenOverrides: Record<string, unknown> }
+
 /**
- * `loadBrand` for a stored brand: the `tokens` document, run through the same validation as `brand.json`.
- * `slug` only names the brand in errors.
+ * `loadBrand` for a stored brand: the `tokens` document, with the active theme (if any) laid over it, run through the same
+ * validation as `brand.json`. `slug` only names the brand in errors.
  */
-export async function loadStoredBrand(documents: BrandDocuments, brandId: string, slug: string, features: BrandFeature[] = []): Promise<BrandTokens> {
+export async function loadStoredBrand(documents: BrandDocuments, brandId: string, slug: string, features: BrandFeature[] = [], theme?: ThemeOverlay | null): Promise<BrandTokens> {
   const tokens = await optional(documents, brandId, "tokens", "");
   if (tokens === undefined) {
     throw new Error(`Brand "${slug}" has no stored tokens document. Import it with the \`brand\` CLI (storage package); see system/config/brand.schema.md for the shape.`);
   }
-  return parseBrandTokens(tokens, `storage:${slug}`, features);
+  return parseBrandTokens(theme ? applyThemeOverrides(tokens, theme.tokenOverrides) : tokens, `storage:${slug}${theme ? ` + theme ${theme.name}` : ""}`, features);
 }
 
 /** `loadBrandStyle` for a stored brand. Every document is optional, as every file is for a folder. */
-export async function loadStoredBrandStyle(documents: BrandDocuments, brandId: string): Promise<BrandStyle> {
+export async function loadStoredBrandStyle(documents: BrandDocuments, brandId: string, theme?: ThemeOverlay | null): Promise<BrandStyle> {
   const [spec, identity, config, tokens] = await Promise.all(
     (["spec", "identity", "config", "tokens"] as const).map((kind) => optional(documents, brandId, kind, "")),
   );
@@ -43,7 +47,7 @@ export async function loadStoredBrandStyle(documents: BrandDocuments, brandId: s
     brandSpec: typeof spec === "string" ? spec : undefined,
     profileMd: typeof identity === "string" ? identity : undefined,
     tone: tone ? { style: strings(tone.style), avoid: strings(tone.avoid) } : undefined,
-    brandJson: tokens,
+    brandJson: theme && tokens !== undefined ? applyThemeOverrides(tokens, theme.tokenOverrides) : tokens,
   });
 }
 
