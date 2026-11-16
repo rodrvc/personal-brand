@@ -263,7 +263,12 @@ jobs:
             echo "::error::the audit did not run; see the failing step above."
             exit 1
           fi
-          findings=$(cat audit.out audit.err 2>/dev/null | grep -c '↳ term ' || true)
+          # Two shapes of finding: a `↳ term ` marker, and a market signal
+          # `  <path>:<line>: <kind>`. The kinds mirror the strings in
+          # scripts/validate_commit_guardian.py; anchoring on the `: <kind>`
+          # suffix keeps the count from matching prose.
+          findings=$(cat audit.out audit.err 2>/dev/null \
+            | grep -cE "↳ term |: (coordinates inside a real brand's area|locale tag of a real brand|currency code of a real brand|timezone of a real brand)$" || true)
           # A non-zero status with no findings is not a clean run — it is the
           # scanner failing to run at all (a crash, an unreadable range).
           # Reporting that as "0 brand literal(s)" reads like a flake and
@@ -274,7 +279,7 @@ jobs:
             echo "  python3 scripts/validate_commit_guardian.py --scan"
             exit 1
           fi
-          echo "::error::${findings} brand literal(s) would be published by this change."
+          echo "::error::${findings} brand literal(s) or market signal(s) would be published by this change."
           echo "Files involved:"
           cat audit.out audit.err 2>/dev/null \
             | grep -oE '^  [^ :]+(/[^ :]+)*:' \
