@@ -210,7 +210,7 @@ function toProposal(
       const action = resolveAction(ctx, parsed);
       if (action.type === "compose_from_reference") {
         // Where each text comes from is checked against what was said, not taken from the model's word.
-        const checked = { ...action, texts: checkSources(action.texts, ownerMessages, answering) };
+        const checked = { ...action, texts: checkSources(action.texts, ownerMessages, answering, ctx.brand.locale) };
         return proposeRecreation(ctx, checked, references, accepts, activeSlideId, request, layoutRead, route);
       }
       if (action.type !== "generate_visual") return action;
