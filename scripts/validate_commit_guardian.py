@@ -1195,7 +1195,9 @@ def check_push(revisions: list[str]) -> int:
         # token turns everything after it into a pathspec, and `git log
         # <sha> -- nothing` exits 0 having read no commits: an audit that
         # passes because it looked at nothing.
-        diff = git('log', '-p', '--unified=0', f'--format={COMMIT_MARKER}', *revisions, '--')
+        # `tformat:` is required: a format string without `%` is otherwise read
+        # as the name of a built-in format, and git refuses the whole command.
+        diff = git('log', '-p', '--unified=0', f'--format=tformat:{COMMIT_MARKER}', *revisions, '--')
     except subprocess.CalledProcessError as exc:
         # A range that cannot be read is not a range that is clean. Fail
         # closed: the entire point of this check is the push it must not let
