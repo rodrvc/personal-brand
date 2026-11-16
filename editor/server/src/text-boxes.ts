@@ -49,14 +49,21 @@ export function matchRecognitionLanguages(requested: string[], supported: string
 
 let supportedLanguages: string[] | undefined;
 
-function supported(ocr: string): string[] {
+/** Test-only: forget the cached language list. */
+export function resetSupportedForTests(): void {
+  supportedLanguages = undefined;
+}
+
+/** Only a successful, non-empty answer is cached: a failed lookup is retried on the next read instead of leaving detection alone for good. */
+export function supported(ocr: string, list: (ocr: string) => string = (bin) => execFileSync(bin, ["--supported"], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")): string[] {
   if (supportedLanguages) return supportedLanguages;
   try {
-    supportedLanguages = JSON.parse(execFileSync(ocr, ["--supported"], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")) as string[];
+    const languages = JSON.parse(list(ocr)) as unknown;
+    if (Array.isArray(languages) && languages.length > 0 && languages.every((l) => typeof l === "string")) supportedLanguages = languages;
+    return supportedLanguages ?? [];
   } catch {
-    supportedLanguages = [];
+    return [];
   }
-  return supportedLanguages;
 }
 
 /**
