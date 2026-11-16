@@ -3,7 +3,10 @@
 Market-neutral term filters, and the coordinate / locale / currency / timezone checks.
 Every brand, place and number here is fictional.
 """
+import contextlib
+import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -202,6 +205,38 @@ class WiringTest(MarketCase):
     def test_push_check_passes_when_clean(self):
         gate.git = lambda *args: '+++ b/docs/a.md\n@@ -0,0 +1 @@\n+nothing here\n'
         self.assertEqual(gate.check_push(['abc..def']), 0)
+
+
+class RealGitPushTest(MarketCase):
+    """The push check against a real repository: the mocked tests above cannot catch a git CLI error."""
+
+    def commit(self, rel, text):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+        run = lambda *a: subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.test', *a],
+                                        cwd=self.root, check=True, capture_output=True)
+        run('add', rel)
+        run('commit', '-q', '-m', rel)
+        return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+
+    def setUp(self):
+        super().setUp()
+        subprocess.run(['git', 'init', '-q'], cwd=self.root, check=True)
+        self.add_fictional_brand()  # untracked, like a real profile next to the engine
+        self.base = self.commit('docs/start.md', 'start\n')
+
+    def test_clean_range_passes(self):
+        head = self.commit('docs/a.md', 'nothing here\n')
+        self.assertEqual(gate.check_push([f'{self.base}..{head}']), 0)
+
+    def test_pair_in_one_commit_fails_and_pairs_never_join_across_commits(self):
+        self.commit('docs/a.md', f'lat: {FAKE_VENUE[1]}\n')
+        head = self.commit('docs/a.md', f'lat: {FAKE_VENUE[1]}\nlng: {FAKE_VENUE[0]}\n')
+        self.assertEqual(gate.check_push([f'{self.base}..{head}']), 0)
+        head = self.commit('docs/b.md', f'lat: {FAKE_VENUE[1]}\nlng: {FAKE_VENUE[0]}\n')
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(gate.check_push([f'{self.base}..{head}']), 1)
 
 
 if __name__ == '__main__':
