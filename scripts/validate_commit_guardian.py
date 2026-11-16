@@ -758,15 +758,20 @@ class MarketSignals:
             for offset, (a, b), keyed in _text_pairs(text):
                 if self._inside(a, b) or (not keyed and self._inside(b, a)):
                     found.add((line_at(offset), COORDINATES_KIND))
-        for pattern, kind in ((self.locale, 'locale tag of a real brand'),
-                              (self.currency, 'currency code of a real brand'),
-                              (self.timezone, 'timezone of a real brand')):
+        for pattern, kind in ((self.locale, LOCALE_KIND),
+                              (self.currency, CURRENCY_KIND),
+                              (self.timezone, TIMEZONE_KIND)):
             if pattern:
                 found.update((line_at(m.start()), kind) for m in pattern.finditer(text))
         return sorted(found)
 
 
 COORDINATES_KIND = "coordinates inside a real brand's area"
+LOCALE_KIND = 'locale tag of a real brand'
+CURRENCY_KIND = 'currency code of a real brand'
+TIMEZONE_KIND = 'timezone of a real brand'
+# The CI Report step in .github/workflows/brand-gate.yml matches these verbatim.
+MARKET_KINDS = (COORDINATES_KIND, LOCALE_KIND, CURRENCY_KIND, TIMEZONE_KIND)
 
 
 def check_market_signals(staged_files: list[str]) -> list[str]:
