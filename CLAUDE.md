@@ -6,7 +6,8 @@
 >
 > **¿Clon nuevo, o vas a instalar, commitear o dar de alta una marca?** Lee
 > [`docs/SETUP.md`](docs/SETUP.md) primero. Un clon no trae los hooks
-> puestos, y el gestor es pnpm.
+> puestos, y el gestor es pnpm. ¿Eres el dueño de la marca? Lee la guía
+> corta en [`docs/GUIA.md`](docs/GUIA.md).
 >
 > Tres reglas que mandan sobre todo lo demás:
 > 1. **El proyecto es AGNÓSTICO: ninguna marca vive en el repo.** Ni

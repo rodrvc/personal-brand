@@ -1,9 +1,9 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 
-import { putBlob } from "../blob/put-blob.ts";
-import { blobKey, InvalidInputError, ObjectNotFoundError, type AssetKind, type AssetOrigin, type AssetStatus, type BlobStore } from "../contracts/index.ts";
-import { canon, found, readRegular, sha256, type CollectContext, type Item } from "./shared.ts";
+import { MAX_ASSET_TAGS, type AssetKind, type AssetOrigin, type AssetStatus } from "../contracts/index.ts";
+import { assetItem } from "./asset-item.ts";
+import { readRegular, sha256, type CollectContext, type Item } from "./shared.ts";
 
 export const KINDS: AssetKind[] = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
 const STATUSES: AssetStatus[] = ["candidate", "approved", "hidden"];
@@ -40,9 +40,10 @@ const asObject = (raw: Buffer | null): Record<string, unknown> | null => {
  * classification is rebuilt the way the folder library's own scan does it (generated and reference folders, font
  * sidecars, then the `meta/<id>.json` choice of the user), and only its `w`/`h` are borrowed when it has them.
  * Same bytes at two paths are one asset (the first path wins, the other is reported). Without a blob store nothing
- * is imported and the folder is reported, so it can never be mistaken for imported.
+ * is imported and the folder is reported, so it can never be mistaken for imported. `batchTags` are tags that batch folders
+ * (`batches.ts`) put on the same bytes: they are added to the asset's own tags, and kind, status and origin stay as decided here.
  */
-export function collectAssets(ctx: CollectContext): Item[] {
+export function collectAssets(ctx: CollectContext, batchTags: ReadonlyMap<string, string[]> = new Map()): Item[] {
   const { dir, root, repos, blobs, skipped, handled } = ctx;
   const base = join(dir, "assets");
   if (!existsSync(base)) return [];
@@ -99,40 +100,13 @@ export function collectAssets(ctx: CollectContext): Item[] {
     const generation = asObject(raws.generation);
     // width/height are best-effort: filled from the cache at registration only, never compared afterwards (not in the
     // payload, the item hash or the update check), so cache drift can neither conflict nor dirty verification.
-    const row = { sha256: sha, kind, mime, bytes: bytes.length, origin, status, tags, family: family ?? null, generation };
-    items.push({
-      key: `asset:${id}`, entityType: "brand_asset",
-      hash: sha256([sha, ...Object.values(raws).map((r) => (r ? sha256(r) : ""))].join("\n")),
-      payload: row,
-      read: async (brandId) => {
-        const a = await found(repos.assets.get(brandId, id));
-        return a && { id: a.id, version: a.version, value: { sha256: a.value.sha256, kind: a.value.kind, mime: a.value.mime, bytes: a.value.bytes, origin: a.value.origin, status: a.value.status, tags: a.value.tags, family: a.value.family, generation: a.value.generation } };
-      },
-      write: async (brandId, expectedVersion, meta) => {
-        if (expectedVersion !== null) {
-          // Only what a user can reclassify moves (keep this list in step with `AssetPatch`, contracts/repositories.ts).
-          // Everything else is fixed at registration, so a difference is reported instead of stored: the item hash would
-          // otherwise move without the row and verification would stay dirty. That includes `origin` and `mime`: moving
-          // a file into references/ or generated/, or renaming its extension, is a conflict by design.
-          const current = (await repos.assets.get(brandId, id)).value as unknown as Record<string, unknown>;
-          const fixed: Record<string, unknown> = { sha256: sha, mime, bytes: bytes.length, origin, generation };
-          const changed = [...Object.keys(fixed).filter((k) => canon(current[k] ?? null) !== canon(fixed[k] ?? null)), ...(current.family && !family ? ["family"] : [])];
-          if (changed.length) throw new InvalidInputError(`asset ${id}: ${changed.join(", ")} changed in the folder; registered fields cannot be updated`);
-          return repos.assets.update(brandId, id, { kind, tags, status, ...(family ? { family } : {}) }, { ...meta, expectedVersion });
-        }
-        await putBlob(blobs as BlobStore, brandId, bytes, mime);
-        return repos.assets.register(brandId, { sha256: sha, kind, mime, bytes: bytes.length, origin, status, tags, ...(width ? { width } : {}), ...(height ? { height } : {}), ...(family ? { family } : {}), ...(generation ? { generation } : {}) }, { ...meta, expectedVersion: null });
-      },
-      // The blob is re-downloaded and hashed: a row pointing at a missing or different object is not a clean import.
-      verifyBlobs: async (brandId) => {
-        try {
-          return sha256((await (blobs as BlobStore).get(blobKey(brandId, sha))).body) === sha;
-        } catch (error) {
-          if (error instanceof ObjectNotFoundError) return false;
-          throw error;
-        }
-      },
-    });
+    // Tags a batch folder put on the same bytes are added to the user's (the `assets/` item wins for everything else).
+    const extra = (batchTags.get(id) ?? []).filter((t) => !tags.includes(t));
+    const merged = [...tags, ...extra];
+    if (extra.length && merged.length > MAX_ASSET_TAGS) skipped.push(`assets/${rel} (batch tags not added: more than ${MAX_ASSET_TAGS} tags)`);
+    const finalTags = extra.length && merged.length > MAX_ASSET_TAGS ? tags : merged;
+    const hashParts = [...Object.values(raws).map((r) => (r ? sha256(r) : "")), ...(finalTags.length > tags.length ? [`batch-tags:${finalTags.slice(tags.length).join(",")}`] : [])];
+    items.push(assetItem(ctx, { id, sha, bytes, mime, kind, origin, status, tags: finalTags, family, generation, width, height, hashParts }));
   }
   // A sidecar whose asset is not in the folder describes nothing; it is reported, never imported.
   for (const rel of files) {

@@ -318,9 +318,10 @@ async function main(): Promise<void> {
 
 async function render(profile: string, source: RenderSource, stored?: StoredContext): Promise<void> {
   const profileDir = stored ? "" : resolveProfileDir(profile);
-  const brand = await source.loadBrand(["categories", "reel"]);
   const recipe = stored ? await loadStoredReelRecipe(stored.storage) : loadReelRecipe(profileDir);
   const storedRun = stored ? await loadStoredReelRun(stored.storage, stored.runId) : undefined;
+  // The run's first day is the content's date: it picks the seasonal theme of a stored brand.
+  const brand = await source.loadBrand(["categories", "reel"], storedRun?.periodStart);
   if (storedRun) {
     // A stored run carries its own storyboard, period and input: these folder-only inputs would be silently ignored.
     for (const ignored of ["voice", "storyboard", "date"]) {

@@ -16,7 +16,11 @@ export interface OutputsRoot {
   /** Subfolders for the editor's exports and the reels (`outputs.editor`, `outputs.reels`). */
   editor: string;
   reels: string;
+  /** Where `real` was decided: the environment, `config.local.yaml`, `config.yaml` or the default (`outputs`). Reported so the owner sees which folder is read and why. */
+  source: OutputsSource;
 }
+
+export type OutputsSource = "env" | "config-local" | "config" | "default";
 
 /** Files that make a sibling folder a brand folder (the ones the importer reads), for the "inside another brand" rule. */
 const BRAND_FILES = ["brand.json", "brand.yaml", "profile.md"];
@@ -28,18 +32,24 @@ const homeOf = (env: NodeJS.ProcessEnv) => env.HOME?.trim() || homedir();
  * The `outputs` section of `config.local.yaml` over `config.yaml`, key by key. A file that is absent counts as absent; one that
  * exists but cannot be read or parsed leaves the outputs root unknown (`problem`): guessing the default could read the wrong folder.
  */
-function readOutputsConfig(dir: string): { config: Record<string, string>; problem?: string } {
+function readOutputsConfig(dir: string): { config: Record<string, string>; fromLocal: Set<string>; problem?: string } {
   const merged: Record<string, string> = {};
+  const fromLocal = new Set<string>();
   let problem: string | undefined;
   for (const file of ["config.yaml", "config.local.yaml"]) {
     try {
       const section = (parseYaml(readFileSync(join(dir, file), "utf-8")) as { outputs?: Record<string, unknown> } | null)?.outputs;
-      for (const [key, value] of Object.entries(section ?? {})) if (typeof value === "string" && value.trim()) merged[key] = value.trim();
+      for (const [key, value] of Object.entries(section ?? {})) {
+        if (typeof value !== "string" || !value.trim()) continue;
+        merged[key] = value.trim();
+        if (file === "config.local.yaml") fromLocal.add(key);
+        else fromLocal.delete(key);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") problem ??= `${file} ${error instanceof YAMLParseError ? "could not be parsed" : "could not be read"}: outputs root unknown`;
     }
   }
-  return { config: merged, problem };
+  return { config: merged, fromLocal, problem };
 }
 
 /** Whether `path` is `parent` or lies under it, by path arithmetic (no prefix tricks: `/a/bc` is not under `/a/b`). */
@@ -88,7 +98,7 @@ function tooBroad(real: string, dir: string, root: string, env: NodeJS.ProcessEn
  */
 export function resolveOutputs(dir: string, root: string, slug: string, env: NodeJS.ProcessEnv, notices: string[], quietMissing = false): { outputs: OutputsRoot | null; unusable?: string } {
   const fromEnv = env.BRAND_OUTPUTS_ROOT?.trim();
-  const { config, problem } = readOutputsConfig(dir);
+  const { config, fromLocal, problem } = readOutputsConfig(dir);
   if (problem) return { outputs: null, unusable: problem };
   const baseDir = config.base_dir ?? "outputs";
   const expanded = baseDir.startsWith("~") ? join(homeOf(env), baseDir.slice(1).replace(/^\/+/, "")) : baseDir;
@@ -107,5 +117,6 @@ export function resolveOutputs(dir: string, root: string, slug: string, env: Nod
   if (broad) return { outputs: null, unusable: `outputs root ${real} ${broad}: not read` };
   const reels = config.reels ?? "reels";
   if (isAbsolute(reels) || reels.split(/[\\/]/).includes("..")) return { outputs: null, unusable: `outputs.reels "${reels}" leaves the outputs root: not read` };
-  return { outputs: { real, inside: within(root, real), editor: config.editor ?? "editor", reels } };
+  const source: OutputsSource = fromEnv ? "env" : !config.base_dir ? "default" : fromLocal.has("base_dir") ? "config-local" : "config";
+  return { outputs: { real, inside: within(root, real), editor: config.editor ?? "editor", reels, source } };
 }

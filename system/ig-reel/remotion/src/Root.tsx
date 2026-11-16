@@ -15,7 +15,7 @@ import { CANVAS_HEIGHT, CANVAS_WIDTH, FPS, scenesFor, totalFrames, totalFramesOf
 import { MAP_ATTRIBUTION } from './maplibre';
 
 const defaultProps: ReelProps = {
-  locale: 'es',
+  locale: 'en',
   colors: {
     accent: '#3b6ea5',
     surface: '#f4f5f7',
@@ -35,9 +35,9 @@ const defaultProps: ReelProps = {
   },
   copy: {
     coverTitle: 'Agenda',
-    coverSubtitle: 'en Puerto Ejemplo',
-    coverCount: '2 planes de la semana',
-    closingCta: 'Descubre más en',
+    coverSubtitle: 'in Example Harbor',
+    coverCount: '2 plans this week',
+    closingCta: 'Find out more at',
     wordmark: 'Example',
     site: 'example.test',
   },
@@ -49,21 +49,21 @@ const defaultProps: ReelProps = {
   },
   items: [
     {
-      title: 'Concierto de ejemplo en la plaza',
-      when: 'Jue 1 Ene · 20:00',
-      where: 'Plaza Central, Calle Falsa 123',
-      mapLabel: 'Plaza Central',
-      category: 'MÚSICA',
+      title: 'Example concert in the square',
+      when: 'Thu 1 Jan · 20:00',
+      where: 'Central Square, 123 Example St',
+      mapLabel: 'Central Square',
+      category: 'MUSIC',
       categoryBackground: '#3b6ea5',
       image: 'assets/example-1.jpg',
       lng: 0.01,
       lat: 0.008,
     },
     {
-      title: 'Feria de ejemplo junto al muelle',
-      when: 'Vie 2 Ene · 12:00',
-      where: 'Muelle Viejo, Av. del Puerto 45',
-      mapLabel: 'Muelle Viejo',
+      title: 'Example fair by the pier',
+      when: 'Fri 2 Jan · 12:00',
+      where: 'Old Pier, 45 Harbor Ave',
+      mapLabel: 'Old Pier',
       category: '',
       categoryBackground: '',
       image: 'assets/example-2.jpg',

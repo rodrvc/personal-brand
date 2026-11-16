@@ -195,14 +195,13 @@ test("whitespace around the = is trimmed", () => {
   delete process.env.KEY;
 });
 
-// A bbox roughly one hundredth of a degree, in the southern/western hemisphere
-// so the Mercator maths is exercised with negative values.
-const BBOX = validateBBox([-23.72, -70.44, -23.58, -70.36]);
+// A bbox of 0.14 x 0.08 degrees near the origin, in the invented city's area.
+const BBOX = validateBBox([0.10, 0.20, 0.24, 0.28]);
 
 console.log("\ngeo — bbox validation");
 
 test("a well-formed bbox round-trips", () => {
-  assert(validateBBox([-23.72, -70.44, -23.58, -70.36]).length === 4, "expected four numbers back");
+  assert(validateBBox([0.10, 0.20, 0.24, 0.28]).length === 4, "expected four numbers back");
 });
 
 test("a bbox with swapped corners is rejected, naming the expected order", () => {
@@ -220,22 +219,22 @@ test("an oversized bbox fails at load, before any request", () => {
 });
 
 test("isInsideBBox rejects a coordinate outside the declared box", () => {
-  assert(isInsideBBox(BBOX, -23.65, -70.4), "a point inside should be inside");
-  assert(!isInsideBBox(BBOX, -33.45, -70.66), "a point in another city should be outside");
+  assert(isInsideBBox(BBOX, 0.17, 0.24), "a point inside should be inside");
+  assert(!isInsideBBox(BBOX, 3.5, 1.5), "a point in another city should be outside");
 });
 
 console.log("\ngeo — the wide framing the camera starts from");
 
 // Points spread over most of the test bbox, and a cluster in its south half.
 const SPREAD_POINTS = [
-  { lat: -23.71, lng: -70.43 },
-  { lat: -23.6, lng: -70.37 },
-  { lat: -23.66, lng: -70.4 },
+  { lat: 0.11, lng: 0.21 },
+  { lat: 0.22, lng: 0.27 },
+  { lat: 0.16, lng: 0.24 },
 ];
 const SOUTH_POINTS = [
-  { lat: -23.715, lng: -70.43 },
-  { lat: -23.7, lng: -70.42 },
-  { lat: -23.69, lng: -70.41 },
+  { lat: 0.105, lng: 0.21 },
+  { lat: 0.12, lng: 0.22 },
+  { lat: 0.13, lng: 0.23 },
 ];
 
 /** The same fit formula as the engine's, as an independent oracle for the clamp. */
@@ -264,7 +263,7 @@ test("items clustered in the south half pull the frame onto them, closer than th
   const wide = wideFraming(BBOX, SOUTH_POINTS);
   const [lng, lat] = wide.center;
   assert(
-    lat >= -23.715 && lat <= -23.69 && lng >= -70.43 && lng <= -70.41,
+    lat >= 0.105 && lat <= 0.13 && lng >= 0.21 && lng <= 0.23,
     `centre (${lat}, ${lng}) must fall inside the points' own bounding box, not the bbox's midpoint`,
   );
   assert(
@@ -274,7 +273,7 @@ test("items clustered in the south half pull the frame onto them, closer than th
 });
 
 test("a single point hits the half-span floor: finite zoom, still a wide shot", () => {
-  const wide = wideFraming(BBOX, [{ lat: -23.66, lng: -70.4 }]);
+  const wide = wideFraming(BBOX, [{ lat: 0.16, lng: 0.24 }]);
   assert(Number.isFinite(wide.zoom), `zoom must be finite for one point, got ${wide.zoom}`);
   assert(wide.zoom <= 14, `one point must not zoom past 14, got ${wide.zoom}`);
   const [lonSpan, latSpan] = wide.span;
@@ -288,13 +287,38 @@ test("no points is a legible error, not a NaN camera", () => {
 test("the zoom never falls below the fit of the declared bbox", () => {
   // Points at the bbox corners: padded they overflow it, so the clamp engages.
   const corners = [
-    { lat: -23.72, lng: -70.44 },
-    { lat: -23.58, lng: -70.36 },
+    { lat: 0.10, lng: 0.20 },
+    { lat: 0.24, lng: 0.28 },
   ];
   const wide = wideFraming(BBOX, corners);
   assert(
     wide.zoom >= Number(bboxFitZoom(BBOX).toFixed(2)),
     `zoom must never be farther out than the declared city (${bboxFitZoom(BBOX).toFixed(2)}), got ${wide.zoom}`,
+  );
+});
+
+// Covers the southern and western hemispheres; keep it.
+test("an open-ocean box in the southern and western hemispheres frames correctly", () => {
+  const ocean = validateBBox([-40.3, -60.3, -40.1, -60.1]);
+  assert(isInsideBBox(ocean, -40.2, -60.2), "a point inside the box should be inside");
+  assert(!isInsideBBox(ocean, -40.35, -60.2), "a point south of the box should be outside");
+  // Tall, narrow point sets: the frame is height-limited, which is where the Mercator stretch shows.
+  const oceanPoints = [
+    { lat: -40.28, lng: -60.2 },
+    { lat: -40.12, lng: -60.2 },
+  ];
+  const wide = wideFraming(ocean, oceanPoints);
+  const [lng, lat] = wide.center;
+  assert(lat < 0 && lng < 0, `centre (${lat}, ${lng}) must have negative lat and lng`);
+  assert(isInsideBBox(ocean, lat, lng), `centre (${lat}, ${lng}) must fall inside the box`);
+  const equator = validateBBox([-0.1, -0.1, 0.1, 0.1]);
+  const equatorWide = wideFraming(equator, [
+    { lat: -0.08, lng: 0 },
+    { lat: 0.08, lng: 0 },
+  ]);
+  assert(
+    wide.zoom < equatorWide.zoom,
+    `Mercator stretch must frame the same degrees wider away from the equator: ${wide.zoom} vs ${equatorWide.zoom}`,
   );
 });
 
@@ -307,7 +331,7 @@ test("a four-item reel is 24.2s / 726 frames long", () => {
 
 test("the camera starts wide and arrives over the item at street zoom", () => {
   const wide = wideFraming(BBOX, SPREAD_POINTS);
-  const target = { lng: -70.4, lat: -23.65 };
+  const target = { lng: 0.24, lat: 0.17 };
   const atStart = cameraAt(mapStart(0), wide, [target]);
   assert(
     Math.abs(atStart.zoom - wide.zoom) < 1e-9,
@@ -634,8 +658,8 @@ const ITEM = {
   where: "Somewhere",
   image: "https://images.example.org/a.jpg",
   category: "music",
-  lat: -23.65,
-  lng: -70.4,
+  lat: 0.17,
+  lng: 0.24,
   mapLabel: "Somewhere",
 };
 
@@ -677,7 +701,7 @@ test("a date that rolls over the month is not accepted", () => {
 });
 
 test("an item whose pin falls outside the bbox is dropped", () => {
-  const items = [{ ...ITEM }, { ...ITEM, title: "Another city", lat: -33.45, lng: -70.66 }];
+  const items = [{ ...ITEM }, { ...ITEM, title: "Another city", lat: 3.5, lng: 1.5 }];
   const kept = verifyOrThrow({ input: input({ items }), inputPath: "test.json", bbox: BBOX, period: PERIOD });
   assert(kept.length === 1, `expected the far item to be dropped, got ${kept.length} survivors`);
 });
@@ -782,7 +806,7 @@ curation:
   guidance: |
     Prose that the engine treats as data.
 map:
-  bbox: [-23.72, -70.44, -23.58, -70.36]
+  bbox: [0.10, 0.20, 0.24, 0.28]
   reference_types:
     - mall
     - hospital
@@ -1025,7 +1049,7 @@ test("narration must exist; empty string is a mute card", () => {
 console.log("\nstoryboard — word count and budget");
 
 test("countWords ignores punctuation-only tokens and counts accented words", () => {
-  assert(countWords("El miércoles, Iván — en Farolito.") === 5, `got ${countWords("El miércoles, Iván — en Farolito.")}`);
+  assert(countWords("El miércoles, Iván — en Lanternhall.") === 5, `got ${countWords("El miércoles, Iván — en Lanternhall.")}`);
   assert(countWords("   ") === 0, "blank is zero");
 });
 
@@ -1183,7 +1207,7 @@ test("short narration falls back to the minimums; long narration extends and sta
 
 test("the camera follows the derived scenes: it leaves for item 2 when its scene starts", () => {
   const wide = wideFraming(BBOX, SPREAD_POINTS);
-  const targets = [{ lng: -70.4, lat: -23.65 }, { lng: -70.42, lat: -23.7 }];
+  const targets = [{ lng: 0.24, lat: 0.17 }, { lng: 0.22, lat: 0.12 }];
   const scenes = resolveScenes([
     { kind: "cover", narrationSeconds: 3 },
     { kind: "item", itemIndex: 0, narrationSeconds: 8 },

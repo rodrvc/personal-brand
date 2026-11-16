@@ -28,15 +28,58 @@ function binary(): string | undefined {
   }
 }
 
-/** Every line of text in the image with its measured box, or undefined when local OCR is not available. */
-export function readTextLines(bytes: Buffer): TextLine[] | undefined {
+/** The language part of a BCP 47 tag, lower-cased: "es-XX" and "es_419" both give "es". */
+function languagePart(tag: string): string {
+  return tag.split(/[-_]/)[0]!.toLowerCase();
+}
+
+/**
+ * Maps requested tags (normally the brand's locale) onto the recognition languages the OCR supports, by language part
+ * (a bare or regional tag such as "es-XX" gives a supported "es-ES"), brand languages first and English after them as
+ * a fallback, since posters mix it in. Nothing matched gives [] and the OCR relies on language detection alone.
+ */
+export function matchRecognitionLanguages(requested: string[], supported: string[]): string[] {
+  const pick = (tag: string): string | undefined => {
+    const exact = supported.find((s) => s.toLowerCase() === tag.toLowerCase().replace("_", "-"));
+    return exact ?? supported.find((s) => languagePart(s) === languagePart(tag));
+  };
+  const matched = [...requested.filter(Boolean), "en"].map(pick).filter((s): s is string => s !== undefined);
+  return [...new Set(matched)];
+}
+
+let supportedLanguages: string[] | undefined;
+
+/** Test-only: forget the cached language list. */
+export function resetSupportedForTests(): void {
+  supportedLanguages = undefined;
+}
+
+/** Only a successful, non-empty answer is cached: a failed lookup is retried on the next read instead of leaving detection alone for good. */
+export function supported(ocr: string, list: (ocr: string) => string = (bin) => execFileSync(bin, ["--supported"], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")): string[] {
+  if (supportedLanguages) return supportedLanguages;
+  try {
+    const languages = JSON.parse(list(ocr)) as unknown;
+    if (Array.isArray(languages) && languages.length > 0 && languages.every((l) => typeof l === "string")) supportedLanguages = languages;
+    return supportedLanguages ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Every line of text in the image with its measured box, or undefined when local OCR is not available.
+ * `languages` are BCP 47 tags, normally the brand's locale; see matchRecognitionLanguages. With none matched the OCR
+ * detects the language itself.
+ */
+export function readTextLines(bytes: Buffer, languages: string[] = []): TextLine[] | undefined {
   const ocr = binary();
   if (!ocr) return undefined;
   const dir = mkdtempSync(join(tmpdir(), "text-boxes-"));
   try {
     const input = join(dir, "image");
     writeFileSync(input, bytes);
-    const { lines } = JSON.parse(execFileSync(ocr, [input], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")) as {
+    const recognition = matchRecognitionLanguages(languages, supported(ocr)).join(",");
+    const { lines } = JSON.parse(execFileSync(ocr, recognition ? [input, recognition] : [input], { stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8")) as {
       lines: Array<{ text: string; x: number; y: number; w: number; h: number }>;
     };
     return lines.map(({ text, x, y, w, h }) => ({ text, box: { x, y, w, h } }));

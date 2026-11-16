@@ -604,7 +604,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   symlinkSync(join(work, "outside-guard.txt"), join(outRoot, "linked.txt"));
   const outRun = await run("import", "--from", outShop);
   assert.equal(outRun.exitCode, 0, outRun.lines.join("\n"));
-  assert.ok(outRun.lines.includes(`Carpeta de salidas leída (fuera de la marca): ${realpathSync(outRoot)}.`), "the resolved outputs path is printed");
+  assert.ok(outRun.lines.includes(`Carpeta de salidas leída: ${realpathSync(outRoot)} (indicada en config.local.yaml). Solo se lee: nunca se escribe en ella.`), "the resolved outputs path, where it came from and that it is read-only are printed");
   const outBrand = (await repos.brands.getBySlug("example-outputs-shop")).id;
   const outRunRow = (await repos.runs.list(outBrand, { recipe: "reel-week" }))[0];
   const clips = await repos.runArtifacts.current(outRunRow.id, { kind: "clip" });
@@ -665,6 +665,16 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const atManifest = Object.keys(((await repos.importRuns.list((await repos.brands.getBySlug("example-at-shop")).id))[0].report.legacy as { manifest: Record<string, string> }).manifest);
   assert.equal(atManifest.some((k) => k.startsWith("@")), false, "nothing under the folder's `@outputs` reaches the manifest");
 
+  // `outputs.base_dir` in config.yaml alone is reported as such, and nothing else of config.local.yaml is printed.
+  const cfgShop = fixture(label, "example-cfg-out-shop");
+  const cfgRoot = join(work, label, "outputs-cfg");
+  seedOut(cfgRoot, { "keep.json": "{\"a\":1}" });
+  writeFileSync(join(cfgShop, "config.yaml"), `outputs:\n  base_dir: ${cfgRoot}\n`);
+  writeFileSync(join(cfgShop, "config.local.yaml"), "owner_note: private-marker-value\n");
+  const cfgRun = (await run("import", "--from", cfgShop, "--dry-run")).lines.join("\n");
+  assert.ok(cfgRun.includes(`Carpeta de salidas leída: ${realpathSync(cfgRoot)} (indicada en config.yaml). Solo se lee`));
+  assert.equal(cfgRun.includes("private-marker-value"), false, "config.local.yaml is never echoed");
+
   // Outputs-root problems are reported, never dropped: a missing configured root is a notice; "/", an ancestor of the folder, or an
   // `outputs.reels` leaving the root are unusable and block a cutover; without a blob store an outside root is left behind whole.
   const problem = (name: string, config: string) => {
@@ -716,7 +726,7 @@ async function scenario(label: string, repos: MemoryRepositories): Promise<void>
   const envOutputs = { ...env, BRAND_OUTPUTS_ROOT: join(work, label, "env-outputs") };
   seedOut(join(envOutputs.BRAND_OUTPUTS_ROOT, "example-env-root-shop"), { "keep.json": "{\"a\":1}" });
   const envRun = await runCli(["import", "--from", envShop], envOutputs, spied, blobs);
-  assert.ok(envRun.lines.includes(`Carpeta de salidas leída (fuera de la marca): ${realpathSync(join(envOutputs.BRAND_OUTPUTS_ROOT, "example-env-root-shop"))}.`));
+  assert.ok(envRun.lines.includes(`Carpeta de salidas leída: ${realpathSync(join(envOutputs.BRAND_OUTPUTS_ROOT, "example-env-root-shop"))} (indicada por la variable BRAND_OUTPUTS_ROOT). Solo se lee: nunca se escribe en ella.`));
   const envManifest = Object.keys(((await repos.importRuns.list((await repos.brands.getBySlug("example-env-root-shop")).id))[0].report.legacy as { manifest: Record<string, string> }).manifest);
   assert.ok(envManifest.includes("@outputs/keep.json"), "a file in the env root is imported");
   assert.deepEqual(await verifyBrand(repos, envShop, blobs, envOutputs), []);

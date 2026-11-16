@@ -24,6 +24,10 @@ PROFILES_DIR = ROOT / 'profiles'
 # indefinitely in a guide.
 GENERIC_PREFIXES = ('system/', '.claude/', 'core/', 'docs/')
 
+# The fictional example profiles are tracked, so their content is scanned too: a real brand
+# hiding under an `example-<x>` folder name is caught by its content, not its folder name.
+SCANNED_PREFIXES = GENERIC_PREFIXES + ('profiles/example',)
+
 # Only example profiles (fictional onboarding brands) are publishable.
 # A real profile lives outside the repo tree.
 PUBLIC_PROFILE_PREFIX = 'profiles/example'
@@ -70,23 +74,26 @@ PR_CHECK_NOTE: str | None = None
 
 # Words too common to block on their own.
 #
-# False-positive mitigation: if a profile declares a city "Santiago" or
-# a wordmark that's a common word ("Norte", "Plaza", "Studio"), the derived
-# term would block legitimate engine commits — and worse, push people to
-# disable the gate. These are excluded from derivation; if you really need
-# to watch them for a specific brand, declare them by hand in brand-denylist.txt,
-# where a human can assume the cost with context.
+# False-positive mitigation: if a profile declares a wordmark that is a common
+# word ("North", "Plaza", "Studio"), the derived term would block legitimate
+# engine commits — and worse, push people to disable the gate. These are
+# excluded from derivation; if you really need to watch one for a specific
+# brand, declare it by hand in brand-denylist.txt, where a human can assume
+# the cost with context.
+#
+# The list is deliberately market-neutral: category and direction words in a
+# few languages, no place names. A place name that a real brand uses (its city,
+# its country) is exactly what the gate must catch, so it is never excluded.
 GENERIC_WORDS = {
-    # cities/regions frequent in documentation and examples
-    'santiago', 'chile', 'madrid', 'barcelona', 'lima', 'bogota', 'bogotá',
-    'mexico', 'méxico', 'buenos aires', 'london', 'berlin', 'paris',
-    'new york', 'ciudad', 'city', 'region', 'región',
+    # place-agnostic geography vocabulary
+    'city', 'ciudad', 'region', 'región', 'country', 'pais', 'país',
+    'north', 'south', 'east', 'west', 'norte', 'sur', 'este', 'oeste',
+    'center', 'centre', 'centro', 'central', 'local',
     # words a wordmark can be and the engine uses as vocabulary
     'brand', 'marca', 'studio', 'design', 'content', 'media', 'group',
-    'digital', 'agency', 'personal', 'norte', 'sur', 'este', 'oeste',
-    'plaza', 'centro', 'local', 'example', 'demo', 'test', 'default',
-    'profile', 'perfil', 'system', 'carousel', 'carrusel', 'week',
-    'semana', 'events', 'eventos', 'panoramas',
+    'digital', 'agency', 'personal', 'plaza', 'example', 'demo', 'test',
+    'default', 'profile', 'perfil', 'system', 'carousel', 'carrusel',
+    'week', 'weekend', 'semana', 'events', 'eventos',
 }
 
 # Third-party platforms. A profile whose `copy.site` points here isn't
@@ -101,11 +108,30 @@ THIRD_PARTY_HOSTS = {
     'substack.com', 'notion.so', 'behance.net', 'dribbble.com', 'bsky.app',
 }
 
-# TLDs that are stripped when deriving the base name from a domain.
-KNOWN_TLDS = (
-    '.com', '.cl', '.net', '.org', '.io', '.dev', '.app', '.co', '.ai',
-    '.es', '.mx', '.ar', '.pe', '.me', '.xyz', '.cl.com',
-)
+# Public-suffix knowledge, derived generically so no market is listed first:
+# any two-letter label is a country-code TLD, and these are the common generic
+# TLDs and the second-level labels used under country codes (`example.co.xx`).
+GENERIC_TLDS = frozenset({
+    'com', 'net', 'org', 'io', 'dev', 'app', 'co', 'ai', 'me', 'xyz', 'info',
+    'biz', 'tech', 'online', 'site', 'studio', 'agency', 'media', 'blog',
+})
+SECOND_LEVEL_LABELS = frozenset({'com', 'co', 'org', 'net', 'gov', 'edu', 'ac'})
+
+
+def _strip_public_suffix(domain: str) -> str:
+    """`sub.example.co.xx` -> `sub.example`; `example.com` -> `example`; unknown suffix -> unchanged."""
+    labels = domain.split('.')
+    if len(labels) < 2:
+        return domain
+    last = labels[-1]
+    if len(last) == 2 and last.isalpha():
+        labels.pop()
+        if len(labels) >= 2 and labels[-1] in SECOND_LEVEL_LABELS:
+            labels.pop()
+    elif last in GENERIC_TLDS:
+        labels.pop()
+    return '.'.join(labels)
+
 
 # An at sign glued to a word is an email or a package spec (`pkg@latest`), not a handle.
 # A dot before the at sign does not glue it (`end.@handle` is a handle), same as the storage side.
@@ -189,7 +215,7 @@ def _yaml_list(text: str, key: str) -> list[str]:
 
 
 def _domain_terms(domain: str) -> list[str]:
-    """`example.cl` → the full domain and its base name.
+    """`example.xx` → the full domain and its base name.
 
     Base name matters because in prose the brand appears without the TLD; the
     full domain matters because an API URL carries it whole.
@@ -206,16 +232,9 @@ def _domain_terms(domain: str) -> list[str]:
     ):
         return []
     terms = [domain]
-    # Base name: the label before the TLD, not the subdomain. For a two-level
-    # TLD (`.cl.com`, `.co.uk`) you need to go back one more label, or the
-    # "name" would be the public suffix itself.
-    labels = domain.split('.')
-    stripped = domain
-    for tld in sorted(KNOWN_TLDS, key=len, reverse=True):
-        if stripped.endswith(tld):
-            stripped = stripped[: -len(tld)]
-            break
-    base = stripped.split('.')[-1] if stripped else (labels[-2] if len(labels) > 1 else labels[0])
+    # Base name: the label before the public suffix, not the subdomain.
+    stripped = _strip_public_suffix(domain)
+    base = stripped.split('.')[-1] if stripped else domain.split('.')[0]
     if base:
         terms.append(base)
     return terms
@@ -226,7 +245,7 @@ def _identifying_hashtag(tag: str) -> bool:
 
     `#Agents` or `#Marketing` are the topic being discussed, and the engine
     uses them as regular words — watching them turns every mention into an alarm.
-    What does identify is a compound hashtag (`#PanoramasNorth`,
+    What does identify is a compound hashtag (`#ExampleWeekend`,
     `#Studio_X`): nobody writes it by accident. Heuristic: requires more than
     one component, detected by CamelCase, digit, or separator.
 
@@ -584,6 +603,194 @@ def denylist_with_origins(live: bool = False) -> dict[str, set[str]]:
             combined.setdefault(canonical, set()).update(origins)
     return combined
 
+# --- market signals: coordinates, locale, currency, timezone --------------------
+#
+# A brand name is not the only thing that gives a brand away. A map box, a
+# `xx-YY` locale tag, a currency code or a timezone in the generic layers each
+# say "this was built for that market" without naming anyone. They are derived
+# the same way as the terms: from the real profiles on disk, never from a list
+# written here (a list written here would itself name the market).
+
+# Margins in degrees (~11 km per 0.1). A point is a venue or a city centre, so
+# it gets a wider margin than a box, which already is an area.
+POINT_MARGIN = 0.25
+BOX_MARGIN = 0.1
+MARKET_FILE_SUFFIXES = {'.json', '.yaml', '.yml'}
+MAX_MARKET_FILE_BYTES = 5_000_000
+
+_NUM = r'-?\d{1,3}\.\d+'
+_LAT = r'["\']?lat(?:itude)?["\']?\s*[:=]\s*(' + _NUM + ')'
+_LNG = r'["\']?(?:lng|lon|long|longitude)["\']?\s*[:=]\s*(' + _NUM + ')'
+KEYED_PAIRS = (
+    re.compile(_LAT + r'[\s,;]*' + _LNG, re.IGNORECASE),                     # (lat, lng)
+    re.compile(_LNG + r'[\s,;]*' + _LAT, re.IGNORECASE),                     # (lng, lat)
+)
+# Three decimals or more: `1.5, 2.5` is a ratio or a version range, a venue is not.
+BARE_PAIR = re.compile(r'(?<![\d.])(-?\d{1,3}\.\d{3,})\s*[,;]\s*(-?\d{1,3}\.\d{3,})(?![\d.])')
+BBOX = re.compile(
+    r'\b(?:bbox|bounds)["\']?\s*[:=]\s*\[\s*(' + _NUM + r')\s*,\s*(' + _NUM + r')\s*,\s*('
+    + _NUM + r')\s*,\s*(' + _NUM + r')\s*\]', re.IGNORECASE)
+LOCALE_KEYED = re.compile(r'(?:locale|lang|language)["\']?\s*[:=]\s*["\']?([A-Za-z]{2}[-_][A-Za-z]{2,4})\b', re.IGNORECASE)
+LOCALE_TAG = re.compile(r'(?<![A-Za-z0-9])([a-z]{2}-[A-Z]{2})(?![A-Za-z0-9])')
+CURRENCY_KEYED = re.compile(r'(?:currency|moneda|currency_code)["\']?\s*[:=]\s*["\']?([A-Za-z]{3})\b', re.IGNORECASE)
+TIMEZONE_KEYED = re.compile(r'(?:timezone|time_zone|tz)["\']?\s*[:=]\s*["\']?([A-Za-z]+/[A-Za-z_/]+)', re.IGNORECASE)
+
+
+def _in_range(lat: float, lng: float) -> bool:
+    return -90 <= lat <= 90 and -180 <= lng <= 180
+
+
+def _text_pairs(text: str):
+    """Yield (offset, (a, b), keyed) for every coordinate-looking pair; keyed pairs come out as (lat, lng)."""
+    for index, pattern in enumerate(KEYED_PAIRS):
+        for m in pattern.finditer(text):
+            a, b = float(m.group(1)), float(m.group(2))
+            yield m.start(), (a, b) if index == 0 else (b, a), True
+    for m in BARE_PAIR.finditer(text):
+        yield m.start(), (float(m.group(1)), float(m.group(2))), False
+
+
+def _market_files():
+    """(path relative to its profile, text) of every json/yaml of every real profile."""
+    for profile in real_profile_dirs():
+        for path in sorted(profile.rglob('*')):
+            if path.suffix not in MARKET_FILE_SUFFIXES or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > MAX_MARKET_FILE_BYTES:
+                    continue
+                yield path.relative_to(profile).as_posix(), path.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                continue
+
+
+def _market_texts():
+    for _, text in _market_files():
+        yield text
+
+
+def _is_brand_settings(rel: str) -> bool:
+    """The brand's own settings, as opposed to data scraped or fetched for it (reels, carousels, inputs)."""
+    return rel in {'brand.json', 'config.yaml', 'config.local.yaml'} or rel.startswith('recipes/')
+
+
+def derive_geo_boxes() -> list[tuple[float, float, float, float]]:
+    """(lat_min, lat_max, lng_min, lng_max) areas of the real brands, read from their data on disk.
+
+    Sources: `bbox`/`bounds` lists (corner order unknown, so every valid reading is kept)
+    and keyed lat/lng pairs (venues, city centres) in any json/yaml of a real profile.
+    Areas come from ALL brand data, scraped venues included; a placeholder point
+    near 0,0 in brand data would create a watched area there.
+    """
+    boxes: set[tuple[float, float, float, float]] = set()
+    for text in _market_texts():
+        for m in BBOX.finditer(text):
+            a, b, c, d = (float(g) for g in m.groups())
+            for lat0, lng0, lat1, lng1 in ((b, a, d, c), (a, b, c, d)):  # (lng,lat,lng,lat) and (lat,lng,lat,lng)
+                if _in_range(lat0, lng0) and _in_range(lat1, lng1):
+                    boxes.add((round(min(lat0, lat1) - BOX_MARGIN, 3), round(max(lat0, lat1) + BOX_MARGIN, 3),
+                               round(min(lng0, lng1) - BOX_MARGIN, 3), round(max(lng0, lng1) + BOX_MARGIN, 3)))
+        for _, (lat, lng), keyed in _text_pairs(text):
+            if keyed and _in_range(lat, lng):
+                boxes.add((round(lat - POINT_MARGIN, 3), round(lat + POINT_MARGIN, 3),
+                           round(lng - POINT_MARGIN, 3), round(lng + POINT_MARGIN, 3)))
+    return sorted(boxes)
+
+
+def derive_market_tokens() -> dict[str, set[str]]:
+    """{'locale': {'xx-yy'}, 'currency': {'ABC'}, 'timezone': {'Area/Place'}} of the real brands."""
+    tokens: dict[str, set[str]] = {'locale': set(), 'currency': set(), 'timezone': set()}
+    for rel, text in _market_files():
+        # A bare `xx-YY` token is a locale only in the brand's own settings; in scraped data
+        # (`hl=en-US` in a fetched json) it is a common tag, not the brand's market.
+        for pattern in (LOCALE_KEYED, LOCALE_TAG) if _is_brand_settings(rel) else (LOCALE_KEYED,):
+            for value in pattern.findall(text):
+                tokens['locale'].add(value.replace('_', '-').lower())
+        tokens['currency'].update(v.upper() for v in CURRENCY_KEYED.findall(text))
+        tokens['timezone'].update(TIMEZONE_KEYED.findall(text))
+    return tokens
+
+
+class MarketSignals:
+    """What the real brands' data says about their market, ready to scan text with."""
+
+    def __init__(self, boxes=None, tokens=None):
+        self.boxes = derive_geo_boxes() if boxes is None else boxes
+        tokens = derive_market_tokens() if tokens is None else tokens
+        locales = '|'.join(re.escape(t).replace('\\-', '[-_]') for t in sorted(tokens['locale']))
+        self.locale = re.compile(rf'(?<![A-Za-z0-9])(?:{locales})(?![A-Za-z0-9])', re.IGNORECASE) if locales else None
+        currencies = '|'.join(re.escape(t) for t in sorted(tokens['currency']))
+        self.currency = re.compile(rf'(?<![A-Za-z0-9])(?:{currencies})(?![A-Za-z0-9])') if currencies else None
+        zones = '|'.join(re.escape(t) for t in sorted(tokens['timezone']))
+        self.timezone = re.compile(rf'(?<![A-Za-z0-9])(?:{zones})(?![A-Za-z0-9])', re.IGNORECASE) if zones else None
+
+    def empty(self) -> bool:
+        return not (self.boxes or self.locale or self.currency or self.timezone)
+
+    def _inside(self, lat: float, lng: float) -> bool:
+        return _in_range(lat, lng) and any(
+            a <= lat <= b and c <= lng <= d for a, b, c, d in self.boxes)
+
+    def scan(self, lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+        """[(line number, kind)] for numbered lines. Never returns the matched value."""
+        if self.empty() or not lines:
+            return []
+        # Non-contiguous lines (a push diff) are separated by NUL, which `\s` does not
+        # cross, so two unrelated added lines never pair up.
+        text, starts, previous = '', [], None
+        for number, body in lines:
+            if previous is not None:
+                text += '\n' if number == previous + 1 else '\n\x00\n'
+            starts.append((len(text), number))
+            text += body
+            previous = number
+
+        def line_at(offset: int) -> int:
+            number = starts[0][1]
+            for start, candidate in starts:
+                if start > offset:
+                    break
+                number = candidate
+            return number
+
+        found: set[tuple[int, str]] = set()
+        if self.boxes:
+            for offset, (a, b), keyed in _text_pairs(text):
+                if self._inside(a, b) or (not keyed and self._inside(b, a)):
+                    found.add((line_at(offset), COORDINATES_KIND))
+        for pattern, kind in ((self.locale, LOCALE_KIND),
+                              (self.currency, CURRENCY_KIND),
+                              (self.timezone, TIMEZONE_KIND)):
+            if pattern:
+                found.update((line_at(m.start()), kind) for m in pattern.finditer(text))
+        return sorted(found)
+
+
+COORDINATES_KIND = "coordinates inside a real brand's area"
+LOCALE_KIND = 'locale tag of a real brand'
+CURRENCY_KIND = 'currency code of a real brand'
+TIMEZONE_KIND = 'timezone of a real brand'
+# The CI Report step in .github/workflows/brand-gate.yml matches these verbatim.
+MARKET_KINDS = (COORDINATES_KIND, LOCALE_KIND, CURRENCY_KIND, TIMEZONE_KIND)
+
+
+def check_market_signals(staged_files: list[str]) -> list[str]:
+    """Coordinates, locale, currency and timezone of a real brand in the staged generic layers."""
+    signals = MarketSignals()
+    if signals.empty():
+        return []
+    findings = []
+    for path in staged_files:
+        if not path.startswith(SCANNED_PREFIXES):
+            continue
+        blob = staged_blob(path)
+        if blob is None:
+            continue
+        findings += [f'{path}:{number}: {kind}'
+                     for number, kind in signals.scan(list(enumerate(blob.splitlines(), 1)))]
+    return findings
+
+
 # `as VerifiedSlide` asserts the verification mark without passing through the guard.
 # TypeScript allows the cast in one step because VerifiedSlide is a subtype of
 # Slide, so the compiler CAN'T prevent it — and bad faith isn't required: it's
@@ -599,10 +806,10 @@ VERIFIED_CAST_DOCS = 'system/ig-carousel/render-batch.types.test.ts'
 # A negation in .gitignore is how real profiles snuck into the repo:
 # silently wins over any rule written in prose.
 #
-# `/?` because `!/profiles/<brand>/` is valid gitignore with the same effect, and
-# `(?![^/]*)` anchors the exception to the whole segment: `!profiles/exampleEVIL/`
-# isn't the example profile and shouldn't pass just by starting the same.
-GITIGNORE_NEGATION = re.compile(r'^\s*!\s*/?profiles/(?!example(?:-personal)?/)')
+# `/?` because `!/profiles/<brand>/` is valid gitignore with the same effect. Allowed: the
+# fictional folders `example` and `example-<words>` (lowercase, hyphen separated), anchored to the
+# whole segment: `!profiles/exampleEVIL/` is not an example profile just by starting the same.
+GITIGNORE_NEGATION = re.compile(r'^\s*!\s*/?profiles/(?!example(?:-[a-z0-9]+)*/)')
 
 
 def git(*args: str) -> str:
@@ -640,7 +847,7 @@ def check_brand_leaks(staged_files: list[str]) -> list[str]:
     )
     leaks = []
     for path in staged_files:
-        if not path.startswith(GENERIC_PREFIXES):
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         blob = staged_blob(path)
         if blob is None:
@@ -808,7 +1015,7 @@ def scan_tree() -> int:
     tracked = sorted(filter(None, git('ls-files', '-co', '--exclude-standard').splitlines()))
     leaks = []
     for path in tracked:
-        if not path.startswith(GENERIC_PREFIXES):
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         try:
             blob = (ROOT / path).read_text(encoding='utf-8', errors='replace')
@@ -823,8 +1030,22 @@ def scan_tree() -> int:
                     f'{describe_origin(hit.group(0), origins)}'
                 )
 
+    signals = MarketSignals()
+    coordinate_hits, market_hits = [], []
+    for path in tracked:
+        if not path.startswith(SCANNED_PREFIXES) or signals.empty():
+            continue
+        try:
+            blob = (ROOT / path).read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        for number, kind in signals.scan(list(enumerate(blob.splitlines(), 1))):
+            (coordinate_hits if kind == COORDINATES_KIND else market_hits).append(f'{path}:{number}: {kind}')
+
     tree_findings = [
-        ('brand literals in the generic layers (%s)' % ', '.join(GENERIC_PREFIXES), leaks),
+        ('brand literals in the generic layers (%s)' % ', '.join(SCANNED_PREFIXES), leaks),
+        ('real-brand coordinates in the generic layers', coordinate_hits),
+        ('real-brand locale/currency/timezone in the generic layers', market_hits),
         ('real profile files tracked', check_private_profiles(tracked, tracked=True)),
         ('.gitignore negations', [
             f'.gitignore:{number}: {line.strip()}'
@@ -936,6 +1157,9 @@ def scan_tree() -> int:
     return 1 if total else 0
 
 
+COMMIT_MARKER = '@@@COMMIT'
+
+
 def check_push(revisions: list[str]) -> int:
     """`--check-push <rev>...`: audit the commits a push would publish.
 
@@ -959,7 +1183,8 @@ def check_push(revisions: list[str]) -> int:
 
     origins = denylist_with_origins(live=True)
     terms = sorted(origins, key=str.lower)
-    if not terms:
+    signals = MarketSignals()
+    if not terms and signals.empty():
         # No profiles on disk and no manual denylist: nothing to search for.
         # Silent success, not a block — a fresh clone has nothing to leak.
         return 0
@@ -975,7 +1200,9 @@ def check_push(revisions: list[str]) -> int:
         # token turns everything after it into a pathspec, and `git log
         # <sha> -- nothing` exits 0 having read no commits: an audit that
         # passes because it looked at nothing.
-        diff = git('log', '-p', '--unified=0', '--format=', *revisions, '--')
+        # `tformat:` is required: a format string without `%` is otherwise read
+        # as the name of a built-in format, and git refuses the whole command.
+        diff = git('log', '-p', '--unified=0', f'--format=tformat:{COMMIT_MARKER}', *revisions, '--')
     except subprocess.CalledProcessError as exc:
         # A range that cannot be read is not a range that is clean. Fail
         # closed: the entire point of this check is the push it must not let
@@ -983,29 +1210,42 @@ def check_push(revisions: list[str]) -> int:
         print(f'commit-gate: could not audit the push ({exc})', file=sys.stderr)
         return 1
 
-    pattern = re.compile('|'.join(re.escape(t) for t in terms), re.IGNORECASE)
+    pattern = re.compile('|'.join(re.escape(t) for t in terms), re.IGNORECASE) if terms else None
     findings: list[str] = []
-    path = ''
+    added: dict[str, list[tuple[int, str]]] = {}
+    path, number, commit = '', 0, 0
     for line in diff.splitlines():
+        if line.startswith(COMMIT_MARKER):
+            commit += 1  # each commit is scanned apart: pairs never join across commits
+            path = ''
+            continue
         if line.startswith('+++ b/'):
             path = line[6:]
             continue
+        if line.startswith('@@'):
+            hunk = re.search(r'\+(\d+)', line)
+            number = int(hunk.group(1)) if hunk else 0
+            continue
         if not line.startswith('+') or line.startswith('+++'):
             continue
-        if not path.startswith(GENERIC_PREFIXES):
+        current, number = number, number + 1
+        if not path.startswith(SCANNED_PREFIXES):
             continue
         body = line[1:]
-        found = pattern.search(body)
+        added.setdefault((commit, path), []).append((current, body))
+        found = pattern.search(body) if pattern else None
         if found:
             findings.append(
                 f'{path}: {body.strip()[:100]}\n'
                 f'      \u21b3 term "{found.group(0)}" \u2014 '
                 f'{describe_origin(found.group(0), origins)}'
             )
+    for (_, path), lines in added.items():
+        findings += [f'{path}:{n}: {kind}' for n, kind in signals.scan(lines)]
 
     if findings:
         print(
-            'commit-gate: this push would publish brand literals in the '
+            'commit-gate: this push would publish brand literals or market signals in the '
             'generic layers.\n'
             'A push cannot be undone. Parameterize them as '
             '<marca>/<ciudad>/<slug>\n(see CLAUDE.md):',
@@ -1104,6 +1344,14 @@ def main() -> int:
         return fail(
             'brand literals in the generic layers — parameterize them as '
             '<marca>/<ciudad>/<slug> (see CLAUDE.md):\n  ' + '\n  '.join(leaks)
+        )
+
+    market = check_market_signals(staged_files)
+    if market:
+        return fail(
+            'market signals of a real brand (coordinates, locale, currency, timezone) in the '
+            'generic layers — take them from the profile at run time (see CLAUDE.md):\n  '
+            + '\n  '.join(market)
         )
 
     return 0

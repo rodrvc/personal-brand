@@ -2,7 +2,22 @@ import assert from "node:assert/strict";
 
 import { chromium } from "playwright";
 
-import { readTextLines } from "./text-boxes.js";
+import { matchRecognitionLanguages, readTextLines, resetSupportedForTests, supported as supportedOf } from "./text-boxes.js";
+
+// A failed or empty language lookup is not cached; the first good answer is.
+assert.deepEqual(supportedOf("ocr", () => { throw new Error("no binary"); }), [], "a failed lookup gives no languages");
+assert.deepEqual(supportedOf("ocr", () => "[]"), [], "an empty answer gives no languages");
+assert.deepEqual(supportedOf("ocr", () => '["es-ES","en-US"]'), ["es-ES", "en-US"], "a later good answer is used");
+assert.deepEqual(supportedOf("ocr", () => { throw new Error("not called"); }), ["es-ES", "en-US"], "and then cached");
+resetSupportedForTests(); // the real OCR read below must run the real `--supported` lookup
+
+const supported = ["en-US", "es-ES", "fr-FR", "pt-BR"];
+assert.deepEqual(matchRecognitionLanguages(["es-XX"], supported), ["es-ES", "en-US"], "a regional tag maps by language, English follows");
+assert.deepEqual(matchRecognitionLanguages(["pt_BR"], supported), ["pt-BR", "en-US"], "an exact tag is kept");
+assert.deepEqual(matchRecognitionLanguages(["en-GB"], supported), ["en-US"], "English is not repeated");
+assert.deepEqual(matchRecognitionLanguages(["xx"], supported), ["en-US"], "an unknown language leaves English");
+assert.deepEqual(matchRecognitionLanguages(["xx"], []), [], "nothing supported leaves detection alone");
+console.log("ok - matchRecognitionLanguages");
 
 if (process.platform !== "darwin") {
   console.log("skip - local OCR needs macOS");

@@ -4,6 +4,7 @@ import {
   BrandArchivedError,
   NotFoundError,
   AlreadyExistsError,
+  ThemeOverlapError,
   InvalidInputError,
   VersionConflictError,
   type Brand,
@@ -33,6 +34,8 @@ import {
   type BrandRuleRepository,
   type GuidanceRepository,
   type ToolRepository,
+  type ThemeRepository,
+  type ThemeEnvelope,
   type RecipeRepository,
   type RuleInput,
   type DocumentKind,
@@ -43,7 +46,7 @@ import {
   type WriteMeta,
 } from "../contracts/index.ts";
 import { blobKey } from "../contracts/keys.ts";
-import { DEFAULT_EXPORT_STALE_MS, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
+import { DEFAULT_EXPORT_STALE_MS, assertTheme, findOverlap, assertTool, assertToolName, assertCarousel, assertChatPage, assertContentItem, assertNotAutosave, assertRecipeRun, assertRunArtifact, assertArtifactKind, assertDate, assertJsonObject, resolvePublishedAt, stripStage, parseInstant, stripStatus, assertAsset, assertEnvelope, assertTts, isAssetId, assertGuidance, assertParams, assertSlug, normalizeRule, shouldAppendRevision, type DocumentBody } from "../revision-policy.ts";
 
 export interface MemoryRepositories {
   brands: BrandRepository;
@@ -52,6 +55,7 @@ export interface MemoryRepositories {
   rules: BrandRuleRepository;
   guidance: GuidanceRepository;
   tools: ToolRepository;
+  themes: ThemeRepository;
   recipes: RecipeRepository;
   assets: AssetRepository;
   tts: TtsCacheRepository;
@@ -235,7 +239,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
 
   /** Keyed rows (guidance by name, recipes by recipe) share the document version semantics. */
   interface KeyedRow { id: string; brandId: string; key: string; data: Record<string, unknown>; version: number; updatedAt: string }
-  const keyed = { brand_guidance: new Map<string, KeyedRow>(), brand_tools: new Map<string, KeyedRow>(), brand_recipes: new Map<string, KeyedRow>() };
+  const keyed = { brand_guidance: new Map<string, KeyedRow>(), brand_tools: new Map<string, KeyedRow>(), seasonal_themes: new Map<string, KeyedRow>(), brand_recipes: new Map<string, KeyedRow>() };
   const findKeyed = (table: keyof typeof keyed, brandId: string, key: string) => [...keyed[table].values()].find((r) => r.brandId === brandId && r.key === key);
 
   function putKeyed(table: keyof typeof keyed, what: string, brandId: string, key: string, data: Record<string, unknown>, revision: { body: unknown; bodyText: string | null }, meta: WriteMeta) {
@@ -247,7 +251,7 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     if (meta.expectedVersion !== (cur?.version ?? null)) throw new VersionConflictError(cur?.version ?? null);
     const row: KeyedRow = { id: cur?.id ?? randomUUID(), brandId, key, data: structuredClone(data), version: (cur?.version ?? 0) + 1, updatedAt: now().toISOString() };
     keyed[table].set(row.id, row);
-    record({ brandId, entityType: { brand_guidance: "brand_guidance", brand_tools: "brand_tool", brand_recipes: "brand_recipe" }[table] as RevisionEntity, entityId: row.id, version: row.version, ...structuredClone(revision) }, meta);
+    record({ brandId, entityType: { brand_guidance: "brand_guidance", brand_tools: "brand_tool", seasonal_themes: "seasonal_theme", brand_recipes: "brand_recipe" }[table] as RevisionEntity, entityId: row.id, version: row.version, ...structuredClone(revision) }, meta);
     return { id: row.id, version: row.version, updatedAt: row.updatedAt };
   }
 
@@ -280,6 +284,32 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     async put(brandId, name, input, meta) {
       assertTool(name, input);
       return putKeyed("brand_tools", "name", brandId, name, input, { body: { description: input.description }, bodyText: input.body }, meta);
+    },
+  };
+
+  const themeOf = (r: KeyedRow): ThemeEnvelope => ({ trust: "brand-data", id: r.id, name: r.key, startsOn: r.data.startsOn as string, endsOn: r.data.endsOn as string, tokenOverrides: structuredClone(r.data.tokenOverrides) as Record<string, unknown>, guidance: r.data.guidance as string, version: r.version, updatedAt: r.updatedAt });
+  const themesOf = (brandId: string) => [...keyed.seasonal_themes.values()].filter((r) => r.brandId === brandId).map(themeOf).sort((a, b) => cmp(a.startsOn, b.startsOn) || cmp(a.name, b.name));
+
+  const themes: ThemeRepository = {
+    async list(brandId) {
+      return themesOf(brandId).map(({ id, name, startsOn, endsOn, version, updatedAt }) => ({ id, name, startsOn, endsOn, version, updatedAt }));
+    },
+    async get(brandId, name) {
+      const r = findKeyed("seasonal_themes", brandId, name);
+      if (!r) throw new NotFoundError(`theme ${name}`);
+      return themeOf(r);
+    },
+    async put(brandId, name, input, meta) {
+      assertTheme(name, input);
+      if (!brands.has(brandId)) throw new NotFoundError(`brand ${brandId}`);
+      // The overlap is checked before the version on purpose (the Postgres repository does the same): a clashing put reports the clash, not a stale version.
+      const clash = findOverlap(themesOf(brandId).filter((t) => t.name !== name), input);
+      if (clash) throw new ThemeOverlapError(clash);
+      return putKeyed("seasonal_themes", "name", brandId, name, { ...input }, { body: { startsOn: input.startsOn, endsOn: input.endsOn, tokenOverrides: input.tokenOverrides }, bodyText: input.guidance }, meta);
+    },
+    async activeOn(brandId, date) {
+      assertDate(date, "date");
+      return themesOf(brandId).find((t) => t.startsOn <= date && date <= t.endsOn) ?? null;
     },
   };
 
@@ -686,5 +716,5 @@ export function createMemoryRepositories(now: () => Date = () => new Date(), dat
     },
   };
 
-  return { brands: brandRepo, documents, revisions, rules, guidance, tools, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
+  return { brands: brandRepo, documents, revisions, rules, guidance, tools, themes, recipes, assets, tts, carousels, exports, chat, content, runs, runArtifacts, importRuns, restoreDrills };
 }

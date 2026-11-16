@@ -71,10 +71,10 @@ git check-ignore -v profiles/example/style.md
 Esperado: sin output (no ignorado).
 
 ```bash
-git check-ignore -v profiles/rodrigo/style.md
+git check-ignore -v profiles/example-author/style.md
 ```
 
-Esperado: `.gitignore:N  profiles/rodrigo/style.md`
+Esperado: `.gitignore:N  profiles/example-author/style.md`
 
 - [ ] **Step 4: Commit**
 
@@ -143,9 +143,9 @@ git commit -m "chore: gitignore local profile section files"
 
 ## Áreas de expertise
 
-- [Área 1 — ej: AI aplicada a desarrollo de software]
-- [Área 2 — ej: sistemas de agentes y orquestación]
-- [Área 3 — ej: productividad técnica con herramientas modernas]
+- [Área 1]
+- [Área 2]
+- [Área 3]
 
 ## Temas que cubre este autor
 
@@ -157,21 +157,21 @@ git commit -m "chore: gitignore local profile section files"
 
 ## Temas que NO cubre
 
-- [Tema fuera de scope 1 — ej: política tecnológica]
-- [Tema fuera de scope 2 — ej: opiniones sobre empresas específicas]
+- [Tema fuera de scope 1]
+- [Tema fuera de scope 2]
 
 ## Tendencias relevantes a seguir
 
-- [Tendencia 1 — ej: agentic coding]
-- [Tendencia 2 — ej: modelos open source vs cerrados]
+- [Tendencia 1]
+- [Tendencia 2]
 
 ## Keywords y hashtags habituales
 
-`#AI` `#DevTools` `#[Área principal]` `[otros]`
+`#[tema 1]` `#[tema 2]` `[otros]`
 
 ## Nivel técnico del contenido
 
-[Ej: "Audiencia técnica pero no especialista en ML. Puede asumir conocimiento de programación. No asumir conocimiento de papers o arquitecturas específicas."]
+[…]
 ```
 
 - [ ] **Step 3: Crear `profiles/example/audience.md`**
@@ -181,30 +181,30 @@ git commit -m "chore: gitignore local profile section files"
 
 ## Segmento primario
 
-**Quién es:** [Ej: Developers senior o tech leads explorando IA práctica]
+**Quién es:** […]
 
-**Qué buscan:** [Ej: Cómo mejorar su flujo de trabajo sin cambiar todo su stack]
+**Qué buscan:** […]
 
 **Pain points:** 
-- [Pain 1 — ej: Herramientas AI que prometen mucho y fallan en producción]
+- [Pain 1]
 - [Pain 2]
 
-**Lenguaje:** [Ej: Técnico pero claro. No académico. No marketing.]
+**Lenguaje:** […]
 
 ## Segmento secundario
 
-**Quién es:** [Ej: Profesionales tech que quieren entender hacia dónde va la industria]
+**Quién es:** […]
 
-**Qué buscan:** [Ej: Orientación sin hype]
+**Qué buscan:** […]
 
 ## Qué comparte esta audiencia
 
-[Ej: "Comparten contenido que les hace quedar bien frente a su equipo — algo que puedan enviar al grupo diciendo 'mira esto'."]
+[…]
 
 ## Qué NO quiere esta audiencia
 
-- [Anti-patrón 1 — ej: posts de motivación sin sustancia]
-- [Anti-patrón 2 — ej: demos de herramientas sin contexto real]
+- [Anti-patrón 1]
+- [Anti-patrón 2]
 ```
 
 - [ ] **Step 4: Crear `profiles/example/identity.md`**
@@ -754,7 +754,7 @@ El agente hace UNA pregunta a la vez y espera respuesta antes de continuar. No a
 ### Fase 0 — Identificar perfil
 
 Preguntar:
-> "¿Cuál es el slug del perfil? (ej: rodrigo, maria, empresa-x). Este nombre identifica la carpeta del perfil."
+> "¿Cuál es el slug del perfil? (ej: example-author, empresa-x). Este nombre identifica la carpeta del perfil."
 
 Crear `profiles/<slug>/` si no existe, con la estructura mínima:
 ```
@@ -973,7 +973,7 @@ El usuario interactúa principalmente con el `director`. Ejemplos de prompts:
 - `"prepara 3 posts para borrador"` → modo ejecución
 - `"qué novedades tenemos para la marca?"` → modo advisory
 - `"cómo van los resultados de los últimos posts?"` → modo visibilidad
-- `"setup de perfil rodrigo"` → onboarding
+- `"setup de perfil example-author"` → onboarding
 
 ## Fuentes del perfil
 

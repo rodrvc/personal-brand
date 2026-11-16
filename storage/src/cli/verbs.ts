@@ -9,15 +9,16 @@ import { stringify as stringifyYaml } from "yaml";
 
 import { putBlob } from "../blob/put-blob.ts";
 import { brandPrefix, carouselExportPrefix } from "../contracts/keys.ts";
-import { AlreadyExistsError, BrandArchivedError, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
-import { contentRefusal, nameRefusal, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
+import { AlreadyExistsError, BrandArchivedError, ThemeOverlapError, MAX_ASSET_TAG_CHARS, MAX_ASSET_TAGS, InvalidInputError, ObjectNotFoundError, PurgeRefusedError, NotFoundError, VersionConflictError, type AssetKind, type ContentStage, type BlobStore, type DocumentKind, type RevisionReason, type RuleInput, type WriteMeta } from "../contracts/index.ts";
+import { contentRefusal, nameRefusal, portabilityWarning, scriptRefusal, SVG_REEXPORT_HINT, type Refusal } from "../import/allowlist.ts";
 import { KINDS as ASSET_KINDS, mimeOf } from "../import/assets.ts";
 import type { ImportRepos } from "../import/importer.ts";
 import { found } from "../import/shared.ts";
 import type { BrandBundle, Purger } from "../pg/purge.ts";
 import { brandTerms } from "./denylist.ts";
 import { downloadFonts, FontPolicyError, MAX_FAMILY_CHARS, type FontFile } from "./fonts.ts";
-import { toCheckRules } from "../revision-policy.ts";
+import { assertDate, toCheckRules } from "../revision-policy.ts";
+import { activeTheme, applyThemeOverrides, brandToday, missingThemeFonts } from "../themes.ts";
 
 export interface CliResult {
   lines: string[];
@@ -51,6 +52,8 @@ interface Ctx {
   readBytes(path: string, max: number): { bytes: Buffer; stat: Stats };
   /** The random part of the temporary sibling `asset get --out` writes first (a seam for tests). */
   suffix(): string;
+  /** Links the engine's `node_modules` into a workspace (a seam for tests; `junction` on Windows, which needs no privilege). */
+  link(target: string, path: string): void;
   /** The clock for the purge bundle name and timestamp (a seam for tests). */
   now(): Date;
   /** The network, for `fonts fetch` only (a seam for tests; the default is the global `fetch`). */
@@ -102,14 +105,15 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
   doc: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 4] },
   guidance: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   tool: { values: ["if-version", "file", "description", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  theme: { values: ["from", "to", "tokens", "guidance", "date", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   recipe: { values: ["if-version", "file", "owner-opt-in"], flags: ["json"], positionals: [3, 3] },
   rules: { values: ["file", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   carousel: { values: ["file", "title", "if-version", "status", "scheduled-for", "published-at", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   content: { values: ["file", "title", "channel", "format", "stage", "derived-from", "published-at", "meta", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
-  asset: { values: ["kind", "status", "origin", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
+  asset: { values: ["kind", "status", "origin", "tag", "tags", "family", "out", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
   fonts: { values: ["owner-opt-in"], flags: ["json"], positionals: [2, 2] },
   export: { values: ["version", "out"], flags: ["json"], positionals: [3, 3] },
-  workspace: { values: ["out"], flags: ["json"], positionals: [1, 1] },
+  workspace: { values: ["out", "date"], flags: ["json"], positionals: [1, 1] },
   check: { values: ["carousel"], flags: ["json"], positionals: [1, 1] },
   denylist: { values: [], flags: ["json", "write"], positionals: [0, 0] },
   run: { values: ["period-start", "period-end", "input", "storyboard", "recipe", "if-version", "owner-opt-in"], flags: ["json"], positionals: [2, 3] },
@@ -117,14 +121,14 @@ export const VERB_SPECS: Record<string, { values: string[]; flags: string[]; pos
 
 /** Every subcommand of the verbs that take one. A word outside the list is a usage error, whatever the brand. */
 const SUBCOMMANDS: Record<string, string[]> = {
-  doc: ["get", "put"], guidance: ["list", "get", "put"], tool: ["list", "get", "put"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
+  doc: ["get", "put"], guidance: ["list", "get", "put"], tool: ["list", "get", "put"], theme: ["list", "get", "put", "active"], recipe: ["get", "put"], run: ["list", "get", "create", "save"],
   rules: ["list", "add", "update", "disable"], carousel: ["list", "get", "put", "status"], content: ["list", "get", "put", "stage"], asset: ["list", "add", "get"], export: ["pull"], fonts: ["fetch"],
 };
 /** True for a verb with subcommands whose first positional is not one of them. */
 export const hasUnknownSubcommand = (verb: string, positionals: string[]): boolean => Object.hasOwn(SUBCOMMANDS, verb) && !SUBCOMMANDS[verb].includes(positionals[0]);
 
 /** Verbs and subcommands that only read ("*" = every form). Anything not listed here is treated as a write. */
-const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"], workspace: "*" };
+const READS: Record<string, string[] | "*"> = { list: "*", show: "*", check: "*", denylist: "*", run: ["list", "get"], doc: ["get"], guidance: ["get", "list"], tool: ["get", "list"], theme: ["get", "list", "active"], recipe: ["get"], rules: ["list"], carousel: ["list", "get"], content: ["list", "get"], asset: ["list", "get"], export: ["pull"], workspace: "*" };
 /**
  * Writes that are content (D13): free of the owner opt-in, but only on a brand that is cut over (`cutoverAt !== null`,
  * which `runCli` reads before running the verb). Before cutover they need the opt-in like identity writes. Every
@@ -153,6 +157,8 @@ export const VERB_USAGE = [
   "  brand doc get|put <marca> <tokens|config|identity|spec|template> [<nombre>] [--file <ruta>] [--if-version <n>]",
   "  brand guidance list|get|put <marca> [<nombre>] [--file <ruta> --description <texto>] [--if-version <n>]",
   "  brand tool list|get|put <marca> [<nombre>] [--file <ruta>] [--description <texto>] [--if-version <n>]   (scripts de la marca; escribirlos exige --owner-opt-in aun tras el corte; solo se ejecutan cuando el dueño lo pide)",
+  "  brand theme list <marca> | get <marca> <tema> | active <marca> [--date <AAAA-MM-DD>]   (temas por temporada; sin --date usa hoy)",
+  "  brand theme put <marca> <tema> --from <AAAA-MM-DD> --to <AAAA-MM-DD> [--tokens <archivo.json>] [--guidance <archivo.md>] [--if-version <n>]   (escribirlos exige --owner-opt-in; dos temas de una marca no pueden compartir un día)",
   "  brand recipe get|put <marca> <receta> [--file <ruta>] [--if-version <n>]",
   "  brand rules add <marca> --file <regla.json> | update <marca> <id> --file <cambios.json> --if-version <n> | disable <marca> <id> --if-version <n>",
   "  brand carousel list <marca> [--status <estado>] | get <marca> <carrusel> | put <marca> <carrusel> --file <ruta> [--title <texto>] [--if-version <n>]",
@@ -160,7 +166,7 @@ export const VERB_USAGE = [
   "  brand content list <marca> [--stage idea|draft|published|archived] [--channel <canal>] [--derived-from <pieza>] | get <marca> <pieza>",
   "  brand content put <marca> <pieza> --file <cuerpo.md> [--title <texto>] [--channel <canal>] [--format <formato>] [--stage idea|draft|archived] [--derived-from <pieza>] [--meta <json>] [--if-version <n>]   (sin --if-version crea y exige --title; published solo con content stage)",
   "  brand content stage <marca> <pieza> --stage <etapa> --if-version <n> [--published-at <fecha ISO>]   (published solo desde draft y exige --published-at)",
-  "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
+  "  brand asset list <marca> [--kind <tipo>] [--status <estado>] [--origin <origen>] [--tag <etiqueta> (exacta; --tags es un alias)] | add <marca> <archivo> [--kind <tipo>] [--tags a,b] [--family <texto>] | get <marca> <id> [--out <ruta>]",
   "  brand fonts fetch <marca>   (descarga las fuentes de googleFontsHref de los tokens y las registra como candidatas; reemplaza a system/assets/fetch-fonts.ts)",
   "  brand run list <marca> [--recipe <receta>] | get <marca> <id> | create <marca> <receta> --period-start <AAAA-MM-DD> --period-end <AAAA-MM-DD> --input <ruta> [--storyboard <ruta>]",
   "  brand run save <marca> <id> --if-version <n> [--input <ruta>] [--storyboard <ruta>]   (el id de la corrida es el que recibe el render con --run)",
@@ -285,15 +291,17 @@ async function show(ctx: Ctx, args: Parsed, slug: string): Promise<CliResult> {
   }
   const recipes = await repos.recipes.list(brand.id);
   const tools = await repos.tools.list(brand.id);
+  const themes = await repos.themes.list(brand.id);
   const documents = [];
   for (const kind of DOC_KINDS) for (const d of await repos.documents.list(brand.id, kind)) documents.push({ kind, ...d });
   const rules = await repos.rules.list(brand.id, { includeDisabled: true });
-  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, tools, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
+  const value = { trust: "brand-data", slug, displayName: brand.value.displayName, status: brand.value.status, version: brand.version, cutoverAt: brand.value.cutoverAt, documents, guidance, tools, themes, recipes, rules: rules.map((r) => ({ id: r.id, kind: r.value.kind, severity: r.value.severity, enabled: r.value.enabled })) };
   return out(args, value, trusted([
     `Marca "${slug}" (${brand.value.displayName}), ${brand.value.status}, versión ${brand.version}${brand.value.cutoverAt ? `, cortada a storage el ${brand.value.cutoverAt}` : ""}`,
     ...documents.map((d) => `  documento ${d.kind}${d.name ? `/${d.name}` : ""} v${d.version}`),
     ...guidance.map((g) => `  guidance ${g.name} v${g.version}: ${g.description}`),
     ...tools.map((t) => `  script ${t.name} v${t.version}`),
+    ...themes.map((t) => `  tema ${t.name} v${t.version}: ${t.startsOn} a ${t.endsOn}`),
     ...recipes.map((r) => `  receta ${r.recipe} v${r.version}`),
     ...rules.map((r) => `  regla ${r.value.kind} (${r.value.severity})${r.value.enabled ? "" : " desactivada"}`),
   ]));
@@ -438,7 +446,10 @@ async function guidance(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Pr
   const file = args.values.get("file");
   const description = args.values.get("description");
   if (!file || description === undefined || expected === undefined) return usage();
-  const put = await ctx.repos.guidance.put(brand.id, name, { description, body: ctx.read(file) }, meta(ctx, expected));
+  if (name.startsWith("tema-")) return { lines: ['El nombre "tema-…" está reservado para el criterio de los temas de temporada: elige otro nombre.'], exitCode: EXIT.USAGE };
+  const body = ctx.read(file);
+  if (contentRefusal("guidance.md", Buffer.from(body))) return refused("El texto de la guidance parece contener un secreto (credencial, clave o asignación literal): no se guardó.");
+  const put = await ctx.repos.guidance.put(brand.id, name, { description, body }, meta(ctx, expected));
   return wrote(args, put, [`Guidance ${name} guardada (versión ${put.version}).`]);
 }
 
@@ -463,7 +474,60 @@ async function tool(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promis
   // Without --description a create stores "" and a save keeps the stored one: a new body alone never erases it.
   const description = args.values.get("description") ?? (expected === null ? "" : (await ctx.repos.tools.get(brand.id, name)).description);
   const put = await ctx.repos.tools.put(brand.id, name, { description, body }, meta(ctx, expected));
-  return wrote(args, put, [`Script ${name} guardado (versión ${put.version}).`]);
+  const warning = portabilityWarning(name, body);
+  return wrote(args, put, [`Herramienta ${name} guardada (versión ${put.version}).`, ...(warning ? [`Aviso: ${warning}`] : [])]);
+}
+
+/** Seasonal themes: dated token overrides plus guidance text. Read like guidance (brand data), written only with the owner's opt-in. */
+async function theme(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
+  const brand = await ctx.repos.brands.getBySlug(slug);
+  const range = (t: { startsOn: string; endsOn: string }) => `${t.startsOn} a ${t.endsOn}`;
+  if (sub === "list" && !name) {
+    const list = await ctx.repos.themes.list(brand.id);
+    return out(args, { trust: "brand-data", items: list }, trusted(list.length ? list.map((t) => `${t.name} v${t.version}: ${range(t)}`) : ["Sin temas."]));
+  }
+  if (sub === "active" && !name) {
+    const given = args.values.get("date");
+    const today = given === undefined ? await brandToday(ctx, brand.id) : null;
+    const date = given ?? today!.day;
+    try { assertDate(date, "date"); } catch { return { lines: [`Fecha inválida "${date}": usa AAAA-MM-DD.`], exitCode: EXIT.USAGE }; }
+    const t = await ctx.repos.themes.activeOn(brand.id, date);
+    return out(args, { trust: "brand-data", date, theme: t }, trusted([t ? `Tema activo el ${date}: ${t.name} (${range(t)}).` : `Sin tema activo para ${date}.`, ...(today?.warning ? [today.warning] : [])]));
+  }
+  if (!name) return usage();
+  if (sub === "get") {
+    const t = await ctx.repos.themes.get(brand.id, name);
+    return out(args, t, trusted([`${t.name} v${t.version}: ${range(t)}`, "tokens:", JSON.stringify(t.tokenOverrides, null, 2), "guidance:", t.guidance]));
+  }
+  if (sub !== "put") return usage();
+  const expected = ifVersion(args);
+  if (expected === undefined) return usage();
+  // A create names both dates; a save keeps whatever the command leaves out, so a new text alone never erases the dates.
+  const cur = expected === null ? null : await ctx.repos.themes.get(brand.id, name);
+  const startsOn = args.values.get("from") ?? cur?.startsOn;
+  const endsOn = args.values.get("to") ?? cur?.endsOn;
+  if (!startsOn || !endsOn) return { lines: ["Falta la vigencia del tema: indica --from <AAAA-MM-DD> y --to <AAAA-MM-DD>."], exitCode: EXIT.USAGE };
+  for (const [flag, v] of [["--from", startsOn], ["--to", endsOn]]) {
+    try { assertDate(v, flag); } catch { return { lines: [`Fecha inválida "${v}" en ${flag}: usa AAAA-MM-DD.`], exitCode: EXIT.USAGE }; }
+  }
+  if (endsOn < startsOn) return { lines: [`La fecha final (${endsOn}) es anterior a la inicial (${startsOn}).`], exitCode: EXIT.USAGE };
+  const tokensFile = args.values.get("tokens");
+  const guidanceFile = args.values.get("guidance");
+  const tokensText = tokensFile === undefined ? null : ctx.read(tokensFile);
+  const guidanceText = guidanceFile === undefined ? null : ctx.read(guidanceFile);
+  // The same secret scan as imported text: a hit is never stored.
+  for (const [file, text] of [["tokens.json", tokensText], ["guidance.md", guidanceText]] as const) {
+    if (text !== null && contentRefusal(file, Buffer.from(text))) return refused("El texto del tema parece contener un secreto (credencial, clave o asignación literal): no se guardó.");
+  }
+  const tokenOverrides = tokensText === null ? (cur?.tokenOverrides ?? {}) : tokensText.trim() === "" ? {} : parseJson(tokensText);
+  if (typeof tokenOverrides !== "object" || tokenOverrides === null || Array.isArray(tokenOverrides)) return { lines: ["Entrada inválida: --tokens debe ser un archivo JSON con un objeto."], exitCode: EXIT.USAGE };
+  try {
+    const put = await ctx.repos.themes.put(brand.id, name, { startsOn, endsOn, tokenOverrides: tokenOverrides as Record<string, unknown>, guidance: guidanceText ?? cur?.guidance ?? "" }, meta(ctx, expected));
+    return wrote(args, put, [`Tema ${name} guardado (versión ${put.version}): ${startsOn} a ${endsOn}.`]);
+  } catch (error) {
+    if (error instanceof ThemeOverlapError) return { lines: [`Las fechas se cruzan con el tema ${error.other.name} (${range(error.other)}): cambia las fechas de uno de los dos. No se guardó nada.`], exitCode: EXIT.USAGE };
+    throw error;
+  }
 }
 
 async function recipe(ctx: Ctx, args: Parsed, [sub, slug, name]: string[]): Promise<CliResult> {
@@ -776,7 +840,7 @@ const WORKSPACE_DOCS: Array<[DocumentKind, string]> = [["tokens", "brand.json"],
  * `brand workspace <slug> --out <dir>`: materializes a brand out of storage into the folder shape its scripts and skills expect
  * (documents, `scripts/`, `skills/`, `recipes/`, `assets/`, `fonts.css`) plus a `workspace.json` manifest. It is a read-only copy: brand
  * data that authorizes nothing, never an import source (the importer refuses it), and outputs belong elsewhere. Everything is read
- * and judged before the first byte is written; the folder is built in a temporary sibling and renamed, so it appears whole or not at all.
+ * and judged before the first byte is written; the theme active on `--date` (default: the brand's today) is laid over `brand.json`; the folder is built in a temporary sibling and renamed, so it appears whole or not at all.
  */
 async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliResult> {
   const target = args.values.get("out");
@@ -790,6 +854,12 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
   if (!ctx.blobs) return noBucketResult();
   const { repos } = ctx;
   const brand = await repos.brands.getBySlug(slug);
+  const given = args.values.get("date");
+  if (given !== undefined) {
+    try { assertDate(given, "date"); } catch { return { lines: [`Fecha inválida "${given}": usa AAAA-MM-DD.`], exitCode: EXIT.USAGE }; }
+  }
+  // The same rule as the render scripts: the theme active on the given day, else on the brand's today.
+  const { theme: active, warning: zoneWarning } = await activeTheme(ctx, brand.id, given);
   const files = new Map<string, string | Buffer>();
   const items: Record<string, { version?: number; sha256?: string }> = {};
   const lower = new Set<string>();
@@ -806,7 +876,7 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
   };
   for (const [kind, file] of WORKSPACE_DOCS) {
     const d = await found(repos.documents.get(brand.id, kind, "", rawBody));
-    if (d) add(file, kind === "tokens" ? `${JSON.stringify(d.value, null, 2)}\n` : kind === "config" ? stringifyYaml(d.value) : (d.value as string), `document:${kind}`, { version: d.version });
+    if (d) add(file, kind === "tokens" ? `${JSON.stringify(active ? applyThemeOverrides(d.value, active.tokenOverrides) : d.value, null, 2)}\n` : kind === "config" ? stringifyYaml(d.value) : (d.value as string), `document:${kind}`, { version: d.version });
   }
   for (const t of await repos.documents.list(brand.id, "template")) {
     const d = await repos.documents.get(brand.id, "template", t.name, rawBody);
@@ -818,6 +888,7 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
   for (const g of guidance) add(`skills/${g.name}/SKILL.md`, `---\nname: ${g.name}\ndescription: ${JSON.stringify(g.description)}\n---\n${(await repos.guidance.get(brand.id, g.name)).body}`, `guidance:${g.name}`, { version: g.version });
   const recipes = await repos.recipes.list(brand.id);
   for (const r of recipes) add(`recipes/${r.recipe}.yaml`, stringifyYaml((await repos.recipes.get(brand.id, r.recipe, rawBody)).value), `recipe:${r.recipe}`, { version: r.version });
+  if (active?.guidance) add(`skills/tema-${active.name}/SKILL.md`, `---\nname: tema-${active.name}\ndescription: ${JSON.stringify(`Guía del tema de temporada ${active.name} (del ${active.startsOn} al ${active.endsOn})`)}\n---\n${active.guidance}`, `theme:${active.name}`, { version: active.version });
   const assets = (await repos.assets.list(brand.id)).filter((a) => a.value.status !== "hidden");
   const faces: string[] = [];
   for (const { value: a } of assets) {
@@ -835,16 +906,30 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
     try { return execFileSync("git", ["-C", ctx.repoRoot, ...a], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
   };
   const [head, dirty] = [git("rev-parse", "HEAD"), git("--no-optional-locks", "status", "--porcelain")];
-  const sums = Object.fromEntries([...files].sort(([x], [y]) => (x < y ? -1 : 1)).map(([rel, body]) => [rel, createHash("sha256").update(body).digest("hex")]));
-  const manifest = { schemaVersion: 1, trust: "brand-data", slug, brandId: brand.id, brandVersion: brand.version, cutoverAt: brand.value.cutoverAt, generatedAt: ctx.now().toISOString(), engineRoot: ctx.repoRoot, ...(head && dirty !== null ? { engineCommit: head, engineDirty: dirty !== "" } : {}), items, files: sums };
-  files.set("workspace.json", `${JSON.stringify(manifest, null, 2)}\n`);
-
   const tmp = `${dir}.${ctx.suffix()}.tmp`;
   const created = mkdirSync(dirname(dir), { recursive: true });
   let madeTmp = false;
+  let manifest: Record<string, unknown>;
+  let engineModules: string | null = null;
+  let linkFailed = false;
   try {
     mkdirSync(tmp);
     madeTmp = true;
+    // The engine's libraries, linked (not copied) as `<out>/node_modules`, so a script in `scripts/` imports `playwright` by name from any machine.
+    // The link is not a data file: it is in no `files` checksum, only named in the manifest. No libraries, or a link the system refuses
+    // (Windows without Developer Mode, a read-only filesystem...), is a warning, never a failure: the workspace is built without it.
+    const modulesDir = join(ctx.repoRoot, "node_modules");
+    if (statSync(modulesDir, { throwIfNoEntry: false })?.isDirectory()) {
+      try {
+        ctx.link(modulesDir, join(tmp, "node_modules"));
+        engineModules = modulesDir;
+      } catch {
+        linkFailed = true;
+      }
+    }
+    const sums = Object.fromEntries([...files].sort(([x], [y]) => (x < y ? -1 : 1)).map(([rel, body]) => [rel, createHash("sha256").update(body).digest("hex")]));
+    manifest = { schemaVersion: 1, trust: "brand-data", slug, brandId: brand.id, brandVersion: brand.version, cutoverAt: brand.value.cutoverAt, generatedAt: ctx.now().toISOString(), theme: active ? { name: active.name, version: active.version, startsOn: active.startsOn, endsOn: active.endsOn } : null, engineRoot: ctx.repoRoot, engineModules, ...(head && dirty !== null ? { engineCommit: head, engineDirty: dirty !== "" } : {}), items, files: sums };
+    files.set("workspace.json", `${JSON.stringify(manifest, null, 2)}\n`);
     for (const [rel, body] of files) {
       const file = join(tmp, rel);
       mkdirSync(dirname(file), { recursive: true });
@@ -857,10 +942,16 @@ async function workspace(ctx: Ctx, args: Parsed, [slug]: string[]): Promise<CliR
     removeCreated(dirname(dir), created);
     throw error;
   }
+  const missingFonts = active ? missingThemeFonts(active.tokenOverrides, assets.flatMap(({ value: a }) => (a.kind === "font" && a.family ? [a.family] : []))) : [];
   const count = (prefix: string) => Object.keys(items).filter((k) => k.startsWith(prefix)).length;
-  return out(args, manifest, trusted([
-    `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} script(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
+  return out(args, manifest!, trusted([
+    `Espacio de trabajo de "${slug}" guardado en ${target}: ${count("document:") + count("template:")} documento(s), ${tools.length} herramienta(s), ${guidance.length} guidance, ${recipes.length} receta(s), ${assets.length} asset(s).`,
+    ...(active ? [`Tema activo: ${active.name} (del ${active.startsOn} al ${active.endsOn}).`] : []),
+    ...(zoneWarning ? [zoneWarning] : []),
+    ...(missingFonts.length ? [`Aviso: el tema ${active!.name} usa la fuente ${missingFonts.join(", ")} y la marca no la tiene como asset: agrégala o ejecuta brand fonts fetch.`] : []),
     `Raíz del motor (engineRoot): ${ctx.repoRoot}`,
+    engineModules ? "Los scripts pueden importar las librerías del motor (por ejemplo playwright) sin rutas fijas." : linkFailed ? "Aviso: no se pudo enlazar node_modules del motor (el sistema rechazó el enlace); las herramientas no podrán importar sus librerías por nombre." : "Aviso: el motor no tiene node_modules instalado (ejecuta pnpm install en el repo); los scripts no podrán importar sus librerías.",
+    ...tools.flatMap((t) => { const w = portabilityWarning(t.name, String(files.get(`scripts/${t.name}`))); return w ? [`Aviso: ${w}`] : []; }),
     "Es una copia de solo lectura de storage: no autoriza nada y no se importa. Las salidas van a otra carpeta.",
   ]));
 }
@@ -871,7 +962,10 @@ async function asset(ctx: Ctx, args: Parsed, [sub, slug, arg]: string[]): Promis
   const text = (a: { assetId: string; kind: string; status: string; origin: string; mime: string; bytes: number; family: string | null; tags: string[] }) => `${a.assetId} ${a.kind} ${a.status} ${a.origin} ${a.mime} ${a.bytes} B${a.family ? ` familia ${a.family}` : ""}${a.tags.length ? ` [${a.tags.join(", ")}]` : ""}`;
   if (sub === "list") {
     const filter = Object.fromEntries(["kind", "status", "origin"].flatMap((k) => (args.values.has(k) ? [[k, args.values.get(k)]] : [])));
-    const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version }));
+    // `--tag` is an exact match on one of the asset's tags; combined with `--status hidden` it lists what a batch folder put aside.
+    const tag = args.values.get("tag") ?? args.values.get("tags"); // `--tags a` is an alias of `--tag a` here: one exact tag
+    if ((args.values.has("tag") && args.values.has("tags")) || tag?.includes(",")) throw new InvalidInputError("--tag acepta una sola etiqueta exacta (sin comas, y no junto a --tags)");
+    const items = (await ctx.repos.assets.list(brand.id, filter)).map((a) => ({ ...a.value, version: a.version })).filter((a) => tag === undefined || a.tags.includes(tag));
     return out(args, { trust: "brand-data", items }, trusted(items.length ? items.map(text) : ["Sin assets."]));
   }
   const noBucket = noBucketResult;
@@ -930,7 +1024,7 @@ function judgeBytes(name: string, bytes: Buffer, o: { kind?: string; tags?: stri
   if (byContent) return { refused: byContent.code === "svg-allowlist" ? `${byContent.why}; ${SVG_REEXPORT_HINT}` : byContent.why };
   const kind = o.kind ?? (/^(woff2?|ttf|otf)$/.test(ext) ? "font" : "unclassified");
   const tags = o.tags?.split(",").map((t) => t.trim()).filter(Boolean);
-  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > 20 || tags.some((t) => t.length > 50))) || (o.family && o.family.length > MAX_FAMILY_CHARS)) throw new InvalidInputError(`invalid --kind, --tags (at most 20 of 50 characters) or --family (at most ${MAX_FAMILY_CHARS} characters)`);
+  if (!ASSET_KINDS.includes(kind as AssetKind) || (tags && (tags.length > MAX_ASSET_TAGS || tags.some((t) => t.length > MAX_ASSET_TAG_CHARS))) || (o.family && o.family.length > MAX_FAMILY_CHARS)) throw new InvalidInputError(`invalid --kind, --tags (at most ${MAX_ASSET_TAGS} of ${MAX_ASSET_TAG_CHARS} characters) or --family (at most ${MAX_FAMILY_CHARS} characters)`);
   return { sha256: createHash("sha256").update(bytes).digest("hex"), mime: mimeOf(bytes, name), kind: kind as AssetKind, ...(tags?.length ? { tags } : {}), ...(o.family ? { family: o.family } : {}) };
 }
 
@@ -959,11 +1053,14 @@ async function fonts(ctx: Ctx, args: Parsed, [sub, slug]: string[]): Promise<Cli
   const brand = await ctx.repos.brands.getBySlug(slug);
   if (brand.value.status === "archived") throw new BrandArchivedError(slug);
   const tokens = (await ctx.repos.documents.get(brand.id, "tokens", "", rawBody)).value as { googleFontsHref?: unknown };
-  if (typeof tokens.googleFontsHref !== "string") return { lines: [`Los tokens de "${slug}" no declaran googleFontsHref: no hay fuentes que descargar.`], exitCode: EXIT.OK };
-  let files: FontFile[];
+  // The brand's own stylesheet, then each seasonal theme's (a theme may bring its own fonts); distinct, in that order.
+  const themeTokens = await Promise.all((await ctx.repos.themes.list(brand.id)).map(async (t) => (await ctx.repos.themes.get(brand.id, t.name)).tokenOverrides as { googleFontsHref?: unknown }));
+  const hrefs = [...new Set([tokens, ...themeTokens].flatMap((t) => (typeof t.googleFontsHref === "string" ? [t.googleFontsHref] : [])))];
+  if (hrefs.length === 0) return { lines: [`Los tokens de "${slug}" ni sus temas declaran googleFontsHref: no hay fuentes que descargar.`], exitCode: EXIT.OK };
+  let files: FontFile[] = [];
   try {
     // Everything is downloaded and judged before the first upload: a refused URL leaves nothing behind.
-    files = await downloadFonts(ctx.fetch, tokens.googleFontsHref);
+    for (const href of hrefs) files.push(...(await downloadFonts(ctx.fetch, href)));
   } catch (error) {
     if (error instanceof FontPolicyError) return refused(`Descarga de fuentes rechazada: ${error.message}. No se subió nada.`);
     throw error;
@@ -1021,6 +1118,7 @@ async function dispatch(ctx: Ctx, verb: string, args: Parsed): Promise<CliResult
     case "doc": return doc(ctx, args, p);
     case "guidance": return guidance(ctx, args, p);
     case "tool": return tool(ctx, args, p);
+    case "theme": return theme(ctx, args, p);
     case "recipe": return recipe(ctx, args, p);
     case "rules": return rules(ctx, args, p);
     case "carousel": return carousel(ctx, args, p);

@@ -1,7 +1,7 @@
 import { RuleParamsError, validateRule, validateRuleParams, type Rule } from "@personal-brand/core/checks";
 
 import { InvalidInputError } from "./contracts/errors.ts";
-import type { AssetInput, RunArtifactInput, CarouselStatus, ContentItemInput, ContentStage, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
+import type { ThemeInput, AssetInput, RunArtifactInput, CarouselStatus, ContentItemInput, ContentStage, BrandRule, RuleInput, Versioned, WriteMeta } from "./contracts/repositories.ts";
 
 /** An autosave within this window by the same author folds into the previous revision. */
 export const AUTOSAVE_WINDOW_MS = 10 * 60 * 1000;
@@ -76,6 +76,27 @@ export function assertTool(name: string, input: { description: string; body: str
   if (input.body.includes("\0")) throw new InvalidInputError("tool body must be text (it holds a NUL byte)");
   if (Buffer.byteLength(input.body) > MAX_TOOL_BYTES) throw new InvalidInputError(`tool body exceeds ${MAX_TOOL_BYTES} bytes`);
 }
+
+export const MAX_THEME_TOKENS_BYTES = 64 * 1024;
+
+/**
+ * Mirrors the `seasonal_themes` CHECKs. The overrides are a plain JSON object with a size cap: no schema validates a partial
+ * token document (`brand.json` is free-form per brand), so keys are not checked here; the engine overlay (next slice) ignores unknown ones.
+ */
+export function assertTheme(name: string, input: ThemeInput): void {
+  assertSlug(name, "theme name");
+  assertDate(input.startsOn, "startsOn");
+  assertDate(input.endsOn, "endsOn");
+  if (input.endsOn < input.startsOn) throw new InvalidInputError("endsOn must not be before startsOn");
+  assertJsonObject(input.tokenOverrides, "tokenOverrides");
+  if (Buffer.byteLength(JSON.stringify(input.tokenOverrides)) > MAX_THEME_TOKENS_BYTES) throw new InvalidInputError(`tokenOverrides exceeds ${MAX_THEME_TOKENS_BYTES} bytes`);
+  if (typeof input.guidance !== "string") throw new InvalidInputError("guidance must be a string");
+  if (Buffer.byteLength(input.guidance) > MAX_GUIDANCE_BYTES) throw new InvalidInputError(`theme guidance exceeds ${MAX_GUIDANCE_BYTES} bytes`);
+}
+
+/** The first of `others` (ordered by start) that shares a day with `input`, or null. Inclusive ranges: touching ends overlap. */
+export const findOverlap = <T extends { startsOn: string; endsOn: string }>(others: T[], input: { startsOn: string; endsOn: string }): T | null =>
+  others.find((o) => o.startsOn <= input.endsOn && o.endsOn >= input.startsOn) ?? null;
 
 const ASSET_KINDS = ["background", "character", "photo", "logo", "decoration", "font", "unclassified"];
 const ASSET_ORIGINS = ["manual", "ai", "reference"];

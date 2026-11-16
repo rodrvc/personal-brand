@@ -303,5 +303,32 @@ class HandleLookbehindTest(GateCase):
         self.assertIn('after_dot', gate.derive_terms())
 
 
+
+class ExampleFoldersTest(GateCase):
+    """Example folders are tracked, so the .gitignore rule admits them and the content scan covers them."""
+
+    def test_gitignore_negation_allows_only_example_folders(self):
+        for ok in ('!profiles/example/', '!profiles/example-personal/', '!profiles/example-posters/', '!/profiles/example-posters/carousels/x/'):
+            self.assertIsNone(gate.GITIGNORE_NEGATION.match(ok), ok)
+        for bad in ('!profiles/exampleEVIL/', '!profiles/acme/', '!/profiles/acme/', '!profiles/example_x/', '!profiles/Example-x/'):
+            self.assertIsNotNone(gate.GITIGNORE_NEGATION.match(bad), bad)
+
+    def test_example_folders_are_content_scanned(self):
+        self.assertTrue('profiles/example-posters/profile.md'.startswith(gate.SCANNED_PREFIXES))
+        self.assertTrue('system/x.ts'.startswith(gate.SCANNED_PREFIXES))
+        self.assertFalse('profiles/acme/profile.md'.startswith(gate.SCANNED_PREFIXES), 'a real folder is caught by name, not scanned here')
+
+    def test_a_brand_literal_inside_an_example_folder_is_a_leak(self):
+        gate.BRAND_DENYLIST_GENERATED.write_text('fictionalco\n', encoding='utf-8')
+        files = ['profiles/example-shop/profile.md', 'profiles/example-shop/ok.md']
+        blobs = {files[0]: 'Welcome to FictionalCo\n', files[1]: 'nothing here\n'}
+        saved = gate.staged_blob
+        self.addCleanup(lambda: setattr(gate, 'staged_blob', saved))
+        gate.staged_blob = lambda path: blobs.get(path)
+        leaks = gate.check_brand_leaks(files)
+        self.assertEqual(len(leaks), 1)
+        self.assertIn('profiles/example-shop/profile.md:1', leaks[0])
+
+
 if __name__ == '__main__':
     unittest.main()

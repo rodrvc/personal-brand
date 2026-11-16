@@ -130,7 +130,7 @@ interface ExportRepository     { reserveNextVersion(carouselId, carouselVersion)
 interface ChatRepository       { append(carouselId, message): Promise<number>; list(carouselId) }
 interface RecipeRunRepository  { create(...); get(id); setStoryboard(...); addArtifact(runId, RunArtifact); latestArtifacts(runId) }
 interface RevisionRepository   { list(entityType, entityId); get(entityType, entityId, version) }
-// later slice: ThemeRepository (seasonal_themes)
+ThemeRepository { list(brandId); get(brandId, name); put(brandId, name, input, meta); activeOn(brandId, date) }   // C2a: no removal, no overlapping ranges
 
 interface Storage { blobs; blobCache; brands; documents; rules; guidance; recipes; assets; tts; carousels; exports; chat; runs; revisions; close() }
 openStorage(env): Promise<Storage>   /* S3 + Postgres */      openMemoryStorage(): Storage   /* fakes, for tests */
@@ -191,7 +191,7 @@ everywhere, `version int not null default 1`, enum-like columns as `text` +
 | `run_artifacts` | `seq` (identity), `id`, `run_id`, `kind` (`clip`/`audio`/`timeline`), `card_index`, `card_id`, `sha256`, `inputs_hash`, `created_at` | insert-only; current = highest `seq` per (`run_id`,`kind`,`card_index`); a timeline has no card; re-rendering back to an earlier clip inserts again; a reel export has no table (`exports` reference carousels only): S9b1 numbers it as the next free `v<NNN>` under the run's export prefix | S6c |
 | `import_runs` | `id`, `brand_id`, `source_kind`, `source_root_hash`, `started_at`, `finished_at`, `report jsonb` | insert-only; no `dry_run` column, since a dry run writes nothing | S7a |
 | `restore_drills` | `id`, `target_db` (host/db name, no secrets), `dump_taken_at`, `restored_at`, `verified bool`, `notes` | insert-only | S8 |
-| `seasonal_themes` | `id`, `brand_id`, `name`, `starts_on`, `ends_on`, `token_overrides jsonb`, `guidance_md`, `updated_at`, `version` | CHECK `ends_on >= starts_on` | S13 (scheduled, after cutover) |
+| `seasonal_themes` | `id`, `brand_id`, `name` (slug), `starts_on`, `ends_on`, `token_overrides jsonb` (object, ≤ 64 KiB), `guidance_md` (≤ 32 KiB), `updated_at`, `version` | UNIQUE (`brand_id`,`name`); CHECK `ends_on >= starts_on`. **No two themes of a brand share a day** (inclusive ranges), so "which theme applies on D" has one answer: enforced by both repositories (Postgres: per-brand advisory lock, then an overlap query in the write transaction; no gist exclusion because no migration installs `btree_gist`). No delete: retire a theme by moving its dates. "Today" for `activeOn` callers is the brand's day: optional IANA `timezone` key in the `config` document, else the machine zone (`brandToday`); C2b resolves it the same way (`activeTheme`) and lets automation pass an explicit date | C2a (data + CLI), C2b (engine overlay) |
 | `content_items` | `id`, `brand_id`, `slug`, `title`, `stage` (`idea`/`draft`/`published`/`archived`), `channel`, `format`, `body_md`, `meta jsonb` (**without** `stage`), `meta_schema_version`, `derived_from`, `published_at`, `created_at`, `updated_at`, `version` | UNIQUE (`brand_id`,`slug`); composite FK for `derived_from`; `published_at` set iff `published` | S6b |
 
 Notes:
@@ -584,11 +584,25 @@ today's modules until its cutover (D12; S9a1, S9a2, S10).
 | `skills/*/SKILL.md` | `brand_guidance` |
 | `assets/**` + `index.json` + sidecars | blobs + `assets` rows (ids preserved); `index.json` is a rebuildable cache and is not imported (S7b2a) |
 | `carousels/<id>/carousel.json`, `versions/*.json`, `chat.jsonl` | `carousels` + `revisions` (oldest first, reason `import`) + `chat_messages` |
+| `carousels/<id>/{final,final-*}/*.{png,jpg,jpeg,webp}` of a batch folder (`batch.json`, no `carousel.json`) | hidden `unclassified` manual blobs + `assets` rows tagged `batch:<id>` and `batch:<id>/<folder>` (C1a); the rest of the folder (`batch.json`, `cover.json`, `caption.txt`, sources, zip) is unchanged (legacy blobs or unimported) |
 | `carousels/*.json` (flat), `reels/week-input.json`, `reels/<date>/storyboard.yaml` | `recipe_runs`; recipe and period are derived and recorded on the run (S7b2b1, §14 Q-S7b2b) |
 | reel TTS cache (`reels/<date>/audio/<card>.mp3` + `.json`) | blobs + `tts_cache` takes + `audio` `run_artifacts` (S7b2b1); existing clips -> `clip` `run_artifacts` (S7b2b3a) |
 | `<outputs.editor>/<slug>/v<N>/` of the resolved `outputs.base_dir` | `exports` + export keys (S7b2b3b) |
 | `ideas/` backlog (S7b1b) | not interpreted: each backlog line becomes one `content_items` row with stage `idea`; lines marked checked import as stage `archived` (neutral, never deleted, no meaning inferred) |
 | `content/**`, anything else | blob keyed by content (`blobKey(sha256)`), with the path -> sha256 manifest in that run's `import_runs.report` (nothing lost; S7b2b2). `content/drafts` and `content/published` become `content_items` in S7b1b |
+
+**Batch renders (C1a).** Presence of `batch.json` decides that a folder is a batch (it is never parsed; a
+`carousel.json` wins). Only images directly inside `final` or `final-<suffix>` are taken, recognised by content.
+Same bytes are one asset however many folders or batches hold them: the tags are the union. If `assets/**` holds
+the same bytes, that item wins for kind, origin and status, and the batch tags are only added to its tags. A tag over
+50 characters is never truncated: the file is reported and falls to the legacy pass. A placement that would bring the
+asset past 20 tags is never truncated either, and what happens depends on who holds the bytes. Between batch folders
+alone, the extra file is reported and falls to the legacy pass (it is not claimed). When an `assets/**` item holds the
+same bytes, the batch tags are not added and the file stays claimed by that item. A batch never hides an
+asset registered elsewhere: bytes already stored as anything but a hidden, unclassified, manual asset make the
+reimport report a conflict. As with `assets/**`, an owner edit of a stored batch asset (unhide, retag) is reported as
+a conflict on every reimport and keeps verification dirty until the folder or the row is reconciled. List a batch with
+`brand asset list <brand> --status hidden --tag batch:<id>`.
 
 Importer guarantees: **read-only on the source** (the cutover marker is the
 only folder write, by a separate command); **idempotent** via `source_hash`
@@ -959,9 +973,13 @@ PR/test, scale-to-zero; cold starts, pooler needs `prepare: false`),
 | S12a/b | Remove mirror, editor `fs` mode (docker replaces it), runtime middleware, `ProfileStore` fs/s3 branches, `profile.ts` path resolvers, `resolveBrandSource` folder branch, `migrate-profile-to-bucket.ts`, `init-profile.mjs`, `STORAGE_BACKEND`; comment updates in `system/ig-reel/osm-cache.ts` and `system/ig-carousel/carousel-document.ts` (split by file) | ~2×550 | all real brands cut over | `rg -l "profileDir\|profiles/" system scripts` returns only `scripts/validate_commit_guardian.py` and `scripts/brand-denylist.txt` (they guard against committing profile folders); full `pnpm check` green |
 | P1 | Brand-owned tools: migration 0010 `brand_tools` (name = script file name, body, version, revisions), `tools` repository (memory + Postgres), importer claims flat `scripts/*.{mjs,js,cjs,ts,sh,py}`, `brand tool list\|get\|put`, purge table list | ~520 | S11b2b | a fictional brand's scripts import, verify byte for byte, and read back through the CLI; a `.bak` stays left behind |
 | P2 | `brand workspace <brand> --out <dir>`: a read-only, atomic materialization of a stored brand (documents, `scripts/`, `skills/`, `recipes/`, assets, `fonts.css`, `workspace.json`) for the brand's own scripts; the importer refuses such a folder; `brand show` lists tools; P1 follow-ups (a `scripts` file is not walked, dead `toolEntries` and unreachable `scriptRefusal` branch removed, tool bodies in the denylist scan) | ~320 | P1 | a fictional brand's workspace holds its tokens, scripts, guidance and assets byte for byte, `import` and `cutover` refuse it with exit 6 |
-| S13 | `seasonal_themes` + repo + CLI verbs + engine overlay of `token_overrides` | ~450 | S12 | a fictional brand's theme applies inside its date range |
+| C1a | Batch folders (`carousels/<id>/` with a top-level `batch.json` and no `carousel.json`, made by brand-owned tools): the images directly inside `final` / `final-*` become hidden `unclassified` manual assets tagged `batch:<id>` and `batch:<id>/<folder>` (`storage/src/import/batches.ts`, shared register/verify in `asset-item.ts`); `brand asset list --tag` | ~400 | P1, S7b2a | batch renders import, dedupe, re-import and verify clean; workspace and library never show them |
+| C1b | Portable brand tools: `brand workspace` links `<out>/node_modules` to the engine's `node_modules` (named in the manifest as `engineModules`, never hashed) so a tool imports `playwright` by name; one shared scanner warns (never refuses) about machine-specific absolute paths in a tool on `tool put`, `workspace` and the import/cutover report; the import report says which outputs folder was read, from where, and that it is read-only; `asset list --tag` takes one exact tag; tracked fictional brand `profiles/example-posters` as end-to-end proof | ~600 | P2, C1a | the example tool runs `--check` from a workspace on any machine; a tool with a home-style path imports and cuts over with a notice, not a refusal |
+| C2a | (S13 part 1) Migration 0011 `seasonal_themes`, `ThemeRepository` (memory + Postgres, shared contract tests, overlap rule, `activeOn`), `brand theme list\|get\|put\|active`, themes in `brand show` and purge; no folder convention, themes are created with `brand theme put`. Token overrides are a plain JSON object with a size cap (no schema validates a partial `brand.json`); text goes through the importer's secret scan. C1b follow-ups (workspace link-failure wording, "herramienta(s)") | ~600 | C1b | a fictional brand's themes are stored, never overlap, and `theme active` names the one for a date |
+| C2b | (S13 part 2) Engine overlay of `token_overrides` for the active theme, through one pure `applyThemeOverrides` (deep merge, arrays and scalars replace, prototype keys dropped) and one resolver `activeTheme` (`storage/src/themes.ts`, with `brandToday` moved there). Seams: `loadStoredBrand`/`loadStoredBrandStyle` take the theme (the only parse of stored tokens); `RenderSource.loadBrand(features, date?)` resolves it for the render scripts, with the content's own day (week reference, stored reel run period start) else brand-today; the editor shows tokens for brand-today; `brand workspace [--date]` writes themed `brand.json`, `skills/tema-<name>/SKILL.md` and `theme` in the manifest. Content date rule: a weekly carousel or reel uses the first day (Monday) of its published week (`weekContentDay`, equal to the reel's `periodStart`), an editor carousel its `scheduledFor` day (preview and export), anything else brand-today; `fonts fetch` also reads each theme's `googleFontsHref`, `workspace` warns on a theme font with no asset and records the theme `version`; the guidance name prefix `tema-` is reserved. Folder brands have no themes. C2a follow-up: a non-text `timezone` warns in words | ~400 | C2a, S12 | a fictional brand's theme applies inside its date range |
+| C3a | Owner guide `docs/GUIA.md` (Spanish, brand-agnostic): one command per task, rules that never change, common errors; linked from `docs/SETUP.md` and `CLAUDE.md`. Docs only | ~150 | C2b | the owner can run every routine task from one short page |
 
-20 PRs incl. S13 (above the ~13 target: S12's deletions alone exceed 600
+20 PRs incl. S13 (split C2a/C2b) (above the ~13 target: S12's deletions alone exceed 600
 lines, and merging the S9 or S11 pairs would break the budget). A slice that
 grows is split, not compressed.
 
@@ -1114,7 +1132,7 @@ Known limits of `brand run`: `run save` cannot clear a storyboard (the repositor
 
 **Decided in S11b2.**
 
-1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`docs/CONTEXTO-HANDOFF.md`, `openspec/changes/**`) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.
+1. Owner decision 2026-10-26: the old Tauri desktop app (`app/`, package `brand-studio`) is retired, with no migration. S11b2a detaches it: the `app` member leaves `pnpm-workspace.yaml` and the lockfile is regenerated (no `app` importer, no `@tauri-apps/cli`); the `app/` block leaves `.gitignore`; `app/` leaves `GENERIC_PREFIXES` of the commit guardian; and the pointers go from `CLAUDE.md`, `README.md`, `docs/ARQUITECTURA.md`, `docs/SETUP.md`, `editor/` and `system/config/brand.schema.md`. Historical records (`openspec/changes/**`, and git history for removed handoff docs) keep their mentions. S11b2b removes the folder with `git rm`; git history is the archive.
 
 **Decided in P1.**
 

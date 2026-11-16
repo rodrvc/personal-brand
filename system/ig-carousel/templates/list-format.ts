@@ -20,8 +20,8 @@ import type { Slide, SlideGroupTemplate } from "../types.js";
  * warning. The time is structured data, so it now travels as structured data
  * — see `Slide.time` in types.ts. No `time`, no chip.
  *
- * The suffix comes from the profile, since it's locale-specific copy: Spanish
- * renders "20:00 HRS", English just "20:00".
+ * The suffix comes from the brand's copy, since it's locale-specific: a brand
+ * may render "20:00 HRS", another just "20:00". The engine adds nothing.
  */
 function timeChipLabel(time: string, suffix: string): string {
   return suffix ? `${time} ${suffix}` : time;
@@ -29,8 +29,8 @@ function timeChipLabel(time: string, suffix: string): string {
 
 /**
  * Variant D — "Magazine card" list format: a hand-drawn marker-style header
- * (wordmark + "Imperdibles del <fecha>" + a thin decorative moon/sparkle
- * flourish) followed by up to 3 mixed-category event cards, each a soft
+ * (wordmark + a brand-supplied header label + a thin decorative
+ * sparkle flourish) followed by up to 3 mixed-category event cards, each a soft
  * white card (rounded corners + subtle shadow, NO color frame around the
  * photo) with a time chip overlapping the photo's corner.
  *
@@ -67,7 +67,7 @@ function timeChipLabel(time: string, suffix: string): string {
  * week" cover) — grouping here is purely "up to N events per slide", not
  * category-based, since the header no longer announces a single category.
  *
- * Price: the reference mockup shows a price chip ("Desde $8.000"); omitted
+ * Price: the reference mockup shows a price chip (a "from <amount>" label); omitted
  * here per explicit product decision — the data contract has no price
  * field, and most real scraped events don't carry one anyway.
  */

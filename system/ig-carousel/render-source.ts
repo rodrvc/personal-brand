@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
-import { resolveBrandSource } from "@personal-brand/storage";
-import { NotFoundError, type BrandDocumentRepository, type BrandRepository, type BrandRuleRepository, type RecipeRepository } from "@personal-brand/storage/contracts";
+import { activeTheme, resolveBrandSource } from "@personal-brand/storage";
+import { NotFoundError, type BrandDocumentRepository, type BrandRepository, type BrandRuleRepository, type RecipeRepository, type ThemeRepository } from "@personal-brand/storage/contracts";
 import { connect, createPgRepositories, type Sql } from "@personal-brand/storage/pg";
 
 import { classify, type RecipeImagePolicy } from "./recipe.js";
@@ -17,6 +17,7 @@ export interface RenderRepos {
   documents: Pick<BrandDocumentRepository, "get">;
   rules: Pick<BrandRuleRepository, "list">;
   recipes: Pick<RecipeRepository, "get">;
+  themes: Pick<ThemeRepository, "activeOn">;
 }
 
 /** The brand-specific half of `verifyOrThrow`'s options. */
@@ -31,7 +32,12 @@ export type VerifyBinding =
 export interface RenderSource {
   readonly kind: "folder" | "storage";
   readonly slug: string;
-  loadBrand(features?: BrandFeature[]): Promise<BrandTokens>;
+  /**
+   * The brand's tokens. `date` (`AAAA-MM-DD`) is the content's own day: a stored brand's seasonal theme active that day is laid over
+   * the tokens; without it, the brand's today decides (`render.ts` and `render-brand.ts` pass none on purpose: their input has no date).
+   * A weekly content's date is the first day of its period. A folder has no themes and ignores it.
+   */
+  loadBrand(features?: BrandFeature[], date?: string): Promise<BrandTokens>;
   /** The options that tell `verifyOrThrow` which brand policy applies to `recipe`. Folder: lazy, read from `recipes/`. Storage: the brand's stored rules. */
   verifyBinding(recipe: string): Promise<VerifyBinding>;
   /** The input file to read: `explicit` (`--input`), else the brand's own `carousels/<name>`. A stored brand keeps none, so it requires `--input`. */
@@ -84,7 +90,11 @@ function storageSource(repos: RenderRepos, brandId: string, slug: string): Rende
   return {
     kind: "storage",
     slug,
-    loadBrand: (features) => loadStoredBrand(repos.documents, brandId, slug, features),
+    loadBrand: async (features, date) => {
+      const { theme, warning } = await activeTheme({ repos, now: () => new Date() }, brandId, date);
+      if (warning) console.warn(warning);
+      return loadStoredBrand(repos.documents, brandId, slug, features, theme);
+    },
     verifyBinding: async (recipe) => {
       const base = await (rules ??= loadStoredVerifyPolicy(repos.rules, brandId));
       return { policy: { ...base, imagePolicy: await storedImagePolicy(repos, brandId, recipe, base.imagePolicy) } };

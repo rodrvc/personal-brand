@@ -129,7 +129,7 @@ reads:
 |---|---|
 | slug | the folder name |
 | wordmark | `brand.json` → `copy.wordmark` |
-| domain + its base name | `brand.json` → `copy.site` (`brand.cl` also yields `brand`) |
+| domain + its base name | `brand.json` → `copy.site` (`brand.example` also yields `brand`) |
 | image hosts + base names | `brand.json` → `sourceImageHosts` |
 | hashtags, profile name | `config.yaml` → `content.default_hashtags`, `profile.name` |
 | city, API host | `recipes/*.yaml` → `defaults.city`, `source.url` |
@@ -161,11 +161,16 @@ push someone to disable the gate. Two guards:
   would also match inside longer words. Four still admits the shortest
   plausible real brand (`Nike`, `Uber`). A genuinely 2–3 character slug must be
   declared by hand, where a human can weigh the cost.
-- **A generic-word list** (`GENERIC_WORDS`). Very common cities (`Santiago`,
-  `Chile`, `London`) and wordmarks that are everyday words (`Studio`, `Norte`,
-  `Plaza`, `Brand`) are dropped from derivation. If such a term really must be
-  watched for a specific brand, it goes in the manual file, explicitly
-  accepting the noise.
+- **A generic-word list** (`GENERIC_WORDS`). Category and direction words in a
+  few languages (`north`/`norte`, `events`/`eventos`, `weekend`, `city`) and
+  wordmarks that are everyday words (`Studio`, `Plaza`, `Brand`) are dropped
+  from derivation. The list is market-neutral on purpose: it holds no place
+  names, because a city or country a real brand uses is exactly what the gate
+  must catch. If a generic word really must be watched for a specific brand, it
+  goes in the manual file, explicitly accepting the noise.
+- **Public suffixes are derived, not listed.** To get a domain's base name the
+  gate strips any two-letter country code (and a second-level label such as
+  `co` or `com` under it) or a common generic TLD, so no country is privileged.
 
 What remains unhandled: a brand whose wordmark is a common word gets **no**
 automatic protection, and nothing warns that it was dropped. It has to be
@@ -177,6 +182,37 @@ noticed and declared manually.
 with each place it came from, and every finding names the matching term and its
 provenance. Without that, a block caused by a derived term is indistinguishable
 from a bug in the gate.
+
+### Market signals: coordinates, locale, currency, timezone
+
+A brand also shows through its market. From the real profiles on disk the gate
+derives, with no list written in the repo:
+
+| Signal | Derived from |
+|---|---|
+| geographic areas | `bbox`/`bounds` lists and keyed `lat`/`lng` pairs in any json/yaml of a real profile (a small margin is added) |
+| locale tags | `locale`/`lang` values and any `xx-YY` token in those files |
+| currency codes | `currency`/`moneda` values |
+| timezones | `timezone`/`tz` values (`Area/Place`) |
+
+The staged check, `--scan` and the push check flag, in the scanned layers only
+(`SCANNED_PREFIXES`), a numeric lat/lng pair inside one of those areas, and any
+of those locale, currency or timezone tokens. A finding names `path:line` and
+the kind of signal, never the value. Coordinates need three or more decimals
+to count, and a locale tag is matched on its full `xx-YY` form, so a bare
+language code is never flagged.
+
+## What the scan cannot see (human checklist)
+
+The gate is textual. Before publishing, a person checks what it cannot derive:
+
+- Copy and tone of voice written into engine templates or examples.
+- Curation and editorial rules (what content qualifies) that name no brand.
+- Colour palettes and fonts: they are not derived from `brand.json`.
+- Venue, organiser or neighbourhood names that are on no denylist.
+- The owner's identity: name, contact, personal links not in a handle or domain.
+- Market conventions inside formats: date and time wording, price wording,
+  number separators, units, weekday sets.
 
 ## Installing the hooks
 

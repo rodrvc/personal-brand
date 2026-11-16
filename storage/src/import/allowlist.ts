@@ -170,6 +170,24 @@ export function scriptRefusal(bytes: Buffer): Refusal | null {
   return CONTENT.some((p) => p.test(text)) || SCRIPT_ASSIGNMENT.test(text) ? { kind: "secret", why: "secret-like: secret pattern in content" } : null;
 }
 
+// A machine-specific absolute path: a home-style folder (`/Users/<name>`, `/home/<name>`, `file:///Users/...`, `C:\\Users\\<name>`, case-insensitive drive,
+// also as a JS-escaped or slash-separated spelling). A URL path (`https://host/Users/x`) and a relative one (`./home/x`) are not: the path must start a token.
+const MACHINE_PATH = /(?<![\w.:/~$})-])\/(?:Users|home)\/[^/\s"'`]+|file:\/\/\/(?:Users|home)\/|(?<![A-Za-z0-9])[A-Za-z]:(?:\\{1,2}|\/)Users(?:\\{1,2}|\/)[^\\/\s"'`]+/;
+const MAX_REPORTED_LINES = 6;
+
+/** 1-based numbers of the lines of a script that hold a machine-specific absolute path (comments included: it is a warning, never a refusal). */
+export function machinePathLines(body: string): number[] {
+  return body.split(/\r?\n/).flatMap((line, i) => (MACHINE_PATH.test(line) ? [i + 1] : []));
+}
+
+/** The portability warning of one brand tool in plain Spanish (line numbers only, never the path), or null when the body is portable. */
+export function portabilityWarning(name: string, body: string): string | null {
+  const lines = machinePathLines(body);
+  if (!lines.length) return null;
+  const shown = lines.slice(0, MAX_REPORTED_LINES).join(", ") + (lines.length > MAX_REPORTED_LINES ? ", ..." : "");
+  return `la herramienta ${name} usa una ruta fija de este equipo (${lines.length === 1 ? "línea" : "líneas"} ${shown}). En otro equipo no funcionará: importa las librerías por nombre (import ... from "playwright") y recibe la carpeta de salida como dato.`;
+}
+
 function scan(name: string, bytes: Buffer): Refusal | null {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (!TEXT.has(ext)) {

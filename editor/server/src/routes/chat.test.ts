@@ -402,7 +402,7 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
             texts: [
               { zone: "title", text: "Echo! A Tribute Night", from: "content" },
               { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
-              { zone: "body", text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 hrs\n\nEntrada General\n$5.000 CLP", from: "owner" },
+              { zone: "body", text: "Ubicación\nNorth Bar\n\nHorario\nApertura desde las 21:00 h\n\nEntrada General\n5.000 EUR", from: "owner" },
             ],
           },
         ],
@@ -421,13 +421,13 @@ const tests: Array<[string, () => Promise<void>, { needsImageTool?: boolean }?]>
             texts: [
               { zone: "title", text: "Echo! A Tribute Night", from: "content" },
               { zone: "subtitle", text: "North presenta el mejor tributo a The Sample Band", from: "owner" },
-              { zone: "time", text: "Apertura desde las 21:00 hrs", from: "owner" },
-              { zone: "price", text: "$5.000 CLP", from: "owner" },
+              { zone: "time", text: "Apertura desde las 21:00 h", from: "owner" },
+              { zone: "price", text: "5.000 EUR", from: "owner" },
             ],
           },
         ],
       };
-      const answered = await post("/messages", { text: "abre a las 21:00 y la entrada general cuesta $5.000", references: [] });
+      const answered = await post("/messages", { text: "abre a las 21:00 y la entrada general cuesta €5.000", references: [] });
       const reply = answered.body.records[1];
       assert.equal(reply.asksFor, undefined, "not asked again");
       assert.ok(reply.proposal, "the poster is proposed");
